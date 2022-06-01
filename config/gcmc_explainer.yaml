@@ -1,0 +1,6 @@
+n_hops: 2
+cf_beta: 0.000005
+th: 0.2
+sub_matrix_only_last_level: True
+cf_optimizer: SGD
+cf_learning_rate: 0.1
