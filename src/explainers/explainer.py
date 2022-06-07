@@ -74,8 +74,9 @@ class BGExplainer:
 
     def train(self, batched_data, epoch, topk=10):
         t = time.time()
-        self.cf_model.train()
-        self.cf_optimizer.zero_grad()
+        # self.cf_model.train()
+        # self.cf_optimizer.zero_grad()
+        self.cf_model.eval()
 
         _, _, positive_u, positive_i = batched_data
         scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
@@ -93,10 +94,13 @@ class BGExplainer:
         cf_scores_pred_topk, cf_topk_pred_idx = get_top_k(cf_scores_pred, positive_u, positive_i, topk=topk)
 
         # loss_pred indicator should be based on y_pred_new_actual NOT y_pred_new!
-        loss_total, loss_pred, loss_graph_dist, cf_adj, adj = self.cf_model.loss(cf_scores_topk, scores_topk,
-                                                                                 cf_scores_pred_topk)
+        # loss_total, loss_pred, loss_graph_dist, cf_adj, adj = self.cf_model.loss(cf_scores_topk, scores_topk, cf_scores_pred_topk)
+        scores = torch.zeros_like(scores).type(torch.FloatTensor)
+        scores[:, topk_idx] = 1.
+
+        loss_total, loss_pred, loss_graph_dist, cf_adj, adj = self.cf_model.loss(cf_scores, scores, cf_scores_pred)
         loss_total.backward()
-        nn.utils.clip_grad_norm(self.cf_model.parameters(), 2.0)
+        nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         self.cf_optimizer.step()
         print(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}",
               'User id: {}'.format(self.user_id),
@@ -111,8 +115,8 @@ class BGExplainer:
 
         cf_stats = None
         if self.dist(cf_topk_pred_idx, topk_idx) > 0:
-            cf_stats = [self.user_id, cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy(),
-                        scores_topk, cf_scores_topk, cf_scores_pred_topk,
+            cf_stats = [self.user_id, # cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy(),
+                        topk_idx.detach().cpu().numpy(), cf_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
                         loss_total.item(), loss_pred.item(), loss_graph_dist.item()]
 
         return cf_stats, loss_total.item()

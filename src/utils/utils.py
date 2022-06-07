@@ -5,24 +5,65 @@ from torch_geometric.utils import k_hop_subgraph, dense_to_sparse, to_dense_adj,
 
 
 def get_degree_matrix(adj):
-    return torch.diag(adj.sum(dim=0))
+    return torch.diag(adj.sum(dim=1))
 
 
-def get_neighbourhood(node_idx, edge_index, n_hops, only_last_level=False, max_num_nodes=None):
+def get_neighbourhood(node_idx,
+                      edge_index,
+                      n_hops,
+                      only_last_level=False,
+                      not_user_sub_matrix=False,
+                      max_num_nodes=None):
+    def hop_difference(_node_idx, _edge_index, edge_s, _n_hops):
+        _edge_subset = k_hop_subgraph(_node_idx, _n_hops, _edge_index)
+        _edge_subset = subgraph(_edge_subset[0], _edge_index)  # Get subset of edges
+
+        # takes the non-intersection between last level subgraph and lower hop subgraph
+        unique, counts = torch.cat((edge_s[0], _edge_subset[0]), dim=1).unique(dim=1, return_counts=True)
+        edge_s = [unique[:, counts == 1]]
+        return edge_s
+
     edge_subset = k_hop_subgraph(node_idx, n_hops, edge_index)  # Get all nodes involved
     edge_subset = subgraph(edge_subset[0], edge_index)  # Get subset of edges
     if only_last_level and n_hops > 1:
-        # takes subgraph of lower hops
-        _edge_subset = k_hop_subgraph(node_idx, n_hops - 1, edge_index)
-        _edge_subset = subgraph(_edge_subset[0], edge_index)  # Get subset of edges
-
-        # takes the non-intersection between last level subgraph and lower hop subgraph
-        unique, counts = torch.cat((edge_subset[0], _edge_subset[0]), dim=1).unique(dim=1, return_counts=True)
-        edge_subset = [unique[:, counts == 1]]
+        edge_subset = hop_difference(node_idx, edge_index, edge_subset, n_hops - 1)
+    if not_user_sub_matrix and n_hops > 1:
+        edge_subset = hop_difference(node_idx, edge_index, edge_subset, 1)
 
     sub_adj = to_dense_adj(edge_subset[0], max_num_nodes=max_num_nodes).squeeze().to_sparse()
 
     return sub_adj, edge_subset
+
+
+def a(_input, target):
+    _input = _input / 0.1
+
+    def approx_ranks(inp):
+        shape = inp.shape[1]
+
+        a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
+        b = torch.tile(torch.unsqueeze(inp, 1), [1, shape, 1])
+        return torch.sum(torch.nn.functional.sigmoid(b - a), dim=-1) + .5
+
+    def inverse_max_dcg(_target,
+                        gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
+                        rank_discount_fn=lambda rank: 1. / rank.log1p()):
+        ideal_sorted_target = torch.topk(_target, _target.shape[1]).values
+        rank = torch.arange(ideal_sorted_target.shape[1]) + 1
+        discounted_gain = gain_fn(ideal_sorted_target) * rank_discount_fn(rank.type(torch.FloatTensor))
+        discounted_gain = torch.unsqueeze(torch.sum(discounted_gain, dim=1), 1)
+        return torch.where(discounted_gain > 0., 1. / discounted_gain, torch.zeros_like(discounted_gain))
+
+    def ndcg(_target, _ranks):
+        discounts = 1. / ranks.type(torch.FloatTensor).log1p()
+        gains = torch.pow(2., _target.type(torch.FloatTensor)) - 1.
+        print(torch.sum(gains * discounts, dim=-1))
+        dcg = torch.unsqueeze(torch.sum(gains * discounts, dim=-1), dim=1)
+        return dcg * inverse_max_dcg(_target)
+
+    ranks = approx_ranks(_input)
+
+    return -ndcg(target, ranks)
 
 
 def create_symm_matrix_from_vec(vector, n_rows, device=None):

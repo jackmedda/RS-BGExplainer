@@ -6,6 +6,10 @@ from logging import getLogger
 import yaml
 import torch
 import tqdm
+import scipy
+import numpy as np
+import pandas as pd
+import networkx as nx
 from recbole.config import Config
 from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
@@ -49,7 +53,7 @@ def load_data_and_model(model_file):
     return config, model, dataset, train_data, valid_data, test_data
 
 
-def explain(model, test_data, epochs, topk=10, dist_type="damerau_levenshtein"):
+def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein"):
     iter_data = (
         tqdm.tqdm(
             test_data,
@@ -59,11 +63,73 @@ def explain(model, test_data, epochs, topk=10, dist_type="damerau_levenshtein"):
         )
     )
 
+    exps = {}
     for batch_idx, batched_data in enumerate(iter_data):
         user_id = batched_data[0].interaction[model.USER_ID][0]
-        bge = BGExplainer(config, dataset, model, user_id, dist=dist_type)
-        print(bge.explain(batched_data, epochs, topk=topk))
-        break
+        bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
+        exp = bge.explain(batched_data, epochs, topk=topk)
+        exps[user_id.item()] = exp
+        if batch_idx > 30:
+            break
+
+    data = [exp for exp_list in exps for exp in exp_list]
+    data = list(map(lambda x: [x[0].item(), *x[1:]], data))
+    df = pd.DataFrame(data, columns=['uid', 'topk', 'cf_topk', 'cf_topk_pred', 'loss_total', 'loss_pred', 'loss_dist'])
+
+    df.to_csv('exps_test_1_epoch_hops_all_users.csv', index=False)
+
+
+def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein"):
+    graph = get_adj_matrix(config, dataset)
+    max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
+    cc_graphs = [graph.subgraph(x).copy() for x in nx.connected_components(graph)]
+    for x in cc_graphs:
+        print(x.number_of_nodes(), x.number_of_edges(), nx.diameter(x))
+    diam = nx.diameter(max_cc_graph)
+
+    iter_data = (
+        tqdm.tqdm(
+            test_data,
+            total=len(test_data),
+            ncols=100,
+            desc=set_color(f"Explaining   ", 'pink'),
+        )
+    )
+
+    exps = []
+    for batch_idx, batched_data in enumerate(iter_data):
+        user_id = batched_data[0].interaction[model.USER_ID][0]
+        for n_hops in range(1, diam + 1):
+            config['n_hops'] = n_hops
+
+            try:
+                bge = BGExplainer(config, dataset, model, user_id, dist=dist_type)
+                exp = bge.explain(batched_data, 1, topk=topk)
+                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][3]))])
+            except:
+                pass
+
+    df = pd.DataFrame(exps, columns=['n_hops', 'uid', 'common_items'])
+
+    df.to_csv('exps_test_1_epoch_hops_all_users.csv', index=False)
+
+
+def get_adj_matrix(config, dataset):
+    USER_ID = config['USER_ID_FIELD']
+    ITEM_ID = config['ITEM_ID_FIELD']
+    n_users = dataset.num(USER_ID)
+    n_items = dataset.num(ITEM_ID)
+    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
+    num_all = n_users + n_items
+
+    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
+    inter_M = inter_matrix
+    inter_M_t = inter_matrix.transpose()
+    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
+    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
+    A._update(data_dict)
+    A = A.tocoo()
+    return nx.Graph(A)
 
 
 if __name__ == "__main__":
@@ -83,4 +149,4 @@ if __name__ == "__main__":
         explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
     config.final_config_dict.update(explain_config_dict)
 
-    explain(model, test_data, 300)
+    explain2(config, model, test_data, config['cf_epochs'])
