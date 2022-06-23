@@ -109,8 +109,8 @@ def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_leven
     exps = []
     for batch_idx, batched_data in enumerate(iter_data):
         user_id = batched_data[0].interaction[model.USER_ID][0]
-        for n_hops in range(1, diam + 1, 2 if config['neighbors_hops'] else 1):
-            config['n_hops'] = n_hops
+        for n_hops in range(1, diam + 1):
+            config['n_hops'] = n_hops + n_hops % 2 if config['neighbors_hops'] else n_hops
 
             try:
                 bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
@@ -134,6 +134,7 @@ def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_leven
     df['n_edges'] = df['n_edges'] / df[df['n_hops'] == 5].iloc[0]['n_edges']
     edges_lineplot = sns.lineplot(x='n_hops', y='n_edges', data=df, ax=axs[2])
     edges_lineplot.set_title('Edges Percentage')
+    axs[2].xticks(range(1, diam + 1, 2 if config['neighbors_hops'] else 1))
 
     fig.savefig(f'{config["dataset"]}_{hops_info}hops_analysis_boxplot_inters_edit.png')
     plt.close()
