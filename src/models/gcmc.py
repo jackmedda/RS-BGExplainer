@@ -155,7 +155,7 @@ class GCMC(GeneralRecommender):
         L = sp.coo_matrix(L)
         row = L.row
         col = L.col
-        i = torch.LongTensor([row, col])
+        i = torch.LongTensor(np.stack([row, col], axis=0))
         data = torch.FloatTensor(L.data)
         SparseL = torch.sparse.FloatTensor(i, data, torch.Size(L.shape))
         return SparseL

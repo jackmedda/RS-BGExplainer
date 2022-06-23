@@ -11,6 +11,7 @@ def get_degree_matrix(adj):
 def get_neighbourhood(node_idx,
                       edge_index,
                       n_hops,
+                      neighbors_hops=False,
                       only_last_level=False,
                       not_user_sub_matrix=False,
                       max_num_nodes=None):
@@ -23,47 +24,21 @@ def get_neighbourhood(node_idx,
         edge_s = [unique[:, counts == 1]]
         return edge_s
 
+    if neighbors_hops:
+        n_hops = n_hops + n_hops % 2
+
     edge_subset = k_hop_subgraph(node_idx, n_hops, edge_index)  # Get all nodes involved
     edge_subset = subgraph(edge_subset[0], edge_index)  # Get subset of edges
-    if only_last_level and n_hops > 1:
-        edge_subset = hop_difference(node_idx, edge_index, edge_subset, n_hops - 1)
-    if not_user_sub_matrix and n_hops > 1:
-        edge_subset = hop_difference(node_idx, edge_index, edge_subset, 1)
+    if n_hops > 1:
+        if only_last_level:
+            edge_subset = hop_difference(node_idx, edge_index, edge_subset, n_hops - 1)
+        if not_user_sub_matrix:
+            edge_subset = hop_difference(node_idx, edge_index, edge_subset, 1)
 
-    sub_adj = to_dense_adj(edge_subset[0], max_num_nodes=max_num_nodes).squeeze().to_sparse()
+    # sub_adj = to_dense_adj(edge_subset[0], max_num_nodes=max_num_nodes).squeeze().to_sparse()
 
-    return sub_adj, edge_subset
-
-
-def a(_input, target):
-    _input = _input / 0.1
-
-    def approx_ranks(inp):
-        shape = inp.shape[1]
-
-        a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
-        b = torch.tile(torch.unsqueeze(inp, 1), [1, shape, 1])
-        return torch.sum(torch.nn.functional.sigmoid(b - a), dim=-1) + .5
-
-    def inverse_max_dcg(_target,
-                        gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
-                        rank_discount_fn=lambda rank: 1. / rank.log1p()):
-        ideal_sorted_target = torch.topk(_target, _target.shape[1]).values
-        rank = torch.arange(ideal_sorted_target.shape[1]) + 1
-        discounted_gain = gain_fn(ideal_sorted_target) * rank_discount_fn(rank.type(torch.FloatTensor))
-        discounted_gain = torch.unsqueeze(torch.sum(discounted_gain, dim=1), 1)
-        return torch.where(discounted_gain > 0., 1. / discounted_gain, torch.zeros_like(discounted_gain))
-
-    def ndcg(_target, _ranks):
-        discounts = 1. / ranks.type(torch.FloatTensor).log1p()
-        gains = torch.pow(2., _target.type(torch.FloatTensor)) - 1.
-        print(torch.sum(gains * discounts, dim=-1))
-        dcg = torch.unsqueeze(torch.sum(gains * discounts, dim=-1), dim=1)
-        return dcg * inverse_max_dcg(_target)
-
-    ranks = approx_ranks(_input)
-
-    return -ndcg(target, ranks)
+    # return sub_adj, edge_subset
+    return edge_subset
 
 
 def create_symm_matrix_from_vec(vector, n_rows, device=None):
@@ -72,6 +47,10 @@ def create_symm_matrix_from_vec(vector, n_rows, device=None):
     matrix[idx[0], idx[1]] = vector
     symm_matrix = torch.tril(matrix) + torch.tril(matrix, -1).t()
     return symm_matrix
+
+
+def create_symm_matrix_from_sparse_tril(tril):
+    return (tril + tril.t()).to_dense()
 
 
 def create_vec_from_symm_matrix(matrix):

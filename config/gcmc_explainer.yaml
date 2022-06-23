@@ -1,8 +1,17 @@
 n_hops: 3
-cf_beta: 0.5
-cf_epochs: 100
-th: 0.2
+neighbors_hops: True
+cf_beta: 0.8
+cf_epochs: 50
+# device: cpu
+
 sub_matrix_only_last_level: False
-not_user_sub_matrix: True
+not_user_sub_matrix: False
+only_subgraph: False
+
 cf_optimizer: SGD
 cf_learning_rate: 2
+
+keep_history_if_possible: False
+
+# only useful for hops analysis
+explainer_force_return: False

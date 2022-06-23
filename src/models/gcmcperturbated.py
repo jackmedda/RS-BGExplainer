@@ -89,29 +89,35 @@ class GCMCPerturbated(GeneralRecommender):
         self.input_dim = self.user_features.shape[1]
 
         self.n_hops = config['n_hops']
-        self.th = config['th']
+        self.neighbors_hops = config['neighbors_hops']
         self.beta = config['cf_beta']
         self.sub_matrix_only_last_level = config['sub_matrix_only_last_level']
         self.not_user_sub_matrix = config['not_user_sub_matrix']
+        self.only_subgraph = config['only_subgraph']
 
         # adj matrices for each relation are stored in self.support
         self.Graph, self.sub_Graph = self.get_adj_matrix(
             user_id.item(),
             self.n_hops,
+            neighbors_hops=self.neighbors_hops,
             only_last_level=self.sub_matrix_only_last_level,
             not_user_sub_matrix=self.not_user_sub_matrix
         )
         self.support = [self.Graph]
         # self.support = [self.sub_Graph.to_dense()]
 
-        self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2) + self.num_all
+        # self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2) + self.num_all
 
         # if self.edge_additions:
         #     self.P_vec = Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)))
         # else:
         #     self.P_vec = Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
 
-        self.P_vec = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
+        # self.P_vec = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
+
+        P_sym = torch.FloatTensor(torch.ones((self.num_all, self.num_all)))
+        P_sym[tuple(torch.arange(self.num_all).tile((2, 1)))] = 0
+        self.P_symm = nn.Parameter(P_sym, requires_grad=True)
 
         self.reset_parameters()
 
@@ -138,7 +144,8 @@ class GCMCPerturbated(GeneralRecommender):
             dense_output_dim=self.dense_output_dim,
             drop_prob=self.dropout_prob,
             device=self.device,
-            perturb_adj=self.P_vec,
+            perturb_adj=self.P_symm,
+            only_subgraph=self.only_subgraph,
             sparse_feature=self.sparse_feature,
         ).to(self.device)
         self.BiDecoder = BiDecoder(
@@ -153,9 +160,10 @@ class GCMCPerturbated(GeneralRecommender):
 
     def reset_parameters(self, eps=10 ** -4):
         # Think more about how to initialize this
-            torch.sub(self.P_vec, eps)
+        # torch.sub(self.P_vec, eps)
+        torch.sub(self.P_symm, eps)
 
-    def get_adj_matrix(self, user_id, n_hops, only_last_level=False, not_user_sub_matrix=False):
+    def get_adj_matrix(self, user_id, n_hops, neighbors_hops=False, only_last_level=False, not_user_sub_matrix=False):
         A = sp.dok_matrix((self.num_all, self.num_all), dtype=np.float32)
         inter_M = self.interaction_matrix
         inter_M_t = self.interaction_matrix.transpose()
@@ -165,18 +173,19 @@ class GCMCPerturbated(GeneralRecommender):
         A = A.tocoo()
         row = A.row
         col = A.col
-        i = torch.LongTensor([row, col])
+        i = torch.LongTensor(np.stack([row, col], axis=0))
         data = torch.FloatTensor(A.data)
         adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
-        sub_adj, edge_subset = utils.get_neighbourhood(
+        edge_subset = utils.get_neighbourhood(
             user_id,
             i,
             n_hops,
+            neighbors_hops=neighbors_hops,
             only_last_level=only_last_level,
             not_user_sub_matrix=not_user_sub_matrix,
             max_num_nodes=self.num_all
         )
-        return adj.to_dense().to(self.device), sub_adj.to(self.device)
+        return adj.to_dense().to(self.device), edge_subset[0].to(self.device)
 
     def forward(self, user_X, item_X, user, item, pred=False):
         # Graph autoencoders are comprised of a graph encoder model and a pairwise decoder model.
@@ -200,11 +209,12 @@ class GCMCPerturbated(GeneralRecommender):
     #     loss = self.loss_function(predict, target)
     #     return loss
 
-    def loss(self, output, y_pred_orig, y_pred_new_actual):
+    def loss(self, output, y_pred_orig, y_pred_orig_top_k, y_pred_new_actual_top_k, dist):
+        sub_adj_idx = self.sub_Graph
         adj = self.support[0]
 
-        # activate only the positions that have a low difference in score
-        # pred_same = ((y_pred_new_actual - y_pred_orig) < th).float()
+        # activate only if top-k is equal
+        pred_same = (torch.tensor(dist(y_pred_orig_top_k.squeeze(), y_pred_new_actual_top_k.squeeze())) == 0).float()
 
         # if self.edge_additions:
         #     cf_adj = self.P
@@ -213,18 +223,23 @@ class GCMCPerturbated(GeneralRecommender):
         cf_adj = self.GcEncoder.P * adj
         cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
 
+        adj = adj[tuple(sub_adj_idx)]
+        cf_adj = cf_adj[tuple(sub_adj_idx)]
+
         # Want negative in front to maximize loss instead of minimizing it to find CFs
         loss_pred = self.loss_function(
             torch.nan_to_num(output, neginf=(torch.min(output[~torch.isinf(output)]) - 1).item()),
-            y_pred_orig # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
+            y_pred_orig  # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
         )
-        loss_graph_dist = (cf_adj - adj).abs().sum() / 2  # Number of edges changed (symmetrical)
 
-        # Zero-out loss_pred with pred_same if prediction flips
-        # loss_total = pred_same * loss_pred + self.beta * loss_graph_dist
-        loss_total = loss_pred + self.beta * loss_graph_dist
+        orig_loss_graph_dist = (cf_adj - adj).abs().sum() / 2  # Number of edges changed (symmetrical)
+        loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))
 
-        return loss_total, loss_pred, loss_graph_dist, cf_adj, adj
+        # Zero-out loss_pred with pred_same if prediction flips, dist is scaled by beta percentage of sub_adj
+        loss_total = pred_same * loss_pred + self.beta * loss_graph_dist # / (self.sub_Graph._nnz() * self.beta)
+        # loss_total = loss_pred + self.beta * loss_graph_dist
+
+        return loss_total, loss_pred, orig_loss_graph_dist, cf_adj, adj, self.sub_Graph.shape[1] # self.sub_Graph._nnz()
 
     def predict(self, interaction, pred=False):
         user = interaction[self.USER_ID]
@@ -267,6 +282,7 @@ class GcEncoder(nn.Module):
         drop_prob,
         device,
         perturb_adj,
+        only_subgraph,
         sparse_feature=True,
         act_dense=lambda x: x,
         share_user_item_weights=True,
@@ -296,9 +312,15 @@ class GcEncoder(nn.Module):
 
         self.support = support
         self.num_support = len(support)
-        self.sub_adj = sub_adj
-        self.P_vec = perturb_adj
+        self.num_all = self.num_users + self.num_items
+        # self.P_vec = perturb_adj
+        self.P_symm = perturb_adj
         self.P_hat_symm, self.P = None, None
+
+        # self.mask_sub_adj = torch.sparse.LongTensor(inds, data, torch.Size((self.num_all, self.num_all))).bool().to(self.device)
+        self.mask_sub_adj = sub_adj
+        self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
+        self.only_subgraph = only_subgraph
 
         # gcn layer
         if self.accum == 'sum':
@@ -362,39 +384,59 @@ class GcEncoder(nn.Module):
 
     def perturbate_adj_matrix(self, i, pred=False):
         graph_A = self.support[i]
-        sub_adj = self.sub_adj
-        num_all = self.num_users + self.num_items
+        num_all = self.num_all
 
         if pred:
             self.P = (torch.sigmoid(self.P_hat_symm) >= 0.5).float()
             P = self.P
         else:
-            self.P_hat_symm = utils.create_symm_matrix_from_vec(self.P_vec, num_all, device=self.device).to(self.device)
+            # self.P_hat_symm = utils.create_symm_matrix_from_vec(self.P_vec, num_all, device=self.device).to(self.device)
+            self.P_hat_symm = self.P_symm
             P = torch.sigmoid(self.P_hat_symm)
 
-        if not pred:
-            # then multiply with adj matrices
+        if not self.only_subgraph:
             A_tilde = torch.FloatTensor(torch.ones(num_all, num_all)).to(self.device)
+            # A_tilde = graph_A.clone()
+        else:
+            A_tilde = torch.FloatTensor(torch.zeros(num_all, num_all)).to(self.device)
+
+        if not pred:
             A_tilde.requires_grad = True
 
-        mask_sub_adj = torch.zeros((num_all, num_all), dtype=torch.bool).to(self.device)
-        mask_sub_adj[tuple(sub_adj._indices())] = True
+        # eye = torch.eye(num_all).to(self.device)
+        # if not self.only_subgraph:
+        #     A_tilde = torch.where(self.mask_sub_adj, P * graph_A + eye, graph_A)
+        # else:
+        #     A_tilde = graph_A + eye
 
-        eye = torch.eye(num_all).to(self.device)
-        A_tilde = torch.where(mask_sub_adj, P * graph_A + eye, graph_A)
+        mask = torch.sparse.LongTensor(
+            self.mask_sub_adj,
+            torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device),
+            torch.Size((num_all, num_all))
+        ).to_dense()
+        if not self.only_subgraph:
+            A_tilde = torch.where(mask, P * graph_A, graph_A)
+            # A_tilde[tuple(self.mask_sub_adj)] = (P * graph_A)[tuple(self.mask_sub_adj)]
+            # A_tilde = torch.sparse.FloatTensor(
+            #     self.mask_sub_adj,
+            #     (P * graph_A)[tuple(self.mask_sub_adj)],
+            #     torch.Size((num_all, num_all))
+            # )
+        else:
+            A_tilde = mask.float()
+            # A_tilde[tuple(self.mask_sub_adj)] = graph_A[tuple(self.mask_sub_adj)]
 
         # Don't need gradient of this if pred = False
-        D_tilde = utils.get_degree_matrix(A_tilde) if pred else utils.get_degree_matrix(A_tilde).detach()
-        D_tilde = D_tilde.to(self.device)
-        D_tilde_exp = D_tilde.pow(-0.5)
-        # indices = D_tilde_exp._indices()
-        # vals = D_tilde_exp._values()
-        # vals[vals == float('inf')] = 0
-        # D_tilde_exp = torch.sparse.FloatTensor(indices, vals, torch.Size(D_tilde_exp.shape))
-        D_tilde_exp[D_tilde_exp == float('inf')] = 0
-
+        # D_tilde = utils.get_degree_matrix(A_tilde) if pred else utils.get_degree_matrix(A_tilde).detach()
+        D_tilde = A_tilde.sum(dim=1) if pred else A_tilde.sum(dim=1).detach()
+        D_tilde_exp = (D_tilde + 1e-7).pow(-0.5)
+        # D_tilde_exp[D_tilde_exp == float('inf')] = 0
+        # import pdb; pdb.set_trace()
+        D_tilde_exp = torch.sparse.FloatTensor(self.D_indices, D_tilde_exp, torch.Size((num_all, num_all)))
+        # D_tilde_exp[D_tilde_exp == float('inf')] = 0
         # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
-        return torch.mm(torch.mm(D_tilde_exp, A_tilde), D_tilde_exp).to_sparse()
+        return torch.mm(torch.sparse.mm(D_tilde_exp, A_tilde), D_tilde_exp.to_dense()).to_sparse()
+        # return (D_tilde_exp * A_tilde * D_tilde_exp).to_sparse()
 
     def forward(self, user_X, item_X, pred=False):
         # ----------------------------------------GCN layer----------------------------------------
@@ -542,6 +584,7 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         super(NDCGApproxLoss, self).__init__(size_average, reduce, reduction)
         self.temperature = temperature
         self.device = device
+        self.history_index = None
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         _input = _input / self.temperature
@@ -571,3 +614,6 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         ranks = approx_ranks(_input)
 
         return -ndcg(target, ranks)
+
+    def set_history_index(self, history_index):
+        self.history_index = history_index

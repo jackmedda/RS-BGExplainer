@@ -1,6 +1,9 @@
+import os
 import argparse
 import logging
+import inspect
 import pickle
+import json
 from logging import getLogger
 
 import yaml
@@ -10,6 +13,8 @@ import scipy
 import numpy as np
 import pandas as pd
 import networkx as nx
+import seaborn as sns
+import matplotlib.pyplot as plt
 from recbole.config import Config
 from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
@@ -69,23 +74,23 @@ def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levens
         bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
         exp = bge.explain(batched_data, epochs, topk=topk)
         exps[user_id.item()] = exp
-        if batch_idx > 30:
-            break
+        input()
 
-    data = [exp for exp_list in exps for exp in exp_list]
+    data = [exp for exp_list in exps.values() for exp in exp_list]
     data = list(map(lambda x: [x[0].item(), *x[1:]], data))
-    df = pd.DataFrame(data, columns=['uid', 'topk', 'cf_topk', 'cf_topk_pred', 'loss_total', 'loss_pred', 'loss_dist'])
+    df = pd.DataFrame(data, columns=['uid', 'topk', 'cf_topk_pred', 'topk_dist', 'loss_total', 'loss_pred', 'loss_dist'])
 
-    df.to_csv('exps_test_1_epoch_hops_all_users.csv', index=False)
+    df.to_csv(f'{config["dataset"]}_exps_explain_{epochs}epochs.csv', index=False)
 
 
-def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein"):
-    graph = get_adj_matrix(config, dataset)
-    max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
-    cc_graphs = [graph.subgraph(x).copy() for x in nx.connected_components(graph)]
-    for x in cc_graphs:
-        print(x.number_of_nodes(), x.number_of_edges(), nx.diameter(x))
-    diam = nx.diameter(max_cc_graph)
+def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein", diam=None):
+    if diam is None:
+        graph = get_adj_matrix(config, dataset)
+        max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
+        # cc_graphs = [graph.subgraph(x).copy() for x in nx.connected_components(graph)]
+        # for x in cc_graphs:
+        #     print(x.number_of_nodes(), x.number_of_edges(), nx.diameter(x))
+        diam = nx.diameter(max_cc_graph)
 
     iter_data = (
         tqdm.tqdm(
@@ -96,22 +101,44 @@ def explain2(config, model, test_data, epochs, topk=10, dist_type="damerau_leven
         )
     )
 
+    config['explainer_force_return'] = True
+    config['only_subgraph'] = True
+
+    hops_info = 'neighbors_' if config['neighbors_hops'] else ''
+
     exps = []
     for batch_idx, batched_data in enumerate(iter_data):
         user_id = batched_data[0].interaction[model.USER_ID][0]
-        for n_hops in range(1, diam + 1):
+        for n_hops in range(1, diam + 1, 2 if config['neighbors_hops'] else 1):
             config['n_hops'] = n_hops
 
             try:
-                bge = BGExplainer(config, dataset, model, user_id, dist=dist_type)
+                bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
                 exp = bge.explain(batched_data, 1, topk=topk)
-                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][3]))])
-            except:
+                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-1]//2])
+            except Exception as e:
+                print(e)
                 pass
 
-    df = pd.DataFrame(exps, columns=['n_hops', 'uid', 'common_items'])
+    df = pd.DataFrame(exps, columns=['n_hops', 'uid', 'intersection', 'edit_dist', 'n_edges'])
 
-    df.to_csv('exps_test_1_epoch_hops_all_users.csv', index=False)
+    df.to_csv(f'{config["dataset"]}_exps_test_1_epoch_{hops_info}hops_all_users.csv', index=False)
+
+    fig, axs = plt.subplots(1, 3, figsize=(15, 6))
+    inters_box = sns.boxplot(x='n_hops', y='intersection', data=df, ax=axs[0])
+    inters_box.set_title('Intersection')
+
+    edit_dist_box = sns.boxplot(x='n_hops', y='edit_dist', data=df, ax=axs[1])
+    edit_dist_box.set_title('Edit Distance')
+
+    df['n_edges'] = df['n_edges'] / df[df['n_hops'] == 5].iloc[0]['n_edges']
+    edges_lineplot = sns.lineplot(x='n_hops', y='n_edges', data=df, ax=axs[2])
+    edges_lineplot.set_title('Edges Percentage')
+
+    fig.savefig(f'{config["dataset"]}_{hops_info}hops_analysis_boxplot_inters_edit.png')
+    plt.close()
+
+    return diam
 
 
 def get_adj_matrix(config, dataset):
@@ -132,10 +159,37 @@ def get_adj_matrix(config, dataset):
     return nx.Graph(A)
 
 
+def load_diameter_info():
+    script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
+
+    _diam_info = {}
+    diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
+    if os.path.exists(diam_info_path):
+        if os.stat(diam_info_path).st_size == 0:
+            os.remove(diam_info_path)
+
+        with open(diam_info_path, 'r') as f:
+            _diam_info = json.load(f)
+
+    return _diam_info.get(config['dataset'], None), _diam_info
+
+
+def update_diameter_info(_loaded_diam, _diam_info, _diam):
+    script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
+
+    diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
+
+    if _loaded_diam is None:
+        _diam_info[config['dataset']] = _diam
+        with open(diam_info_path, 'w') as f:
+            json.dump(_diam_info, f)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_file', default=None)
     parser.add_argument('--explainer_config_file', default='../config/gcmc_explainer.yaml')
+    parser.add_argument('--hops_analysis', action='store_true')
 
     args = parser.parse_args()
 
@@ -149,4 +203,11 @@ if __name__ == "__main__":
         explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
     config.final_config_dict.update(explain_config_dict)
 
-    explain2(config, model, test_data, config['cf_epochs'])
+    if args.hops_analysis:
+
+        loaded_diam, diam_info = load_diameter_info()
+
+        diam = explain2(config, model, test_data, config['cf_epochs'], diam=loaded_diam)
+        update_diameter_info(loaded_diam, diam_info, diam)
+    else:
+        explain(config, model, test_data, config['cf_epochs'])
