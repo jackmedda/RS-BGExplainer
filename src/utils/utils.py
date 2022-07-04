@@ -25,7 +25,7 @@ def get_neighbourhood(node_idx,
         return edge_s
 
     if neighbors_hops:
-        n_hops = n_hops + n_hops % 2
+        n_hops = n_hops * 2
 
     edge_subset = k_hop_subgraph(node_idx, n_hops, edge_index)  # Get all nodes involved
     edge_subset = subgraph(edge_subset[0], edge_index)  # Get subset of edges
@@ -41,11 +41,12 @@ def get_neighbourhood(node_idx,
     return edge_subset
 
 
-def create_symm_matrix_from_vec(vector, n_rows, device=None):
-    matrix = torch.zeros(n_rows, n_rows).to(device)
-    idx = torch.tril_indices(n_rows, n_rows).to(device)
-    matrix[idx[0], idx[1]] = vector
-    symm_matrix = torch.tril(matrix) + torch.tril(matrix, -1).t()
+def create_symm_matrix_from_vec(vector, n_rows):
+    symm_matrix = torch.zeros(n_rows, n_rows).to(vector.device)
+    idx = torch.tril_indices(n_rows, n_rows, -1)
+    symm_matrix[idx[0], idx[1]] = vector
+    symm_matrix = symm_matrix + symm_matrix.t()
+
     return symm_matrix
 
 
