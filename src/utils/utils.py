@@ -12,6 +12,21 @@ from recbole.data import create_dataset, data_preparation, save_split_dataloader
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 
+EXPS_COLUMNS = [
+    "user_id",
+    "topk",
+    "cf_topk",
+    "dist",
+    "loss_total",
+    "loss_pred",
+    "loss_graph_dist",
+    "fair_loss",
+    "del_edges",
+    "nnz_sub_adj",
+    "first_fair_loss"
+]
+
+
 def load_data_and_model(model_file, explainer_config_file):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:

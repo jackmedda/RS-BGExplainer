@@ -15,7 +15,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from recbole.utils import set_color
 
-from utils.utils import damerau_levenshtein_distance, load_data_and_model, load_exps_file
+import utils
 from explainers.explainer import BGExplainer
 
 
@@ -84,14 +84,13 @@ def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levens
     # 
     # delete_exps_file(base_exps_file)
 
-    exps = load_exps_file(base_exps_file)
+    exps = utils.load_exps_file(base_exps_file)
 
     data = [exp[:-3] + exp[-2:] for exp_list in exps.values() for exp in exp_list]
     data = list(map(lambda x: [x[0], *x[1:]], data))
     df = pd.DataFrame(
         data,
-        columns=['user_id', 'topk', 'cf_topk_pred', 'topk_dist', 'loss_total', 'loss_pred', 'loss_dist',
-                 'fair_loss', 'n_edges', 'first_fair_loss']
+        columns=utils.EXPS_COLUMNS[:-3] + utils.EXPS_COLUMNS[-2:]
     )
 
     df.to_csv(
@@ -149,7 +148,7 @@ def hops_analysis(config, model, test_data, epochs, topk=10, dist_type="damerau_
             try:
                 bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
                 exp = bge.explain(batched_data, 1, topk=topk)
-                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-8]//2])
+                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-2]//2])
                 if fair_analysis and n_hops == (stop_hops - 1):
                     pref_data.append([user_id.item(), exp[0][1]])
             except Exception as e:
@@ -350,7 +349,7 @@ if __name__ == "__main__":
 
     print(args)
 
-    config, model, dataset, train_data, valid_data, test_data = load_data_and_model(args.model_file,
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                     args.explainer_config_file)
 
     train_bias_ratio = generate_bias_ratio(

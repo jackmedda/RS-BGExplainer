@@ -26,7 +26,7 @@ class Describer(object):
 
     _plot_methods_prefix = "plot_"
 
-    def __init__(self, base_exps_file, train_data, sensitive_attributes=None, out_base_path=''):
+    def __init__(self, base_exps_file, train_data, sensitive_attributes=None, out_base_path='', best_exp=5):
         exps = load_exps_file(base_exps_file)
 
         self.desc_data = []
@@ -56,14 +56,12 @@ class Describer(object):
         self.item_hist_matrix, self.item_hist_len = item_hist_matrix.numpy(), item_hist_len.numpy()
 
         script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
-        dset, type_exp, epochs = base_exps_file.split(os.sep)[-3:]
+        paths_metadata = base_exps_file.split(os.sep)[(-4 if 'Fair' in base_exps_file else -3):]
         self.out_base_path = out_base_path or os.path.join(script_path,
                                                            os.pardir,
                                                            os.pardir,
                                                            'plots',
-                                                           dset,
-                                                           type_exp,
-                                                           epochs)
+                                                           *paths_metadata)
         if not os.path.exists(self.out_base_path):
             os.makedirs(self.out_base_path)
 
