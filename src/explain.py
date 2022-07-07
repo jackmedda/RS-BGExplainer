@@ -1,13 +1,10 @@
 import os
 import gc
 import argparse
-import logging
 import inspect
 import pickle
 import json
-from logging import getLogger
 
-import yaml
 import torch
 import tqdm
 import scipy
@@ -16,53 +13,28 @@ import pandas as pd
 import networkx as nx
 import seaborn as sns
 import matplotlib.pyplot as plt
-from recbole.config import Config
-from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders
-from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
+from recbole.utils import set_color
 
-from utils.utils import damerau_levenshtein_distance
+from utils.utils import damerau_levenshtein_distance, load_data_and_model, load_exps_file
 from explainers.explainer import BGExplainer
 
 
-def load_data_and_model(model_file):
-    r"""Load filtered dataset, split dataloaders and saved model.
-    Args:
-        model_file (str): The path of saved model file.
-    Returns:
-        tuple:
-            - config (Config): An instance object of Config, which record parameter information in :attr:`model_file`.
-            - model (AbstractRecommender): The model load from :attr:`model_file`.
-            - dataset (Dataset): The filtered dataset.
-            - train_data (AbstractDataLoader): The dataloader for training.
-            - valid_data (AbstractDataLoader): The dataloader for validation.
-            - test_data (AbstractDataLoader): The dataloader for testing.
-    """
-    checkpoint = torch.load(model_file)
-    config = checkpoint['config']
+def load_last_exps_user_id(base_exps_file):
+    files = [f for f in os.listdir(base_exps_file)]
 
-    with open(args.explainer_config_file, 'r', encoding='utf-8') as f:
-        explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
-    config.final_config_dict.update(explain_config_dict)
+    return max([int(f.split('_')[1].split('.')[0]) for f in files], default=None)
 
-    init_seed(config['seed'], config['reproducibility'])
-    init_logger(config)
-    logger = getLogger()
-    logger.info(config)
 
-    dataset = create_dataset(config)
-
-    # specifying tot_item_num to the number of unique items makes the dataloader for evaluation to be batched
-    # on interactions of one user at a time
-    config['eval_batch_size'] = dataset.item_num
-    logger.info(dataset)
-    train_data, valid_data, test_data = data_preparation(config, dataset)
-
-    init_seed(config['seed'], config['reproducibility'])
-    model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
-    model.load_state_dict(checkpoint['state_dict'])
-    model.load_other_parameter(checkpoint.get('other_parameter'))
-
-    return config, model, dataset, train_data, valid_data, test_data
+# def delete_exps_file(base_exps_file, curr_user_id=None):
+#     curr_user_id_str = f"{curr_user_id if curr_user_id is not None else -1}user"
+#
+#     pat = r'user_\d+.pkl'
+#     files = [f for f in os.listdir(script_path) if re.match(pat, f) is not None and curr_user_id_str not in f]
+#
+#     user_ids = [int(f.split('_')[-1].split('user')[0]) for f in files]
+#     for u_id, f in zip(user_ids, files):
+#         if u_id < curr_user_id:
+#             os.remove(os.path.join(script_path, f))
 
 
 def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein", **kwargs):
@@ -75,42 +47,63 @@ def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levens
         )
     )
 
-    exps = {}
-    pref_data = []
+    if not config["explain_fairness"]:
+        kwargs['train_bias_ratio'] = None
+
+    base_exps_file = os.path.join(script_path, 'explanations', config['dataset'])
+    if config['explain_fairness']:
+        fair_metadata = "_".join(config["sensitive_attributes"])
+        fair_loss = 'FairNDCGApprox' if config["explain_fairness_NDCGApprox"] else 'FairBD'
+        base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
+    else:
+        base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
+        
+    if not os.path.exists(base_exps_file):
+        os.makedirs(base_exps_file)
+        
+    loaded_user_id = load_last_exps_user_id(base_exps_file)
     for batch_idx, batched_data in enumerate(iter_data):
-        gc.collect()
-        # for obj in gc.get_objects():
-        #     try:
-        #         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-        #             if 'cuda' in obj.device.type:
-        #                 import pdb; pdb.set_trace()
-        #                 print(type(obj), obj.size())
-        #     except Exception as e:
-        #         print(e)
         user_id = batched_data[0].interaction[model.USER_ID].squeeze()
+        if loaded_user_id is not None and loaded_user_id >= user_id:
+            continue
+
+        gc.collect()
         bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type, **kwargs)
         exp = bge.explain(batched_data, epochs, topk=topk)
         del bge
-        exps[user_id.item()] = exp
-        if config['explain_fairness'] and exp:
-            pref_data.append([user_id.item(), exp[0][2]])
+        
+        exps_file_user = os.path.join(base_exps_file, f"user_{user_id.item()}.pkl")
+        with open(exps_file_user, 'wb') as f:
+            pickle.dump(exp, f)
 
-    exps_file = f'{"fair_" if config["explain_fairness"] else ""}{config["dataset"]}_exps_explain_{epochs}epochs.pkl'
-    with open(exps_file, 'wb') as f:
-        pickle.dump(exps, f)
+        # delete_exps_file(base_exps_file, curr_user_id=user_id.item())
 
-    data = [exp[:-3] + [exp[-1]] for exp_list in exps.values() for exp in exp_list]
-    data = list(map(lambda x: [x[0].item(), *x[1:]], data))
+    # exps_file = f'{base_exps_file}.pkl'
+    # with open(exps_file, 'wb') as f:
+    #     pickle.dump(exps, f)
+    # 
+    # delete_exps_file(base_exps_file)
+
+    exps = load_exps_file(base_exps_file)
+
+    data = [exp[:-3] + exp[-2:] for exp_list in exps.values() for exp in exp_list]
+    data = list(map(lambda x: [x[0], *x[1:]], data))
     df = pd.DataFrame(
         data,
-        columns=['uid', 'topk', 'cf_topk_pred', 'topk_dist', 'loss_total', 'loss_pred', 'loss_dist',
+        columns=['user_id', 'topk', 'cf_topk_pred', 'topk_dist', 'loss_total', 'loss_pred', 'loss_dist',
                  'fair_loss', 'n_edges', 'first_fair_loss']
     )
 
     df.to_csv(
-        f'{"fair_" if config["explain_fairness"] else ""}{config["dataset"]}_exps_explain_{epochs}epochs.csv',
+        f'{base_exps_file.replace(os.sep, "_")}.csv',
         index=False
     )
+
+    pref_data = []
+    if config['explain_fairness']:
+        for user_id, exp in exps.items():
+            if exp:
+                pref_data.append([user_id, exp[0][2]])
 
     return exps, pd.DataFrame(pref_data, columns=['user_id', 'topk'])
 
@@ -273,14 +266,15 @@ def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.Da
         history_matrix, _, history_len = _train_data.dataset.history_item_matrix()
         history_matrix, history_len = history_matrix.numpy(), history_len.numpy()
     else:
-        topk = len(history_matrix.iloc[0]['topk'])
-        history_len = np.full((user_df.shape[0]), topk)
-
+        clean_history_matrix(history_matrix)
+        topk = len(history_matrix.iloc[0]['cf_topk_pred'])
+        history_len = np.zeros(user_df.shape[0])
+        history_len[history_matrix['user_id']] = topk
         history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
-        history_topk = history_df['topk']
-        history_df['topk'] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
+        history_topk = history_df['cf_topk_pred']
+        history_df['cf_topk_pred'] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
 
-        history_matrix = np.stack(history_df['topk'].values)
+        history_matrix = np.stack(history_df['cf_topk_pred'].values)
 
     pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
     uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
@@ -333,11 +327,17 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         plt.tight_layout()
         plt.savefig(os.path.join(plots_path, f'{attr}.png'))
         plt.close()
+        
+        
+def clean_history_matrix(hist_m):
+    for col in ['topk', 'cf_topk_pred']:
+        if isinstance(hist_m.iloc[0][col], str):
+            hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].split(), int))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_file', default=None)
+    parser.add_argument('--model_file', required=True)
     parser.add_argument('--explainer_config_file', default='../config/gcmc_explainer.yaml')
     parser.add_argument('--hops_analysis', action='store_true')
 
@@ -350,15 +350,14 @@ if __name__ == "__main__":
 
     print(args)
 
-    config, model, dataset, train_data, valid_data, test_data = load_data_and_model(args.model_file)
+    config, model, dataset, train_data, valid_data, test_data = load_data_and_model(args.model_file,
+                                                                                    args.explainer_config_file)
 
-    train_bias_ratio = None
-    if config['explain_fairness']:
-        train_bias_ratio = generate_bias_ratio(
-            train_data,
-            sensitive_attrs=config['sensitive_attributes'],
-            mapped_keys=False if args.hops_analysis else True
-        )
+    train_bias_ratio = generate_bias_ratio(
+        train_data,
+        sensitive_attrs=config['sensitive_attributes'],
+        mapped_keys=False if args.hops_analysis else True
+    )
 
     if args.hops_analysis:
         filepath_bias = f'{config["dataset"]}_train_rec_bias_ratio_analysis.pkl'

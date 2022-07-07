@@ -6,6 +6,7 @@ from typing import Iterable
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -107,8 +108,7 @@ class BGExplainer:
     def train(self, batched_data, epoch, topk=10):
         t = time.time()
 
-        self.cf_optimizer.zero_grad()
-        self.cf_model.train()
+        self.cf_model.eval()
 
         _, history_index, positive_u, positive_i = batched_data
         scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
@@ -119,26 +119,16 @@ class BGExplainer:
         scores = self.get_scores(self.model, *scores_args, pred=None)
         scores_topk, topk_idx = self.get_top_k(scores, positive_u, positive_i, **get_topk_args)
 
-        # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
-        cf_scores = self.get_scores(self.cf_model, *scores_args, pred=False)
-        cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, positive_u, positive_i, **get_topk_args)
-
-        self.cf_model.eval()
-
         with torch.no_grad():
             cf_scores_pred = self.get_scores(self.cf_model, *scores_args, pred=True)
             cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, positive_u, positive_i, **get_topk_args)
 
+        self.cf_optimizer.zero_grad()
         self.cf_model.train()
 
-        # self.cf_model.eval()
-        #
-        # with torch.no_grad():
-        #     # cf_scores_pred uses thresholded P ==> binary adjacency matrix ==> gives actual prediction
-        #     cf_scores_pred = self.get_scores(self.cf_model, *scores_args, pred=True)
-        #     cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, positive_u, positive_i, **get_topk_args)
-
-        gpu_info = f"START {self.user_id.item()} ({epoch}) {get_gpu_memory()[0]}\n"
+        # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
+        cf_scores = self.get_scores(self.cf_model, *scores_args, pred=False)
+        cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, positive_u, positive_i, **get_topk_args)
 
         relevance_scores = torch.zeros_like(scores).float().to(self.device)
         relevance_scores[:, topk_idx] = 1.
@@ -151,12 +141,13 @@ class BGExplainer:
 
             if self.explain_fairness_NDCGApprox:
                 kwargs = {
-                    "fair_loss_f": GCMCPerturbated.NDCGApproxLoss(),
+                    "fair_loss_f": utils.NDCGApproxLoss(),
                     "target": get_bias_disparity_target_NDCGApprox(
                         cf_scores,
                         self.train_bias_ratio,
                         self.dataset.item_feat['class'],
-                        self.sensitive_attributes
+                        self.sensitive_attributes,
+                        user_feat
                     )
                 }
             else:
@@ -179,9 +170,9 @@ class BGExplainer:
             **kwargs
         )
 
-        dot = make_dot(loss_total.mean(), params=dict(self.cf_model.named_parameters()), show_attrs=True, show_saved=True)
-        dot.format = 'png'
-        dot.render(f'dots_loss')
+        # dot = make_dot(loss_total.mean(), params=dict(self.cf_model.named_parameters()), show_attrs=True, show_saved=True)
+        # dot.format = 'png'
+        # dot.render(f'dots_loss')
 
         loss_total.backward()
         # for name, param in self.cf_model.named_parameters():
@@ -193,10 +184,6 @@ class BGExplainer:
 
         # del self.cf_model.GcEncoder.P
         # del self.cf_model.GcEncoder.P_hat_symm
-
-        gpu_info += f"START {self.user_id.item()} ({epoch}) {get_gpu_memory()[0]}\n"
-        with open('gpu_info.txt', 'a') as f:
-            f.write(gpu_info)
 
         fair_loss = fair_loss.item() if fair_loss is not None else torch.nan
         print(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}",
@@ -215,11 +202,19 @@ class BGExplainer:
 
         cf_stats = None
         if self.dist(cf_topk_pred_idx, topk_idx) > 0 or self.force_return:
+            cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
+            del_edges = np.sort(np.stack((adj != cf_adj).nonzero(), axis=0).T, axis=1)
+            del_edges = pd.DataFrame(del_edges).drop_duplicates().values
+            del_edges = del_edges[(del_edges[:, 0] != del_edges[:, 1]) &
+                                  (del_edges[:, 0] != 0) &
+                                  (del_edges[:, 1] != 0)]
+            # del_edges = torch.stack((del_edges[:, 0], del_edges[:, 1]))
+            del_edges = del_edges.T
+
             cf_stats = [self.user_id.detach().item(),
                         topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
                         self.dist(cf_topk_pred_idx, topk_idx),
-                        loss_total.item(), loss_pred.item(), loss_graph_dist.item(), fair_loss, nnz_sub_adj,
-                        cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()]
+                        loss_total.item(), loss_pred.item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
 
         return cf_stats, loss_total.item(), fair_loss
 
@@ -309,11 +304,10 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
 
         target = torch.zeros_like(sorted_idxs, dtype=torch.float)
         for attr in self.sensitive_attributes:
-
             attr_bias_ratio = self.train_bias_ratio[attr]
 
             for gr, gr_bias_ratio in attr_bias_ratio.items():
-                if gr in demo_groups_mask:
+                if gr in demo_groups[attr]:
                     gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
                     gr_item_cats = self.item_categories_map[gr_idxs].view(-1, self.item_categories_map.shape[-1])
                     gr_mean_bias = torch.nanmean(gr_bias_ratio[gr_item_cats], dim=1).nan_to_num(0)
@@ -321,36 +315,36 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
  
         target /= len(self.sensitive_attributes)
 
-        # target[target >= 1] = 0
-        # target[target < 1] = 1
-        mask_topk = (target < 1).nonzero()[:10]
+        mask_topk = (target < 1).nonzero()[:self.topk]
         target[:] = -1
-        target[mask_topk] = 1
+        target[mask_topk[:, 0], mask_topk[:, 1]] = 1
 
         return torch.clamp(target * _input_sorted, min=0).mean(dim=1)
 
 
-def get_bias_disparity_target_NDCGApprox(scores, train_bias_ratio, item_categories_map, sensitive_attributes):
+def get_bias_disparity_target_NDCGApprox(scores,
+                                         train_bias_ratio,
+                                         item_categories_map,
+                                         sensitive_attributes,
+                                         demo_groups,
+                                         topk=10):
     _input_sorted, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
     for attr in sensitive_attributes:
-        demo_groups_mask = torch.tile(demo_groups[attr], [scores.shape[1], 1]).T
-
         attr_bias_ratio = train_bias_ratio[attr]
 
         for gr, gr_bias_ratio in attr_bias_ratio.items():
-            if gr in demo_groups_mask:
-                gr_idxs = sorted_idxs[demo_groups_mask == gr]
-                gr_idxs = gr_idxs.view(-1, sorted_idxs.shape[1])
+            if gr in demo_groups[attr]:
+                gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
                 gr_item_cats = item_categories_map[gr_idxs].view(-1, item_categories_map.shape[-1])
                 gr_mean_bias = torch.nanmean(gr_bias_ratio[gr_item_cats], dim=1).nan_to_num(0)
-                target[demo_groups_mask == gr] += gr_mean_bias.to(target.device)
+                target[demo_groups[attr] == gr, :] += gr_mean_bias.view(-1, scores.shape[1]).to(target.device)
 
     target /= len(sensitive_attributes)
 
-    mask_topk = (target < 1).nonzero()[:10]
-    target[:] = -1
-    target[mask_topk] = 1
+    mask_topk = (target < 1).nonzero()[:topk]
+    target[:] = 0
+    target[mask_topk[:, 0], mask_topk[:, 1]] = 1
 
     return target

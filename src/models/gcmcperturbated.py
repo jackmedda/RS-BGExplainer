@@ -209,7 +209,6 @@ class GCMCPerturbated(GeneralRecommender):
     #     return loss
 
     def loss(self, output, y_pred_orig, y_pred_orig_top_k, y_pred_new_actual_top_k, dist, **kwargs):
-        sub_adj_idx = self.sub_Graph
         adj = self.support[0]
 
         output = torch.nan_to_num(output, neginf=(torch.min(output[~torch.isinf(output)]) - 1).item())
@@ -220,9 +219,6 @@ class GCMCPerturbated(GeneralRecommender):
         # cf_adj = self.GcEncoder.P * adj
         cf_adj = self.GcEncoder.P_loss
         cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
-
-        adj = adj[tuple(sub_adj_idx)]
-        cf_adj = cf_adj[tuple(sub_adj_idx)]
 
         fair_loss_f = kwargs.get("fair_loss_f", None)
         target = kwargs.get("target", None)
@@ -246,7 +242,8 @@ class GCMCPerturbated(GeneralRecommender):
         # Zero-out loss_pred with pred_same if prediction flips
         loss_total = pred_same * loss_pred + self.beta * loss_graph_dist  # / (self.sub_Graph._nnz() * self.beta)
         # loss_total = loss_pred + self.beta * loss_graph_dist
-        loss_total = self.fair_beta * fair_loss - loss_total if fair_loss is not None else loss_total
+        if fair_loss is not None:
+            loss_total = self.fair_beta * fair_loss + loss_total
 
         return loss_total, loss_pred, orig_loss_graph_dist, fair_loss, cf_adj, adj, self.sub_Graph.shape[1]  # self.sub_Graph._nnz()
 
@@ -410,14 +407,6 @@ class GcEncoder(nn.Module):
 
             P = torch.sigmoid(P_hat_symm)
 
-        # if not pred:
-        #     if not self.only_subgraph:
-        #         # A_tilde = torch.FloatTensor(torch.ones(num_all, num_all)).to(self.device)
-        #         # A_tilde = graph_A.clone()
-        #     else:
-        #         # A_tilde = torch.FloatTensor(torch.zeros(num_all, num_all)).to(self.device)
-        #     #A_tilde.requires_grad = True
-
         # mask = torch.sparse.LongTensor(
         #     self.mask_sub_adj,
         #     torch.ones(self.mask_sub_adj.shape[1], device=self.device),
@@ -438,16 +427,15 @@ class GcEncoder(nn.Module):
         # Don't need gradient of this if pred = False
         # D_tilde = utils.get_degree_matrix(A_tilde) if pred else utils.get_degree_matrix(A_tilde).detach()
         D_tilde = A_tilde.sum(dim=1) if pred else A_tilde.sum(dim=1).detach()
-        # D_tilde_exp = (D_tilde + 1e-7).pow(-0.5)
-        D_tilde_exp = (D_tilde).pow(-0.5)
-        D_tilde_exp[D_tilde_exp == float('inf')] = 0
+        D_tilde_exp = (D_tilde + 1e-7).pow(-0.5)
+        # D_tilde_exp = (D_tilde).pow(-0.5)
+        # D_tilde_exp[D_tilde_exp == float('inf')] = 0
 
         D_tilde_exp = torch.sparse.FloatTensor(self.D_indices, D_tilde_exp, torch.Size((num_all, num_all)))
 
         # D_tilde_exp[D_tilde_exp == float('inf')] = 0
         # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
-        norm_adj = torch.mm(torch.sparse.mm(D_tilde_exp, A_tilde), D_tilde_exp.to_dense()).to_sparse()
-        return norm_adj
+        return torch.mm(torch.sparse.mm(D_tilde_exp, A_tilde), D_tilde_exp.to_dense()).to_sparse()
         # return (D_tilde_exp * A_tilde * D_tilde_exp).to_sparse()
 
     def forward(self, user_X, item_X, pred=False):

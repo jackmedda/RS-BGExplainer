@@ -11,7 +11,7 @@ only_subgraph: False
 
 explain_fairness: False
 explain_fairness_NDCGApprox: False
-sensitive_attributes: [gender] #, age]
+sensitive_attributes: [gender] # , age]
 
 cf_optimizer: SGD
 cf_learning_rate: 2
