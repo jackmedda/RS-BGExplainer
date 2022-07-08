@@ -319,7 +319,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
         target[:] = -1
         target[mask_topk[:, 0], mask_topk[:, 1]] = 1
 
-        return torch.clamp(target * _input_sorted, min=0).mean(dim=1)
+        return -torch.clamp(target * _input_sorted, min=0).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,

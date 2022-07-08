@@ -25,19 +25,36 @@ def load_last_exps_user_id(base_exps_file):
     return max([int(f.split('_')[1].split('.')[0]) for f in files], default=None)
 
 
-# def delete_exps_file(base_exps_file, curr_user_id=None):
-#     curr_user_id_str = f"{curr_user_id if curr_user_id is not None else -1}user"
-#
-#     pat = r'user_\d+.pkl'
-#     files = [f for f in os.listdir(script_path) if re.match(pat, f) is not None and curr_user_id_str not in f]
-#
-#     user_ids = [int(f.split('_')[-1].split('user')[0]) for f in files]
-#     for u_id, f in zip(user_ids, files):
-#         if u_id < curr_user_id:
-#             os.remove(os.path.join(script_path, f))
+def get_base_exps_filepath(config):
+    epochs = config['cf_epochs']
+    base_exps_file = os.path.join(script_path, 'explanations', config['dataset'])
+    if config['explain_fairness']:
+        fair_metadata = "_".join(config["sensitive_attributes"])
+        fair_loss = 'FairNDCGApprox' if config["explain_fairness_NDCGApprox"] else 'FairBD'
+        base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
+    else:
+        base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
+
+    return base_exps_file
 
 
-def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein", **kwargs):
+def save_exps_df(base_exps_file, exps):
+    data = [exp[:-3] + exp[-2:] for exp_list in exps.values() for exp in exp_list]
+    data = list(map(lambda x: [x[0], *x[1:]], data))
+    df = pd.DataFrame(
+        data,
+        columns=utils.EXPS_COLUMNS[:-3] + utils.EXPS_COLUMNS[-2:]
+    )
+
+    df.to_csv(
+        f'{base_exps_file.replace(os.sep, "_")}.csv',
+        index=False
+    )
+
+
+def explain(config, model, test_data, base_exps_file, topk=10, dist_type="damerau_levenshtein", **kwargs):
+    epochs = config['cf_epochs']
+
     iter_data = (
         tqdm.tqdm(
             test_data,
@@ -49,14 +66,6 @@ def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levens
 
     if not config["explain_fairness"]:
         kwargs['train_bias_ratio'] = None
-
-    base_exps_file = os.path.join(script_path, 'explanations', config['dataset'])
-    if config['explain_fairness']:
-        fair_metadata = "_".join(config["sensitive_attributes"])
-        fair_loss = 'FairNDCGApprox' if config["explain_fairness_NDCGApprox"] else 'FairBD'
-        base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
-    else:
-        base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
         
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
@@ -76,38 +85,8 @@ def explain(config, model, test_data, epochs, topk=10, dist_type="damerau_levens
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
 
-        # delete_exps_file(base_exps_file, curr_user_id=user_id.item())
 
-    # exps_file = f'{base_exps_file}.pkl'
-    # with open(exps_file, 'wb') as f:
-    #     pickle.dump(exps, f)
-    # 
-    # delete_exps_file(base_exps_file)
-
-    exps = utils.load_exps_file(base_exps_file)
-
-    data = [exp[:-3] + exp[-2:] for exp_list in exps.values() for exp in exp_list]
-    data = list(map(lambda x: [x[0], *x[1:]], data))
-    df = pd.DataFrame(
-        data,
-        columns=utils.EXPS_COLUMNS[:-3] + utils.EXPS_COLUMNS[-2:]
-    )
-
-    df.to_csv(
-        f'{base_exps_file.replace(os.sep, "_")}.csv',
-        index=False
-    )
-
-    pref_data = []
-    if config['explain_fairness']:
-        for user_id, exp in exps.items():
-            if exp:
-                pref_data.append([user_id, exp[0][2]])
-
-    return exps, pd.DataFrame(pref_data, columns=['user_id', 'topk'])
-
-
-def hops_analysis(config, model, test_data, epochs, topk=10, dist_type="damerau_levenshtein", diam=None):
+def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levenshtein", diam=None):
     if diam is None:
         graph = get_adj_matrix(config, dataset)
         max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
@@ -300,6 +279,12 @@ def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.Da
 def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categories=None):
     plots_path = os.path.join(script_path, os.pardir,
                               f'bias_disparity_plots{"_analysis" if args.hops_analysis else ""}', config['dataset'])
+    if config['explain_fairness']:
+        fair_metadata = "_".join(config["sensitive_attributes"])
+        fair_loss = 'FairNDCGApprox' if config["explain_fairness_NDCGApprox"] else 'FairBD'
+        plots_path = os.path.join(plots_path, fair_loss, fair_metadata)
+    else:
+        plots_path = os.path.join(plots_path, 'pred_explain')
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
@@ -329,9 +314,8 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         
         
 def clean_history_matrix(hist_m):
-    for col in ['topk', 'cf_topk_pred']:
-        if isinstance(hist_m.iloc[0][col], str):
-            hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].split(), int))
+    if isinstance(hist_m.iloc[0]['cf_topk_pred'], str):
+        hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].split(), int))
 
 
 if __name__ == "__main__":
@@ -339,6 +323,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_file', required=True)
     parser.add_argument('--explainer_config_file', default='../config/gcmc_explainer.yaml')
     parser.add_argument('--hops_analysis', action='store_true')
+    parser.add_argument('--load', action='store_true')
+    parser.add_argument('--best_exp_col', nargs="+", default=["loss_total"])
 
     args = parser.parse_args()
 
@@ -350,7 +336,7 @@ if __name__ == "__main__":
     print(args)
 
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
-                                                                                    args.explainer_config_file)
+                                                                                          args.explainer_config_file)
 
     train_bias_ratio = generate_bias_ratio(
         train_data,
@@ -363,12 +349,31 @@ if __name__ == "__main__":
 
         loaded_diam, diam_info = load_diameter_info()
 
-        diam, pref_data = hops_analysis(config, model, test_data, config['cf_epochs'], diam=loaded_diam)
+        diam, pref_data = hops_analysis(config, model, test_data, diam=loaded_diam)
         update_diameter_info(loaded_diam, diam_info, diam)
     else:
         filepath_bias = f'{config["dataset"]}_epochs{config["cf_epochs"]}_train_rec_bias_ratio.pkl'
 
-        exps_data, pref_data = explain(config, model, test_data, config['cf_epochs'], train_bias_ratio=train_bias_ratio)
+        base_exps_filepath = get_base_exps_filepath(config)
+        if not args.load:
+            explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio)
+
+        exps_data = utils.load_exps_file(base_exps_filepath)
+        save_exps_df(base_exps_filepath, exps_data)
+
+        top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in args.best_exp_col] if args.best_exp_col is not None else None
+
+        pref_data = []
+        for user_id, user_exps in exps_data.items():
+            u_exps = user_exps
+            if top_exp_col is not None and user_exps:
+                for tec in top_exp_col:
+                     u_exps = sorted(u_exps, key=lambda x: x[tec])
+                u_exps = [u_exps[0]]
+            if u_exps:
+                pref_data.append([user_id, u_exps[0][2]])
+
+        pref_data = pd.DataFrame(pref_data, columns=['user_id', 'cf_topk_pred'])
 
     if not pref_data.empty:
         rec_bias_ratio = generate_bias_ratio(

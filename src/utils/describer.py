@@ -10,7 +10,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from utils import load_data_and_model, load_exps_file
+import utils
 
 
 class Describer(object):
@@ -26,13 +26,14 @@ class Describer(object):
 
     _plot_methods_prefix = "plot_"
 
-    def __init__(self, base_exps_file, train_data, sensitive_attributes=None, out_base_path='', best_exp=5):
-        exps = load_exps_file(base_exps_file)
+    def __init__(self, base_exps_file, train_data, sensitive_attributes=None, out_base_path='', best_exp=None):
+        exps = utils.load_exps_file(base_exps_file)
 
         self.desc_data = []
         self.exps = exps
         self.train_data = train_data
         self.sens_attrs = ['gender', 'age'] if sensitive_attributes is None else sensitive_attributes
+        self.best_exp = best_exp if best_exp is not None else ["loss_total"]
 
         user_feat = self.train_data.dataset.user_feat
         self.user_df = pd.DataFrame({
@@ -75,9 +76,15 @@ class Describer(object):
 
     def extract_desc_data(self):
         if not self.desc_data:
+            top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in self.best_exp] if self.best_exp is not None else None
             user_num = max(self.exps.keys())
             for user in self.exps:
-                for exp in self.exps[user]:
+                user_exps = self.exps[user]
+                if top_exp_col is not None and user_exps:
+                    for tec in top_exp_col:
+                        user_exps = sorted(user_exps, key=lambda x: x[tec])
+                    user_exps = [user_exps[0]]
+                for exp in user_exps:
                     desc_user = [user] + exp[1:3] + [exp[-3]]
 
                     # check if del_edges is not in right order, all users ids in edge[0] (row)
@@ -308,9 +315,10 @@ class Describer(object):
             sns.barplot(x="del_topk_cats", y="item_count", ci=None, data=cats_plot_df, ax=ax2,
                         order=cats_plot_df.sort_values("item_count", ascending=False)['del_topk_cats'].unique())
             ax2.set_xticklabels([self.item_class_map[int(x.get_text())] for x in ax2.get_xticklabels()])
+            ax2.tick_params(axis='x', rotation=45)
 
             self._plot_for_each_sens(rows, cols, attr, sens_map, cats_plot_df_expl, topk_cats=topk_removed, plot_type="barplot",
-                                     x="del_topk_cats", y="item_count", ci=None, ascending=False, x_map=self.item_class_map)
+                                     x="del_topk_cats", y="item_count", ci=None, ascending=False, x_map=self.item_class_map, rotation=45)
 
             plt.tight_layout()
             fig.savefig(os.path.join(self.out_base_path, f'({attr})_dist_removed_items_topk_and_categories.png'))
@@ -406,6 +414,7 @@ if __name__ == "__main__":
     parser.add_argument('--explainer_config_file', default='../../config/gcmc_explainer.yaml')
     parser.add_argument('--plot_types', default="all")
     parser.add_argument('--out_base_path', default="")
+    parser.add_argument('--best_exp', nargs='+', default=["loss_total"])
 
     args = parser.parse_args()
 
@@ -413,12 +422,13 @@ if __name__ == "__main__":
 
     print(args)
 
-    config, model, dataset, train_data, valid_data, test_data = load_data_and_model(args.model_file,
-                                                                                    args.explainer_config_file)
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
+                                                                                          args.explainer_config_file)
     describer = Describer(
         args.base_exps_file,
         train_data,
         sensitive_attributes=config['sensitive_attributes'],
-        out_base_path=args.out_base_path
+        out_base_path=args.out_base_path,
+        best_exp=args.best_exp
     )
     describer.plot(args.plot_types)

@@ -224,7 +224,7 @@ class GCMCPerturbated(GeneralRecommender):
         target = kwargs.get("target", None)
         fair_loss = None
         if fair_loss_f is not None:
-            fair_loss = fair_loss_f(output, target)
+            fair_loss = -fair_loss_f(output, target)
 
         # Want negative in front to maximize loss instead of minimizing it to find CFs
         loss_pred = self.loss_function(
