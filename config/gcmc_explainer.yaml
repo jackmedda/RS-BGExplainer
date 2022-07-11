@@ -3,6 +3,7 @@ neighbors_hops: True
 cf_beta: 0.8
 fair_beta: 0.5
 cf_epochs: 100
+not_pred: True
 # device: cpu
 
 sub_matrix_only_last_level: False
@@ -10,7 +11,7 @@ not_user_sub_matrix: False
 only_subgraph: False
 
 explain_fairness: True
-explain_fairness_NDCGApprox: True
+explain_fairness_NDCGApprox: False
 sensitive_attributes: [gender] # , age]
 
 cf_optimizer: SGD

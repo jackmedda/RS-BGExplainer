@@ -97,6 +97,7 @@ class GCMCPerturbated(GeneralRecommender):
         self.sub_matrix_only_last_level = config['sub_matrix_only_last_level']
         self.not_user_sub_matrix = config['not_user_sub_matrix']
         self.only_subgraph = config['only_subgraph']
+        self.not_pred = config['not_pred']
 
         # adj matrices for each relation are stored in self.support
         self.Graph, self.sub_Graph = self.get_adj_matrix(
@@ -224,16 +225,19 @@ class GCMCPerturbated(GeneralRecommender):
         target = kwargs.get("target", None)
         fair_loss = None
         if fair_loss_f is not None:
-            fair_loss = -fair_loss_f(output, target)
+            fair_loss = torch.abs(fair_loss_f(output, target))
 
         # Want negative in front to maximize loss instead of minimizing it to find CFs
-        loss_pred = self.loss_function(
-            output,
-            y_pred_orig  # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
-        )
+        if not self.not_pred or fair_loss is None:
+            loss_pred = self.loss_function(
+                output,
+                y_pred_orig  # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
+            )
+        else:
+            loss_pred = torch.tensor(0)
 
         if fair_loss_f is not None:
-            loss_pred = -loss_pred
+            loss_pred = torch.abs(loss_pred)
         # loss_pred = torch.tensor(0)
 
         orig_loss_graph_dist = (cf_adj - adj).abs().sum() / 2  # Number of edges changed (symmetrical)

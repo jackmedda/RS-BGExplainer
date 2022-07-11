@@ -66,10 +66,10 @@ def explain(config, model, test_data, base_exps_file, topk=10, dist_type="damera
 
     if not config["explain_fairness"]:
         kwargs['train_bias_ratio'] = None
-        
+
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
-        
+
     loaded_user_id = load_last_exps_user_id(base_exps_file)
     for batch_idx, batched_data in enumerate(iter_data):
         user_id = batched_data[0].interaction[model.USER_ID].squeeze()
@@ -80,7 +80,7 @@ def explain(config, model, test_data, base_exps_file, topk=10, dist_type="damera
         bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type, **kwargs)
         exp = bge.explain(batched_data, epochs, topk=topk)
         del bge
-        
+
         exps_file_user = os.path.join(base_exps_file, f"user_{user_id.item()}.pkl")
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
@@ -127,7 +127,7 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
             try:
                 bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
                 exp = bge.explain(batched_data, 1, topk=topk)
-                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-2]//2])
+                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-2] // 2])
                 if fair_analysis and n_hops == (stop_hops - 1):
                     pref_data.append([user_id.item(), exp[0][1]])
             except Exception as e:
@@ -224,7 +224,7 @@ def compute_uniform_categories_prob(_item_df, _item_categories_map):
 
     return uni_cat_prob / (_item_df.shape[0] - 1)
 
-            
+
 def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.DataFrame = None, mapped_keys=False):
     sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
     user_df = pd.DataFrame({
@@ -239,7 +239,7 @@ def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.Da
 
     sensitive_maps = [_train_data.dataset.field2id_token[sens_attr] for sens_attr in sensitive_attrs]
     item_categories_map = _train_data.dataset.field2id_token['class']
-    
+
     if history_matrix is None:
         history_matrix, _, history_len = _train_data.dataset.history_item_matrix()
         history_matrix, history_len = history_matrix.numpy(), history_len.numpy()
@@ -256,7 +256,7 @@ def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.Da
 
     pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
     uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
-    
+
     bias_ratio = dict.fromkeys(sensitive_attrs)
     for attr, group_map in zip(sensitive_attrs, sensitive_maps):
         bias_ratio[attr] = dict.fromkeys(range(len(group_map)))
@@ -311,11 +311,11 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         plt.tight_layout()
         plt.savefig(os.path.join(plots_path, f'{attr}.png'))
         plt.close()
-        
-        
+
+
 def clean_history_matrix(hist_m):
     if isinstance(hist_m.iloc[0]['cf_topk_pred'], str):
-        hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].split(), int))
+        hist_m['cf_topk_pred'] = hist_m['cf_topk_pred'].map(lambda x: np.array(x[1:-1].split(), int))
 
 
 if __name__ == "__main__":
@@ -361,14 +361,15 @@ if __name__ == "__main__":
         exps_data = utils.load_exps_file(base_exps_filepath)
         save_exps_df(base_exps_filepath, exps_data)
 
-        top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in args.best_exp_col] if args.best_exp_col is not None else None
+        top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in
+                       args.best_exp_col] if args.best_exp_col is not None else None
 
         pref_data = []
         for user_id, user_exps in exps_data.items():
             u_exps = user_exps
             if top_exp_col is not None and user_exps:
                 for tec in top_exp_col:
-                     u_exps = sorted(u_exps, key=lambda x: x[tec])
+                    u_exps = sorted(u_exps, key=lambda x: x[tec])
                 u_exps = [u_exps[0]]
             if u_exps:
                 pref_data.append([user_id, u_exps[0][2]])

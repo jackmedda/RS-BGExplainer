@@ -130,7 +130,7 @@ class Describer(object):
                 _ax.set_title(f"Only users with {attr} = {sens_map[(r - 1) + (col - 1)]}")
 
                 sens_plot_df = plot_df[plot_df['sens_exp'] == ((r - 1) + (col - 1))]
-                
+
                 if topk_cats is not None:
                     sens_plot_df = sens_plot_df.groupby(sns_kwargs['x']).sum().reset_index()
 

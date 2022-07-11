@@ -9,8 +9,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.nn.utils import clip_grad_norm
 from torchviz import make_dot
 
 sys.path.append('..')
@@ -87,18 +85,13 @@ class BGExplainer:
         best_cf_example = []
         best_loss = np.inf
         first_fair_loss = None
-        gpu_info = ''
         for epoch in range(epochs):
-            with open('gpu_info.txt', 'a') as f:
-                f.write(f'USER: {self.user_id.item()}\n')
             new_example, loss_total, fair_loss = self.train(batched_data, epoch, topk=topk)
             if epoch == 0:
                 first_fair_loss = fair_loss
             if new_example is not None and abs(loss_total) < best_loss:
                 best_cf_example.append(new_example + [first_fair_loss])
                 best_loss = abs(loss_total)
-            with open('gpu_info.txt', 'a') as f:
-                f.write('\n\n')
 
         print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
 
@@ -319,7 +312,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
         target[:] = -1
         target[mask_topk[:, 0], mask_topk[:, 1]] = 1
 
-        return -torch.clamp(target * _input_sorted, min=0).mean(dim=1)
+        return torch.clamp(target * _input_sorted, min=0).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,

@@ -1,16 +1,13 @@
 import os
 import pickle
-import logging
 from logging import getLogger
 from collections import defaultdict
 
 import yaml
 import torch
-from torch_geometric.utils import k_hop_subgraph, dense_to_sparse, to_dense_adj, subgraph
-from recbole.config import Config
-from recbole.data import create_dataset, data_preparation, save_split_dataloaders, load_split_dataloaders
-from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
-
+from torch_geometric.utils import k_hop_subgraph, subgraph
+from recbole.data import create_dataset, data_preparation
+from recbole.utils import init_logger, get_model, init_seed
 
 EXPS_COLUMNS = [
     "user_id",
@@ -70,7 +67,7 @@ def load_data_and_model(model_file, explainer_config_file):
 
 def load_exps_file(base_exps_file):
     files = [f for f in os.scandir(base_exps_file)]
-    
+
     exps = {}
     for f in files:
         user_id = int(f.name.split('_')[1].split('.')[0])
