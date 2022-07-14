@@ -4,9 +4,9 @@ import inspect
 import argparse
 from typing import Iterable
 
-import tqdm
 import numpy as np
 import pandas as pd
+import networkx as nx
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -26,14 +26,31 @@ class Describer(object):
 
     _plot_methods_prefix = "plot_"
 
-    def __init__(self, base_exps_file, train_data, sensitive_attributes=None, out_base_path='', best_exp=None):
+    def __init__(self, base_exps_file, train_data, out_base_path='', best_exp=None):
         exps = utils.load_exps_file(base_exps_file)
+
+        with open(os.path.join(args.base_exps_file, "config.pkl"), 'rb') as config_file:
+            self.config = pickle.load(config_file)
 
         self.desc_data = []
         self.exps = exps
         self.train_data = train_data
+
+        sensitive_attributes = self.config['sensitive_attributes']
         self.sens_attrs = ['gender', 'age'] if sensitive_attributes is None else sensitive_attributes
         self.best_exp = best_exp if best_exp is not None else ["loss_total"]
+
+        self.graph = utils.get_nx_adj_matrix(self.config, self.train_data.dataset)
+        try:
+            eigen_centrality = nx.eigenvector_centrality(self.graph, tol=1e-3)
+        except nx.PowerIterationFailedConvergence as e:
+            print(e)
+            eigen_centrality = None
+        self.graph_info = {
+            'closeness': nx.closeness_centrality(self.graph),
+            'eigenvector': eigen_centrality,
+            'betweenness': nx.betweenness_centrality(self.graph)
+        }
 
         user_feat = self.train_data.dataset.user_feat
         self.user_df = pd.DataFrame({
@@ -57,12 +74,15 @@ class Describer(object):
         self.item_hist_matrix, self.item_hist_len = item_hist_matrix.numpy(), item_hist_len.numpy()
 
         script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
-        paths_metadata = base_exps_file.split(os.sep)[(-4 if 'Fair' in base_exps_file else -3):]
+        paths_metadata = base_exps_file.split(os.sep)
+        paths_metadata = paths_metadata[(paths_metadata.index('explanations') + 1):]
         self.out_base_path = out_base_path or os.path.join(script_path,
                                                            os.pardir,
                                                            os.pardir,
                                                            'plots',
                                                            *paths_metadata)
+        if self.best_exp is not None:
+            self.out_base_path = os.path.join(self.out_base_path, '#'.join(self.best_exp))
         if not os.path.exists(self.out_base_path):
             os.makedirs(self.out_base_path)
 
@@ -375,6 +395,52 @@ class Describer(object):
         plt.tight_layout()
         fig.savefig(os.path.join(self.out_base_path, f'dist_removed_users_items.png'))
 
+    @plot_handle
+    def plot_del_edges_over_closeness_centrality(self):
+        """
+        Relationship between most deleted users/items and closeness centrality
+        """
+        rows, cols = len([1 for x in self.graph_info.values() if x is not None]), 1
+
+        fig = plt.figure(figsize=(12, 12))
+        fig.suptitle(f"Relationship between Users/Items in Removed Edges and Centrality")
+        # for attr, sens_map in zip(self.sens_attrs, self.sens_maps):
+        # user_sens = self._get_user_sens_attr_from_id([data[0] for data in self.desc_data], attr)
+        for i, centrality in enumerate(self.graph_info.keys()):
+            del_edges = [data[-1] for data in self.desc_data]
+
+            del_edges = np.concatenate(del_edges, axis=1)
+            node_type = np.concatenate([np.full(del_edges.shape[1], "user"), np.full(del_edges.shape[1], "item")])
+
+            # rows = 1 + int(np.ceil((len(sens_map) - 1) / 3))
+            # cols = min(2, len(sens_map) - 1)
+
+            plot_df = pd.DataFrame(
+                zip(del_edges.flatten(), del_edges.flatten(), node_type),
+                columns=["Node", "Node Count", "Node_type"]
+            )
+            plot_df[centrality.title()] = plot_df["Node"].map(self.graph_info[centrality])
+            plot_df["Node Count"] = plot_df["Node Count"].map(plot_df["Node Count"].value_counts())
+            # plot_df.sort_values("Node_count", ascending=False, inplace=True)
+            # top_edges = plot_df[col_edge].drop_duplicates()[:top_removed].values
+            # top_plot_df = plot_df[plot_df[col_edge].isin(top_edges)]
+
+            # order_plots = top_plot_df.sort_values(col_edge_counts, ascending=False)[col_edge].unique()
+            # order_plots = plot_df["Node"].unique()
+            ax1 = plt.subplot(rows, cols, i + 1)
+            ax1.set_title(f"All Users and Items in Removed Edges ({centrality.title()})")
+            sns.scatterplot(x="Node Count", y=centrality.title(), data=plot_df, hue="Node_type", ax=ax1)
+
+            # self._plot_for_each_sens(rows, cols, attr, sens_map,
+            #                          plot_df.groupby(['sens_exp', 'cat_edges']).sum().reset_index(),
+            #                          x="cat_edges", y="edges_counts", plot_type="barplot", x_map=self.item_class_map,
+            #                          ascending=False,
+            #                          rotation=45)
+
+        plt.tight_layout()
+        # fig.savefig(os.path.join(self.out_base_path, f'({attr})_item_categories_over_del_edges.png'))
+        fig.savefig(os.path.join(self.out_base_path, f'del_edges_users_items_closeness.png'))
+
     def _get_user_sens_attr_from_id(self, user_ids, sens_attr):
         user_ids = user_ids if isinstance(user_ids, Iterable) else [user_ids]
         return self.user_df.set_index('user_id').loc[user_ids, sens_attr].to_numpy()
@@ -412,7 +478,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_file', required=True)
     parser.add_argument('--base_exps_file', required=True)
     parser.add_argument('--explainer_config_file', default='../../config/gcmc_explainer.yaml')
-    parser.add_argument('--plot_types', default="all")
+    parser.add_argument('--plot_types', nargs='+', default="all")
     parser.add_argument('--out_base_path', default="")
     parser.add_argument('--best_exp', nargs='+', default=["loss_total"])
 
@@ -422,12 +488,12 @@ if __name__ == "__main__":
 
     print(args)
 
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
-                                                                                          args.explainer_config_file)
+    _, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
+                                                                                     args.explainer_config_file)
+
     describer = Describer(
         args.base_exps_file,
         train_data,
-        sensitive_attributes=config['sensitive_attributes'],
         out_base_path=args.out_base_path,
         best_exp=args.best_exp
     )

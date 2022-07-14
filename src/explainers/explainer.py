@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from recbole.data.interaction import Interaction
 from torchviz import make_dot
 
 sys.path.append('..')
@@ -70,6 +71,8 @@ class BGExplainer:
             self.cf_optimizer = torch.optim.SGD(self.cf_model.parameters(), lr=lr, **sgd_kwargs)
         elif config["cf_optimizer"] == "Adadelta":
             self.cf_optimizer = torch.optim.Adadelta(self.cf_model.parameters(), lr=lr)
+        elif config["cf_optimizer"] == "AdamW":
+            self.cf_optimizer = torch.optim.AdamW(self.cf_model.parameters(), lr=lr)
         else:
             raise NotImplementedError("CF Optimizer not implemented")
 
@@ -124,7 +127,7 @@ class BGExplainer:
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, positive_u, positive_i, **get_topk_args)
 
         relevance_scores = torch.zeros_like(scores).float().to(self.device)
-        relevance_scores[:, topk_idx] = 1.
+        relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], topk_idx] = 1
 
         kwargs = {}
         if self.train_bias_ratio is not None:
@@ -178,12 +181,13 @@ class BGExplainer:
         # del self.cf_model.GcEncoder.P
         # del self.cf_model.GcEncoder.P_hat_symm
 
-        fair_loss = fair_loss.item() if fair_loss is not None else torch.nan
+        fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
         print(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}",
               'User id: {}'.format(self.user_id),
               'Epoch: {}'.format(epoch + 1),
               'loss: {:.4f}'.format(loss_total.item()),
-              'pred loss: {:.4f}'.format(loss_pred.item()),
+              'pred loss: {:.4f}'.format(loss_pred.mean().item()),
+              ('FairNDCGApprox' if self.explain_fairness_NDCGApprox else 'FairBD') if self.train_bias_ratio is not None else '',
               'fair loss: {:.4f}'.format(fair_loss),
               'graph loss: {:.4f}'.format(loss_graph_dist.item()),
               'nnz sub adj: {}'.format(nnz_sub_adj))
@@ -194,7 +198,8 @@ class BGExplainer:
         print(" ")
 
         cf_stats = None
-        if self.dist(cf_topk_pred_idx, topk_idx) > 0 or self.force_return:
+        cf_check = [self.dist(_pred, _topk_idx) > 0 for _pred, _topk_idx in zip(cf_topk_pred_idx, topk_idx)]
+        if any(cf_check) or self.force_return:
             cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
             del_edges = np.sort(np.stack((adj != cf_adj).nonzero(), axis=0).T, axis=1)
             del_edges = pd.DataFrame(del_edges).drop_duplicates().values
@@ -204,10 +209,10 @@ class BGExplainer:
             # del_edges = torch.stack((del_edges[:, 0], del_edges[:, 1]))
             del_edges = del_edges.T
 
-            cf_stats = [self.user_id.detach().item(),
+            cf_stats = [self.user_id.detach().numpy(),
                         topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
-                        self.dist(cf_topk_pred_idx, topk_idx),
-                        loss_total.item(), loss_pred.item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
+                        [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, topk_idx)],
+                        loss_total.item(), loss_pred.mean().item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
 
         return cf_stats, loss_total.item(), fair_loss
 
@@ -230,7 +235,7 @@ class BGExplainer:
 
     def get_scores(self, _model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
         interaction, history_index, _, _ = batched_data
-        assert len(interaction.interaction[_model.USER_ID]) == 1
+        # assert len(interaction.interaction[_model.USER_ID]) == 1
         try:
             # Note: interaction without item ids
             scores_kws = {'pred': pred} if pred is not None else {}
@@ -244,7 +249,7 @@ class BGExplainer:
             if batch_size <= test_batch_size:
                 scores = _model.predict(new_inter)
             else:
-                scores = _spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
+                scores = self._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
 
         scores = scores.view(-1, tot_item_num)
         scores[:, 0] = -torch.inf
@@ -271,7 +276,7 @@ class BGExplainer:
         # pos_idx = torch.gather(pos_matrix, dim=1, index=topk_idx)
         # result = torch.cat((pos_idx, pos_len_list), dim=1)
         # return scores_top_k, result
-        return scores_top_k.squeeze(), topk_idx.squeeze()
+        return scores_top_k, topk_idx
 
 
 class BiasDisparityLoss(torch.nn.modules.loss._Loss):
@@ -293,26 +298,14 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
         self.margin = margin
 
     def forward(self, _input: torch.Tensor, demo_groups: torch.Tensor) -> torch.Tensor:
-        _input_sorted, sorted_idxs = torch.topk(_input, _input.shape[1])
+        sorted_target, sorted_input, _ = get_bias_disparity_sorted_target(_input,
+                                                                          self.train_bias_ratio,
+                                                                          self.item_categories_map,
+                                                                          self.sensitive_attributes,
+                                                                          demo_groups,
+                                                                          topk=self.topk)
 
-        target = torch.zeros_like(sorted_idxs, dtype=torch.float)
-        for attr in self.sensitive_attributes:
-            attr_bias_ratio = self.train_bias_ratio[attr]
-
-            for gr, gr_bias_ratio in attr_bias_ratio.items():
-                if gr in demo_groups[attr]:
-                    gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
-                    gr_item_cats = self.item_categories_map[gr_idxs].view(-1, self.item_categories_map.shape[-1])
-                    gr_mean_bias = torch.nanmean(gr_bias_ratio[gr_item_cats], dim=1).nan_to_num(0)
-                    target[demo_groups[attr] == gr, :] += gr_mean_bias.view(-1, _input.shape[1]).to(target.device)
- 
-        target /= len(self.sensitive_attributes)
-
-        mask_topk = (target < 1).nonzero()[:self.topk]
-        target[:] = -1
-        target[mask_topk[:, 0], mask_topk[:, 1]] = 1
-
-        return torch.clamp(target * _input_sorted, min=0).mean(dim=1)
+        return (sorted_target * sorted_input).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,
@@ -321,7 +314,23 @@ def get_bias_disparity_target_NDCGApprox(scores,
                                          sensitive_attributes,
                                          demo_groups,
                                          topk=10):
-    _input_sorted, sorted_idxs = torch.topk(scores, scores.shape[1])
+    sorted_target, _, sorted_idxs = get_bias_disparity_sorted_target(scores,
+                                                                     train_bias_ratio,
+                                                                     item_categories_map,
+                                                                     sensitive_attributes,
+                                                                     demo_groups,
+                                                                     topk=topk)
+
+    return torch.gather(sorted_target, 1, sorted_idxs)
+
+
+def get_bias_disparity_sorted_target(scores,
+                                     train_bias_ratio,
+                                     item_categories_map,
+                                     sensitive_attributes,
+                                     demo_groups,
+                                     topk=10):
+    sorted_scores, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
     for attr in sensitive_attributes:
@@ -336,8 +345,8 @@ def get_bias_disparity_target_NDCGApprox(scores,
 
     target /= len(sensitive_attributes)
 
-    mask_topk = (target < 1).nonzero()[:topk]
+    mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
     target[:] = 0
-    target[mask_topk[:, 0], mask_topk[:, 1]] = 1
+    target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
 
-    return target
+    return target, sorted_scores, sorted_idxs

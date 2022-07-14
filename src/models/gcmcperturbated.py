@@ -98,10 +98,11 @@ class GCMCPerturbated(GeneralRecommender):
         self.not_user_sub_matrix = config['not_user_sub_matrix']
         self.only_subgraph = config['only_subgraph']
         self.not_pred = config['not_pred']
+        self.pred_same = config['pred_same']
 
         # adj matrices for each relation are stored in self.support
         self.Graph, self.sub_Graph = self.get_adj_matrix(
-            user_id.item(),
+            user_id,
             self.n_hops,
             neighbors_hops=self.neighbors_hops,
             only_last_level=self.sub_matrix_only_last_level,
@@ -176,15 +177,18 @@ class GCMCPerturbated(GeneralRecommender):
         i = torch.LongTensor(np.stack([row, col], axis=0))
         data = torch.FloatTensor(A.data)
         adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
-        edge_subset = utils.get_neighbourhood(
-            user_id,
-            i,
-            n_hops,
-            neighbors_hops=neighbors_hops,
-            only_last_level=only_last_level,
-            not_user_sub_matrix=not_user_sub_matrix,
-            max_num_nodes=self.num_all
-        )
+        if len(user_id) == 1:
+            edge_subset = utils.get_neighbourhood(
+                user_id[0].item(),
+                i,
+                n_hops,
+                neighbors_hops=neighbors_hops,
+                only_last_level=only_last_level,
+                not_user_sub_matrix=not_user_sub_matrix,
+                max_num_nodes=self.num_all
+            )
+        else:
+            edge_subset = [torch.LongTensor(i)]
         return adj.to_dense().to(self.device), edge_subset[0].to(self.device)
 
     def forward(self, user_X, item_X, user, item, pred=False):
@@ -213,9 +217,11 @@ class GCMCPerturbated(GeneralRecommender):
         adj = self.support[0]
 
         output = torch.nan_to_num(output, neginf=(torch.min(output[~torch.isinf(output)]) - 1).item())
-
         # activate only if top-k is equal
-        pred_same = (torch.tensor(dist(y_pred_orig_top_k.squeeze(), y_pred_new_actual_top_k.squeeze())) == 0).float()
+        pred_same = (torch.tensor([
+            dist(y_orig, y_new) == 0 if self.pred_same else True
+            for y_orig, y_new in zip(y_pred_orig_top_k, y_pred_new_actual_top_k)
+        ])).float()[:, None].to(self.device)
 
         # cf_adj = self.GcEncoder.P * adj
         cf_adj = self.GcEncoder.P_loss
@@ -223,6 +229,7 @@ class GCMCPerturbated(GeneralRecommender):
 
         fair_loss_f = kwargs.get("fair_loss_f", None)
         target = kwargs.get("target", None)
+
         fair_loss = None
         if fair_loss_f is not None:
             fair_loss = torch.abs(fair_loss_f(output, target))
@@ -234,7 +241,7 @@ class GCMCPerturbated(GeneralRecommender):
                 y_pred_orig  # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
             )
         else:
-            loss_pred = torch.tensor(0)
+            loss_pred = torch.tensor(0.)
 
         if fair_loss_f is not None:
             loss_pred = torch.abs(loss_pred)
@@ -244,10 +251,10 @@ class GCMCPerturbated(GeneralRecommender):
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
         # Zero-out loss_pred with pred_same if prediction flips
-        loss_total = pred_same * loss_pred + self.beta * loss_graph_dist  # / (self.sub_Graph._nnz() * self.beta)
+        loss_total = (pred_same * loss_pred).mean() + self.beta * loss_graph_dist  # / (self.sub_Graph._nnz() * self.beta)
         # loss_total = loss_pred + self.beta * loss_graph_dist
         if fair_loss is not None:
-            loss_total = self.fair_beta * fair_loss + loss_total
+            loss_total = (pred_same * fair_loss).mean() * self.fair_beta + loss_total
 
         return loss_total, loss_pred, orig_loss_graph_dist, fair_loss, cf_adj, adj, self.sub_Graph.shape[1]  # self.sub_Graph._nnz()
 

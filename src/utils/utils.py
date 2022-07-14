@@ -1,10 +1,14 @@
 import os
+import re
 import pickle
 from logging import getLogger
 from collections import defaultdict
 
 import yaml
 import torch
+import scipy
+import numpy as np
+import networkx as nx
 from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
@@ -51,9 +55,16 @@ def load_data_and_model(model_file, explainer_config_file):
 
     dataset = create_dataset(config)
 
-    # specifying tot_item_num to the number of unique items makes the dataloader for evaluation to be batched
-    # on interactions of one user at a time
-    config['eval_batch_size'] = dataset.item_num
+    # # specifying tot_item_num to the number of unique items makes the dataloader for evaluation to be batched
+    # # on interactions of one user at a time
+    # if config['explain_scope'] == "group":
+    #     config['eval_batch_size'] = dataset.item_num * config['user_batch_exp']
+    # elif config['explain_scope'] == "individual":
+    #     config['eval_batch_size'] = dataset.item_num
+    # else:
+    #     raise ValueError(f"`{config['explain_scope']}` is not in {['group', 'individual']}")
+    config['explain_scope'] = 'group' if config['user_batch_exp'] > 1 else 'individual'
+
     logger.info(dataset)
     train_data, valid_data, test_data = data_preparation(config, dataset)
 
@@ -66,7 +77,7 @@ def load_data_and_model(model_file, explainer_config_file):
 
 
 def load_exps_file(base_exps_file):
-    files = [f for f in os.scandir(base_exps_file)]
+    files = [f for f in os.scandir(base_exps_file) if re.match(r'user_\d+', f.name) is not None]
 
     exps = {}
     for f in files:
@@ -76,6 +87,24 @@ def load_exps_file(base_exps_file):
         exps[user_id] = exp
 
     return exps
+
+
+def get_nx_adj_matrix(config, dataset):
+    USER_ID = config['USER_ID_FIELD']
+    ITEM_ID = config['ITEM_ID_FIELD']
+    n_users = dataset.num(USER_ID)
+    n_items = dataset.num(ITEM_ID)
+    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
+    num_all = n_users + n_items
+
+    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
+    inter_M = inter_matrix
+    inter_M_t = inter_matrix.transpose()
+    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
+    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
+    A._update(data_dict)
+    A = A.tocoo()
+    return nx.Graph(A)
 
 
 def get_degree_matrix(adj):

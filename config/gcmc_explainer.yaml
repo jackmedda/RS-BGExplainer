@@ -1,26 +1,55 @@
+# How many hops for the subgraph? (Only used if `user_batch_exp` == 1)
 n_hops: 2
+# `n_hops` is doubled such that each hop considers all the interactions of closest users in the bipartite graph
 neighbors_hops: True
-cf_beta: 0.8
-fair_beta: 0.5
+# optimizer for explainer
+cf_optimizer: SGD
+# learning rate of optimizer for explainer
+cf_learning_rate: 300
+# epochs to generate explanations
 cf_epochs: 100
+# how many users should be considered to explain?
+user_batch_exp: 1
+# not consider the prediction loss (to make distant or closer the original predictions)
 not_pred: True
+# if the fair or pred loss should be activated if the top-k list is already perturbed
+pred_same: True
+# loss weight for the prediction loss
+cf_beta: 0.8
+# the function used to check if the top-k list was perturbed
+cf_dist: damerau_levenshtein
+
+# loss weight for the fairness loss (used only if `explain_fairness` == True)
+# FairBD
+# fair_beta: 0.5
+# FairNDCGApproxLoss
+fair_beta: 0.5
+
 # device: cpu
 
+# does not consider the interactions of the user to explain, only the last hop
 sub_matrix_only_last_level: False
+# does not consider the interactions of the user to explain, consider the remaining hops
 not_user_sub_matrix: False
+# does not perform perturbation, uses only the subgraph of the user to `explain` (used for analysis)
 only_subgraph: False
 
+# if to use fairness loss
 explain_fairness: True
-explain_fairness_NDCGApprox: False
+# uses FairNDCGApprox instead of FairBD
+explain_fairness_NDCGApprox: True
+# sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
 
-cf_optimizer: SGD
-cf_learning_rate: 2
-
+# -infinite is assigned to the user history interactions in the list of scores to consider a top-k of only new items
+# This zero out the gradient for the items for which -infinite is assigned, so a subgraph with only the interactions of
+# the user cannot be "explained" by using the top-k list. This parameter does not assign -infinite if the items of the
+# user history are not in the top-k and can be used for explanation
 keep_history_if_possible: False
 
-# only useful for hops analysis
+# force return of explanations even though the top-k is not perturbed (only useful for hops analysis)
 explainer_force_return: False
+
 # ML-100K
 load_col:
     inter: [user_id, item_id, timestamp]

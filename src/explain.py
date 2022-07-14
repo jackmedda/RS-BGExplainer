@@ -1,5 +1,6 @@
 import os
 import gc
+import re
 import argparse
 import inspect
 import pickle
@@ -7,22 +8,22 @@ import json
 
 import torch
 import tqdm
-import scipy
 import numpy as np
 import pandas as pd
 import networkx as nx
 import seaborn as sns
 import matplotlib.pyplot as plt
 from recbole.utils import set_color
+from recbole.data.interaction import Interaction
 
 import utils
 from explainers.explainer import BGExplainer
 
 
-def load_last_exps_user_id(base_exps_file):
-    files = [f for f in os.listdir(base_exps_file)]
+def load_already_done_exps_user_id(base_exps_file):
+    files = [f for f in os.listdir(base_exps_file) if re.match(r'user_\d+', f) is not None]
 
-    return max([int(f.split('_')[1].split('.')[0]) for f in files], default=None)
+    return [int(_id) for f in files for _id in f.split('_')[1].split('.')[0].split('#')]
 
 
 def get_base_exps_filepath(config):
@@ -35,6 +36,12 @@ def get_base_exps_filepath(config):
     else:
         base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
 
+    explain_scope = config['explain_scope']
+    exp_scopes = ['group', 'individual']
+    if explain_scope not in exp_scopes:
+        raise ValueError(f"`{explain_scope}` is not in {exp_scopes}")
+    base_exps_file = os.path.join(base_exps_file, explain_scope)
+
     return base_exps_file
 
 
@@ -46,19 +53,37 @@ def save_exps_df(base_exps_file, exps):
         columns=utils.EXPS_COLUMNS[:-3] + utils.EXPS_COLUMNS[-2:]
     )
 
+    out_path = base_exps_file.split(os.sep)
     df.to_csv(
-        f'{base_exps_file.replace(os.sep, "_")}.csv',
+        f'{"_".join(out_path[out_path.index("explanations"):])}.csv',
         index=False
     )
 
 
-def explain(config, model, test_data, base_exps_file, topk=10, dist_type="damerau_levenshtein", **kwargs):
+def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
     epochs = config['cf_epochs']
 
+    # iter_data = (
+    #     tqdm.tqdm(
+    #         test_data,
+    #         total=len(test_data),
+    #         ncols=100,
+    #         desc=set_color(f"Explaining   ", 'pink'),
+    #     )
+    # )
+    if not os.path.exists(base_exps_file):
+        os.makedirs(base_exps_file)
+
+    user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
+
+    loaded_user_ids = load_already_done_exps_user_id(base_exps_file)
+    user_data = user_data[~torch.isin(user_data, torch.tensor(loaded_user_ids))]
+
+    user_data = user_data.split(config['user_batch_exp'])
     iter_data = (
         tqdm.tqdm(
-            test_data,
-            total=len(test_data),
+            user_data,
+            total=len(user_data),
             ncols=100,
             desc=set_color(f"Explaining   ", 'pink'),
         )
@@ -67,28 +92,41 @@ def explain(config, model, test_data, base_exps_file, topk=10, dist_type="damera
     if not config["explain_fairness"]:
         kwargs['train_bias_ratio'] = None
 
-    if not os.path.exists(base_exps_file):
-        os.makedirs(base_exps_file)
+    with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
+        pickle.dump(config, config_file)
 
-    loaded_user_id = load_last_exps_user_id(base_exps_file)
-    for batch_idx, batched_data in enumerate(iter_data):
-        user_id = batched_data[0].interaction[model.USER_ID].squeeze()
-        if loaded_user_id is not None and loaded_user_id >= user_id:
-            continue
+    for batch_idx, batched_user in enumerate(iter_data):
+        # user_id = batched_data[0].interaction[model.USER_ID]
+        user_id = batched_user
+        user_df_mask = torch.isin(test_data.user_df[test_data.uid_field], user_id)
+        user_df = Interaction({k: v[user_df_mask] for k, v in test_data.user_df.interaction.items()})
+        history_item = test_data.uid2history_item[user_id]
+
+        if len(user_id) > 1:
+            history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
+            history_i = torch.cat(list(history_item))
+        else:
+            history_u = torch.full_like(history_item, 0)
+            history_i = history_item
+        batched_data = (user_df, (history_u, history_i), None, None)
 
         gc.collect()
-        bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type, **kwargs)
+        bge = BGExplainer(config, train_data.dataset, model, user_id, dist=config['cf_dist'], **kwargs)
         exp = bge.explain(batched_data, epochs, topk=topk)
         del bge
 
-        exps_file_user = os.path.join(base_exps_file, f"user_{user_id.item()}.pkl")
+        if len(user_id) == 1:
+            exps_file_user = os.path.join(base_exps_file, f"user_{user_id[0].item()}.pkl")
+        else:
+            exps_file_user = os.path.join(base_exps_file, f"user_{'#'.join(user_id.numpy())}.pkl")
+
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
 
 
 def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levenshtein", diam=None):
     if diam is None:
-        graph = get_adj_matrix(config, dataset)
+        graph = utils.get_nx_adj_matrix(config, dataset)
         max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
         # cc_graphs = [graph.subgraph(x).copy() for x in nx.connected_components(graph)]
         # for x in cc_graphs:
@@ -159,24 +197,6 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
     return diam, pd.DataFrame(pref_data, columns=['user_id', 'topk'])
 
 
-def get_adj_matrix(config, dataset):
-    USER_ID = config['USER_ID_FIELD']
-    ITEM_ID = config['ITEM_ID_FIELD']
-    n_users = dataset.num(USER_ID)
-    n_items = dataset.num(ITEM_ID)
-    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
-    num_all = n_users + n_items
-
-    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
-    inter_M = inter_matrix
-    inter_M_t = inter_matrix.transpose()
-    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
-    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
-    A._update(data_dict)
-    A = A.tocoo()
-    return nx.Graph(A)
-
-
 def load_diameter_info():
     _diam_info = {}
     diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
@@ -225,15 +245,19 @@ def compute_uniform_categories_prob(_item_df, _item_categories_map):
     return uni_cat_prob / (_item_df.shape[0] - 1)
 
 
-def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.DataFrame = None, mapped_keys=False):
+def generate_bias_ratio(_train_data,
+                        sensitive_attrs=None,
+                        history_matrix: pd.DataFrame = None,
+                        pred_col='cf_topk_pred',
+                        mapped_keys=False):
     sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
     user_df = pd.DataFrame({
-        'user_id': _train_data.dataset.user_feat['user_id'].numpy(),
+        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
         **{sens_attr: _train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sensitive_attrs}
     })
 
     item_df = pd.DataFrame({
-        'item_id': _train_data.dataset.item_feat['item_id'].numpy(),
+        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
         'class': map(lambda x: [el for el in x if el != 0], _train_data.dataset.item_feat['class'].numpy().tolist())
     })
 
@@ -245,14 +269,14 @@ def generate_bias_ratio(_train_data, sensitive_attrs=None, history_matrix: pd.Da
         history_matrix, history_len = history_matrix.numpy(), history_len.numpy()
     else:
         clean_history_matrix(history_matrix)
-        topk = len(history_matrix.iloc[0]['cf_topk_pred'])
+        topk = len(history_matrix.iloc[0][pred_col])
         history_len = np.zeros(user_df.shape[0])
         history_len[history_matrix['user_id']] = topk
         history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
-        history_topk = history_df['cf_topk_pred']
-        history_df['cf_topk_pred'] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
+        history_topk = history_df[pred_col]
+        history_df[pred_col] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
 
-        history_matrix = np.stack(history_df['cf_topk_pred'].values)
+        history_matrix = np.stack(history_df[pred_col].values)
 
     pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
     uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
@@ -284,7 +308,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         fair_loss = 'FairNDCGApprox' if config["explain_fairness_NDCGApprox"] else 'FairBD'
         plots_path = os.path.join(plots_path, fair_loss, fair_metadata)
     else:
-        plots_path = os.path.join(plots_path, 'pred_explain')
+        plots_path = os.path.join(plots_path, 'pred_explain' if not args.bias_orig_pred else 'original_pred')
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
@@ -306,7 +330,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         if item_categories is not None:
             item_categories_map = dict(zip(range(len(item_categories)), item_categories))
             df.rename(columns=item_categories_map, inplace=True)
-        ax = sns.heatmap(df)
+        ax = sns.heatmap(df, vmin=-2.0, vmax=2.0)
         ax.set_title(attr.title())
         plt.tight_layout()
         plt.savefig(os.path.join(plots_path, f'{attr}.png'))
@@ -314,8 +338,9 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
 
 
 def clean_history_matrix(hist_m):
-    if isinstance(hist_m.iloc[0]['cf_topk_pred'], str):
-        hist_m['cf_topk_pred'] = hist_m['cf_topk_pred'].map(lambda x: np.array(x[1:-1].split(), int))
+    for col in ['topk_pred', 'cf_topk_pred']:
+        if isinstance(hist_m.iloc[0][col], str):
+            hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
 
 
 if __name__ == "__main__":
@@ -325,6 +350,7 @@ if __name__ == "__main__":
     parser.add_argument('--hops_analysis', action='store_true')
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--best_exp_col', nargs="+", default=["loss_total"])
+    parser.add_argument('--bias_orig_pred', action='store_true')
 
     args = parser.parse_args()
 
@@ -345,18 +371,18 @@ if __name__ == "__main__":
     )
 
     if args.hops_analysis:
-        filepath_bias = f'{config["dataset"]}_train_rec_bias_ratio_analysis.pkl'
-
         loaded_diam, diam_info = load_diameter_info()
 
         diam, pref_data = hops_analysis(config, model, test_data, diam=loaded_diam)
         update_diameter_info(loaded_diam, diam_info, diam)
     else:
-        filepath_bias = f'{config["dataset"]}_epochs{config["cf_epochs"]}_train_rec_bias_ratio.pkl'
-
         base_exps_filepath = get_base_exps_filepath(config)
+
         if not args.load:
             explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio)
+        else:
+            with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
+                config = pickle.load(config_file)
 
         exps_data = utils.load_exps_file(base_exps_filepath)
         save_exps_df(base_exps_filepath, exps_data)
@@ -372,26 +398,18 @@ if __name__ == "__main__":
                     u_exps = sorted(u_exps, key=lambda x: x[tec])
                 u_exps = [u_exps[0]]
             if u_exps:
-                pref_data.append([user_id, u_exps[0][2]])
+                pref_data.append([user_id, u_exps[0][1], u_exps[0][2]])
 
-        pref_data = pd.DataFrame(pref_data, columns=['user_id', 'cf_topk_pred'])
+        pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
 
     if not pref_data.empty:
         rec_bias_ratio = generate_bias_ratio(
             train_data,
+            pred_col='topk_pred' if args.bias_orig_pred else 'cf_topk_pred',
             sensitive_attrs=config['sensitive_attributes'],
             history_matrix=pref_data,
             mapped_keys=False if args.hops_analysis else True
         )
-
-        with open(filepath_bias, 'wb') as f:
-            pickle.dump(
-                {
-                    'train_bias_ratio': train_bias_ratio,
-                    'rec_bias_ratio': rec_bias_ratio
-                },
-                f
-            )
 
         plot_bias_analysis_disparity(
             train_bias_ratio,
@@ -399,3 +417,5 @@ if __name__ == "__main__":
             train_data,
             item_categories=train_data.dataset.field2id_token['class']
         )
+    else:
+        print("Pref Data is empty!")
