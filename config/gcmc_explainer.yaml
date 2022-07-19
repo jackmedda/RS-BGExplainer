@@ -5,15 +5,15 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 300
+cf_learning_rate: 1000
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
 user_batch_exp: 1
-# not consider the prediction loss (to make distant or closer the original predictions)
+# not consider the prediction loss
 not_pred: True
-# if the fair or pred loss should be activated if the top-k list is already perturbed
-pred_same: True
+# if the fair or pred loss should be deactivated if the top-k list is already perturbed
+pred_same: False
 # loss weight for the prediction loss
 cf_beta: 0.8
 # the function used to check if the top-k list was perturbed
@@ -37,9 +37,12 @@ only_subgraph: False
 # if to use fairness loss
 explain_fairness: True
 # uses FairNDCGApprox instead of FairBD
-explain_fairness_NDCGApprox: True
+explain_fairness_NDCGApprox: False
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
+
+# if True each new exp will have a different number of edges from the last one
+save_unique_graph_dist_loss: True
 
 # -infinite is assigned to the user history interactions in the list of scores to consider a top-k of only new items
 # This zero out the gradient for the items for which -infinite is assigned, so a subgraph with only the interactions of

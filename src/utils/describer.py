@@ -27,6 +27,7 @@ class Describer(object):
     _plot_methods_prefix = "plot_"
 
     def __init__(self, base_exps_file, train_data, out_base_path='', best_exp=None):
+        script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
         exps = utils.load_exps_file(base_exps_file)
 
         with open(os.path.join(args.base_exps_file, "config.pkl"), 'rb') as config_file:
@@ -38,7 +39,7 @@ class Describer(object):
 
         sensitive_attributes = self.config['sensitive_attributes']
         self.sens_attrs = ['gender', 'age'] if sensitive_attributes is None else sensitive_attributes
-        self.best_exp = best_exp if best_exp is not None else ["loss_total"]
+        self.best_exp = best_exp if best_exp is not None else "loss_total"
 
         self.graph = utils.get_nx_adj_matrix(self.config, self.train_data.dataset)
         try:
@@ -46,11 +47,19 @@ class Describer(object):
         except nx.PowerIterationFailedConvergence as e:
             print(e)
             eigen_centrality = None
-        self.graph_info = {
-            'closeness': nx.closeness_centrality(self.graph),
-            'eigenvector': eigen_centrality,
-            'betweenness': nx.betweenness_centrality(self.graph)
-        }
+        graph_info_path = os.path.join(script_path, os.pardir, f"graph_info_{self.train_data.dataset.dataset_name}.pkl")
+        if not os.path.exists(graph_info_path):
+            self.graph_info = {
+                'closeness': nx.closeness_centrality(self.graph),
+                'eigenvector': eigen_centrality,
+                'betweenness': nx.betweenness_centrality(self.graph)
+            }
+
+            with open(graph_info_path, 'wb') as f:
+                pickle.dump(self.graph_info, f)
+        else:
+            with open(graph_info_path, 'rb') as f:
+                self.graph_info = pickle.load(f)
 
         user_feat = self.train_data.dataset.user_feat
         self.user_df = pd.DataFrame({
@@ -66,6 +75,7 @@ class Describer(object):
 
         self.sens_maps = [self.train_data.dataset.field2id_token[sens_attr] for sens_attr in self.sens_attrs]
         self.item_class_map = self.train_data.dataset.field2id_token['class']
+        self.item_class_repr, _ = utils.compute_uniform_categories_prob(self.item_df, self.item_class_map, raw=True)
 
         user_hist_matrix, _, user_hist_len = self.train_data.dataset.history_item_matrix()
         self.user_hist_matrix, self.user_hist_len = user_hist_matrix.numpy(), user_hist_len.numpy()
@@ -73,7 +83,6 @@ class Describer(object):
         item_hist_matrix, _, item_hist_len = self.train_data.dataset.history_user_matrix()
         self.item_hist_matrix, self.item_hist_len = item_hist_matrix.numpy(), item_hist_len.numpy()
 
-        script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
         paths_metadata = base_exps_file.split(os.sep)
         paths_metadata = paths_metadata[(paths_metadata.index('explanations') + 1):]
         self.out_base_path = out_base_path or os.path.join(script_path,
@@ -82,7 +91,7 @@ class Describer(object):
                                                            'plots',
                                                            *paths_metadata)
         if self.best_exp is not None:
-            self.out_base_path = os.path.join(self.out_base_path, '#'.join(self.best_exp))
+            self.out_base_path = os.path.join(self.out_base_path, self.best_exp)
         if not os.path.exists(self.out_base_path):
             os.makedirs(self.out_base_path)
 
@@ -94,24 +103,36 @@ class Describer(object):
             else:
                 self.user_index[data[0]] = [i]
 
+    @staticmethod
+    def reorder_del_edges(array, user_num):
+        if array.shape == (1, 2) or (array.shape == (2, 2) and (array > user_num).sum(axis=1)[0] > 0):
+            return array.T
+        return array
+
     def extract_desc_data(self):
         if not self.desc_data:
-            top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in self.best_exp] if self.best_exp is not None else None
+            top_exp_col = utils.EXPS_COLUMNS.index(self.best_exp) if self.best_exp is not None else None
             user_num = max(self.exps.keys())
             for user in self.exps:
                 user_exps = self.exps[user]
-                if top_exp_col is not None and user_exps:
-                    for tec in top_exp_col:
-                        user_exps = sorted(user_exps, key=lambda x: x[tec])
-                    user_exps = [user_exps[0]]
+                if user_exps:
+                    if top_exp_col is not None:
+                        df_temp = pd.DataFrame([(exp[top_exp_col], str(exp[-3])) for exp in user_exps])
+                        df_gr_temp = df_temp.groupby(1, sort=False).apply(lambda x: x.sort_values(0).drop_duplicates(1))
+                    else:
+                        del_edges = [str(exp[-3]) for exp in user_exps]
+                        df_temp = pd.DataFrame(zip([None] * len(del_edges), del_edges))
+                        df_gr_temp = df_temp.groupby(1, sort=False).apply(lambda x: x.drop_duplicates(1))
+
+                    idxs = df_gr_temp.index
+                    idxs = idxs.droplevel(1).to_numpy() if isinstance(df_gr_temp.index, pd.MultiIndex) else idxs
+                    user_exps = [user_exps[i] for i in idxs]
+
                 for exp in user_exps:
                     desc_user = [user] + exp[1:3] + [exp[-3]]
 
                     # check if del_edges is not in right order, all users ids in edge[0] (row)
-                    if desc_user[-1].shape == (1, 2) or \
-                            desc_user[-1].shape[0] > 2 or \
-                            (desc_user[-1].shape == (2, 2) and (desc_user[-1] > user_num).sum(axis=1)[0] > 0):
-                        desc_user[-1] = desc_user[-1].T
+                    self.reorder_del_edges(desc_user[-1], user_num)
 
                     # remap item ids
                     desc_user[-1][1] -= user_num
@@ -141,7 +162,7 @@ class Describer(object):
     @staticmethod
     def _plot_for_each_sens(rows, cols, attr, sens_map, plot_df,
                             topk_cats=None, plot_type="barplot", ascending=None, x_map=None,
-                            rotation=0, **sns_kwargs):
+                            rotation=0, normalizer=None, **sns_kwargs):
         plot_idx = cols + 1
         for r in range(2, rows + 1):
             row_axs = []
@@ -153,6 +174,9 @@ class Describer(object):
 
                 if topk_cats is not None:
                     sens_plot_df = sens_plot_df.groupby(sns_kwargs['x']).sum().reset_index()
+                if normalizer is not None:
+                    sens_plot_df['repr'] = sens_plot_df[sns_kwargs['x']].map(lambda x: normalizer[x])
+                    sens_plot_df[sns_kwargs['y']] /= sens_plot_df['repr']
 
                 order = None
                 if ascending is not None:
@@ -266,6 +290,9 @@ class Describer(object):
             fig.suptitle("Distribution Item Categories over Deleted Edges")
 
             all_users_plot_df = plot_df.groupby('cat_edges').sum().reset_index()
+            all_users_plot_df['cat_repr'] = all_users_plot_df['cat_edges'].map(lambda x: self.item_class_repr[x])
+            all_users_plot_df['edges_counts'] /= all_users_plot_df['cat_repr']
+
             ax1 = plt.subplot(rows, cols, (1, cols))
             ax1.set_title("All Explained Users")
             sns.barplot(y="edges_counts", x="cat_edges", data=all_users_plot_df, ax=ax1,
@@ -275,7 +302,7 @@ class Describer(object):
 
             self._plot_for_each_sens(rows, cols, attr, sens_map, plot_df.groupby(['sens_exp', 'cat_edges']).sum().reset_index(),
                                      x="cat_edges", y="edges_counts", plot_type="barplot", x_map=self.item_class_map, ascending=False,
-                                     rotation=45)
+                                     rotation=45, normalizer=self.item_class_repr)
 
             plt.tight_layout()
             fig.savefig(os.path.join(self.out_base_path, f'({attr})_item_categories_over_del_edges.png'))
@@ -322,6 +349,9 @@ class Describer(object):
             fig = plt.figure(figsize=(12, 12))
             fig.suptitle("Top Removed Items and Categories from Top-k List")
 
+            topk_plot_df['item_repr'] = topk_plot_df['del_topk_items'].map(lambda x: self.item_hist_len[x])
+            topk_plot_df['item_count'] /= topk_plot_df['item_repr']
+
             ax1 = plt.subplot(rows, 2, 1)
             ax1.set_title("All Explained Users")
             sns.barplot(x="del_topk_items", y="item_count", ci=None, data=topk_plot_df, ax=ax1,
@@ -330,15 +360,22 @@ class Describer(object):
             cats_plot_df_expl = topk_plot_df.explode("del_topk_cats")
             cats_plot_df_expl["item_count"] = 1
             cats_plot_df = cats_plot_df_expl.groupby("del_topk_cats").sum().reset_index()
+            cats_plot_df['cat_repr'] = cats_plot_df['del_topk_cats'].map(lambda x: self.item_class_repr[x])
+            cats_plot_df['item_count'] /= cats_plot_df['cat_repr']
+
+            palette = sns.color_palette(n_colors=len(cats_plot_df['del_topk_cats'].unique()))
+            palette = dict(zip(cats_plot_df.sort_values("item_count", ascending=False)['del_topk_cats'].unique(), palette))
+
             ax2 = plt.subplot(rows, 2, 2)
             ax2.set_title("All Explained Users")
-            sns.barplot(x="del_topk_cats", y="item_count", ci=None, data=cats_plot_df, ax=ax2,
+            sns.barplot(x="del_topk_cats", y="item_count", ci=None, data=cats_plot_df, ax=ax2, palette=palette,
                         order=cats_plot_df.sort_values("item_count", ascending=False)['del_topk_cats'].unique())
             ax2.set_xticklabels([self.item_class_map[int(x.get_text())] for x in ax2.get_xticklabels()])
             ax2.tick_params(axis='x', rotation=45)
 
             self._plot_for_each_sens(rows, cols, attr, sens_map, cats_plot_df_expl, topk_cats=topk_removed, plot_type="barplot",
-                                     x="del_topk_cats", y="item_count", ci=None, ascending=False, x_map=self.item_class_map, rotation=45)
+                                     x="del_topk_cats", y="item_count", ci=None, ascending=False, x_map=self.item_class_map, rotation=45,
+                                     palette=palette, normalizer=self.item_class_repr)
 
             plt.tight_layout()
             fig.savefig(os.path.join(self.out_base_path, f'({attr})_dist_removed_items_topk_and_categories.png'))
@@ -480,7 +517,7 @@ if __name__ == "__main__":
     parser.add_argument('--explainer_config_file', default='../../config/gcmc_explainer.yaml')
     parser.add_argument('--plot_types', nargs='+', default="all")
     parser.add_argument('--out_base_path', default="")
-    parser.add_argument('--best_exp', nargs='+', default=["loss_total"])
+    parser.add_argument('--best_exp', default="loss_total")
 
     args = parser.parse_args()
 

@@ -45,6 +45,7 @@ class BGExplainer:
         self.force_return = config['explainer_force_return']
         self.keep_history = config['keep_history_if_possible']
         self.explain_fairness_NDCGApprox = config['explain_fairness_NDCGApprox']
+        self.unique_graph_dist_loss = config['save_unique_graph_dist_loss']
 
         self.tot_item_num = dataset.item_num
         self.item_tensor = dataset.get_item_feature().to(model.device)
@@ -93,8 +94,15 @@ class BGExplainer:
             if epoch == 0:
                 first_fair_loss = fair_loss
             if new_example is not None and abs(loss_total) < best_loss:
+                if self.unique_graph_dist_loss and len(best_cf_example) > 0:
+                    old_graph_dist = best_cf_example[-1][-5]
+                    new_graph_dist = new_example[-4]
+                    if not (old_graph_dist < new_graph_dist):
+                        continue
+
                 best_cf_example.append(new_example + [first_fair_loss])
-                best_loss = abs(loss_total)
+                if not self.unique_graph_dist_loss:
+                    best_loss = abs(loss_total)
 
         print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
 

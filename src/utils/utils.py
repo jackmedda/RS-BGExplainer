@@ -8,6 +8,7 @@ import yaml
 import torch
 import scipy
 import numpy as np
+import pandas as pd
 import networkx as nx
 from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
@@ -76,6 +77,7 @@ def load_data_and_model(model_file, explainer_config_file):
     return config, model, dataset, train_data, valid_data, test_data
 
 
+# TODO: to implement with group explanations
 def load_exps_file(base_exps_file):
     files = [f for f in os.scandir(base_exps_file) if re.match(r'user_\d+', f.name) is not None]
 
@@ -105,6 +107,15 @@ def get_nx_adj_matrix(config, dataset):
     A._update(data_dict)
     A = A.tocoo()
     return nx.Graph(A)
+
+
+def compute_uniform_categories_prob(_item_df, _item_categories_map, raw=False):
+    uni_cat_prob = np.zeros(_item_categories_map.shape)
+    for cat_list in _item_df['class']:
+        if cat_list:
+            uni_cat_prob[cat_list] += 1
+
+    return uni_cat_prob / (_item_df.shape[0] - 1) if not raw else (uni_cat_prob, (_item_df.shape[0] - 1))
 
 
 def get_degree_matrix(adj):
@@ -167,6 +178,105 @@ def get_sparse_eye_mat(num):
     i = torch.LongTensor([range(0, num), range(0, num)])
     val = torch.FloatTensor([1] * num)
     return torch.sparse.FloatTensor(i, val)
+
+
+def compute_bias_disparity(train_bias, rec_bias, train_data):
+    bias_disparity = dict.fromkeys(list(train_bias.keys()))
+    for attr in train_bias:
+        group_map = train_data.dataset.field2id_token[attr]
+        bias_disparity[attr] = dict.fromkeys(list(train_bias[attr].keys()))
+        for demo_group in train_bias[attr]:
+            gr_idx = group_map[demo_group] if demo_group not in group_map else demo_group
+
+            if train_bias[attr][demo_group] is None or rec_bias[attr][demo_group] is None:
+                bias_disparity[attr][gr_idx] = None
+                continue
+
+            bias_r = rec_bias[attr][demo_group]
+            bias_s = train_bias[attr][demo_group]
+            bias_disparity[attr][gr_idx] = (bias_r - bias_s) / bias_s
+
+    return bias_disparity
+
+
+def compute_user_preference(_hist_matrix, _item_df, n_categories=None):
+    _item_df = _item_df.set_index('item_id')
+
+    if n_categories is None:
+        n_categories = _item_df['class'].to_numpy().flatten().max() + 1
+
+    _pref_matrix = torch.zeros((_hist_matrix.shape[0], n_categories))
+
+    for user_id, user_hist in enumerate(_hist_matrix):
+        user_hist = user_hist[user_hist != 0]
+        if len(user_hist) > 0:
+            for item in user_hist:
+                _pref_matrix[user_id, _item_df.loc[item, 'class']] += 1
+
+    return _pref_matrix
+
+
+def generate_bias_ratio(_train_data,
+                        config,
+                        sensitive_attrs=None,
+                        history_matrix: pd.DataFrame = None,
+                        pred_col='cf_topk_pred',
+                        mapped_keys=False):
+    sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
+    user_df = pd.DataFrame({
+        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
+        **{sens_attr: _train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sensitive_attrs}
+    })
+
+    item_df = pd.DataFrame({
+        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
+        'class': map(lambda x: [el for el in x if el != 0], _train_data.dataset.item_feat['class'].numpy().tolist())
+    })
+
+    sensitive_maps = [_train_data.dataset.field2id_token[sens_attr] for sens_attr in sensitive_attrs]
+    item_categories_map = _train_data.dataset.field2id_token['class']
+
+    if history_matrix is None:
+        history_matrix, _, history_len = _train_data.dataset.history_item_matrix()
+        history_matrix, history_len = history_matrix.numpy(), history_len.numpy()
+    else:
+        clean_history_matrix(history_matrix)
+        topk = len(history_matrix.iloc[0][pred_col])
+        history_len = np.zeros(user_df.shape[0])
+        history_len[history_matrix['user_id']] = topk
+        history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
+        history_topk = history_df[pred_col]
+        history_df[pred_col] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
+
+        history_matrix = np.stack(history_df[pred_col].values)
+
+    pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
+    uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
+
+    bias_ratio = dict.fromkeys(sensitive_attrs)
+    for attr, group_map in zip(sensitive_attrs, sensitive_maps):
+        group_keys = [group_map[x] for x in range(len(group_map))] if mapped_keys else range(len(group_map))
+        bias_ratio[attr] = dict.fromkeys(group_keys)
+        for demo_group, demo_df in user_df.groupby(attr):
+            gr_idx = group_map[demo_group] if mapped_keys else demo_group
+
+            if group_map[demo_group] == '[PAD]':
+                bias_ratio[attr][gr_idx] = None
+                continue
+
+            group_users = demo_df['user_id'].to_numpy()
+            group_pref = pref_matrix[group_users, :].sum(dim=0)
+            group_history_len = history_len[group_users].sum()
+            bias_ratio[attr][gr_idx] = group_pref / group_history_len
+            bias_ratio[attr][gr_idx] /= uniform_categories_prob
+
+    return bias_ratio
+
+
+def clean_history_matrix(hist_m):
+    for col in ['topk_pred', 'cf_topk_pred']:
+        if isinstance(hist_m.iloc[0][col], str):
+            hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
 
 
 def damerau_levenshtein_distance(s1, s2):

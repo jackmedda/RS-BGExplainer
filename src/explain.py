@@ -8,7 +8,6 @@ import json
 
 import torch
 import tqdm
-import numpy as np
 import pandas as pd
 import networkx as nx
 import seaborn as sns
@@ -26,7 +25,7 @@ def load_already_done_exps_user_id(base_exps_file):
     return [int(_id) for f in files for _id in f.split('_')[1].split('.')[0].split('#')]
 
 
-def get_base_exps_filepath(config):
+def get_base_exps_filepath(config, config_id=-1):
     epochs = config['cf_epochs']
     base_exps_file = os.path.join(script_path, 'explanations', config['dataset'])
     if config['explain_fairness']:
@@ -41,6 +40,19 @@ def get_base_exps_filepath(config):
     if explain_scope not in exp_scopes:
         raise ValueError(f"`{explain_scope}` is not in {exp_scopes}")
     base_exps_file = os.path.join(base_exps_file, explain_scope)
+
+    if config_id == -1:
+        i = 1
+        for path_c in sorted(os.listdir(base_exps_file), key=int):
+            with open(os.path.join(base_exps_file, path_c, 'config.pkl'), 'rb') as f:
+                _c = pickle.load(f)
+            if config.final_config_dict == _c.final_config_dict:
+                break
+            i += 1
+
+        base_exps_file = os.path.join(base_exps_file, str(i))
+    else:
+        base_exps_file = os.path.join(base_exps_file, str(config_id))
 
     return base_exps_file
 
@@ -71,6 +83,7 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
     #         desc=set_color(f"Explaining   ", 'pink'),
     #     )
     # )
+
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
 
@@ -94,6 +107,9 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
+
+    with open(os.path.join(base_exps_filepath, "config.json"), 'w') as config_json:
+        json.dump(config.final_config_dict, config_json, indent=4, default=lambda x: str(x))
 
     for batch_idx, batched_user in enumerate(iter_data):
         # user_id = batched_data[0].interaction[model.USER_ID]
@@ -219,87 +235,6 @@ def update_diameter_info(_loaded_diam, _diam_info, _diam):
             json.dump(_diam_info, f)
 
 
-def compute_user_preference(_hist_matrix, _item_df, n_categories=None):
-    _item_df = _item_df.set_index('item_id')
-
-    if n_categories is None:
-        n_categories = _item_df['class'].to_numpy().flatten().max() + 1
-
-    _pref_matrix = torch.zeros((_hist_matrix.shape[0], n_categories))
-
-    for user_id, user_hist in enumerate(_hist_matrix):
-        user_hist = user_hist[user_hist != 0]
-        if len(user_hist) > 0:
-            for item in user_hist:
-                _pref_matrix[user_id, _item_df.loc[item, 'class']] += 1
-
-    return _pref_matrix
-
-
-def compute_uniform_categories_prob(_item_df, _item_categories_map):
-    uni_cat_prob = np.zeros(_item_categories_map.shape)
-    for cat_list in _item_df['class']:
-        if cat_list:
-            uni_cat_prob[cat_list] += 1
-
-    return uni_cat_prob / (_item_df.shape[0] - 1)
-
-
-def generate_bias_ratio(_train_data,
-                        sensitive_attrs=None,
-                        history_matrix: pd.DataFrame = None,
-                        pred_col='cf_topk_pred',
-                        mapped_keys=False):
-    sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
-    user_df = pd.DataFrame({
-        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
-        **{sens_attr: _train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sensitive_attrs}
-    })
-
-    item_df = pd.DataFrame({
-        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
-        'class': map(lambda x: [el for el in x if el != 0], _train_data.dataset.item_feat['class'].numpy().tolist())
-    })
-
-    sensitive_maps = [_train_data.dataset.field2id_token[sens_attr] for sens_attr in sensitive_attrs]
-    item_categories_map = _train_data.dataset.field2id_token['class']
-
-    if history_matrix is None:
-        history_matrix, _, history_len = _train_data.dataset.history_item_matrix()
-        history_matrix, history_len = history_matrix.numpy(), history_len.numpy()
-    else:
-        clean_history_matrix(history_matrix)
-        topk = len(history_matrix.iloc[0][pred_col])
-        history_len = np.zeros(user_df.shape[0])
-        history_len[history_matrix['user_id']] = topk
-        history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
-        history_topk = history_df[pred_col]
-        history_df[pred_col] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
-
-        history_matrix = np.stack(history_df[pred_col].values)
-
-    pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
-    uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
-
-    bias_ratio = dict.fromkeys(sensitive_attrs)
-    for attr, group_map in zip(sensitive_attrs, sensitive_maps):
-        bias_ratio[attr] = dict.fromkeys(range(len(group_map)))
-        for demo_group, demo_df in user_df.groupby(attr):
-            gr_idx = demo_group if mapped_keys else group_map[demo_group]
-
-            if group_map[demo_group] == '[PAD]':
-                bias_ratio[attr][gr_idx] = None
-                continue
-
-            group_users = demo_df['user_id'].to_numpy()
-            group_pref = pref_matrix[group_users, :].sum(dim=0)
-            group_history_len = history_len[group_users].sum()
-            bias_ratio[attr][gr_idx] = group_pref / group_history_len
-            bias_ratio[attr][gr_idx] /= uniform_categories_prob
-
-    return bias_ratio
-
-
 def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categories=None):
     plots_path = os.path.join(script_path, os.pardir,
                               f'bias_disparity_plots{"_analysis" if args.hops_analysis else ""}', config['dataset'])
@@ -312,19 +247,8 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
-    bias_disparity = dict.fromkeys(list(train_bias.keys()))
-    for attr in train_bias:
-        group_map = _train_data.dataset.field2id_token[attr]
-        bias_disparity[attr] = dict.fromkeys(list(train_bias[attr].keys()))
-        for demo_group in train_bias[attr]:
-            if train_bias[attr][demo_group] is None or rec_bias[attr][demo_group] is None:
-                bias_disparity[attr][group_map[demo_group]] = None
-                continue
-
-            bias_r = rec_bias[attr][demo_group]
-            bias_s = train_bias[attr][demo_group]
-            bias_disparity[attr][group_map[demo_group]] = (bias_r - bias_s) / bias_s
-
+    bias_disparity = utils.compute_bias_disparity(train_bias, rec_bias, _train_data)
+    for attr in bias_disparity:
         # fig, axs = plt.subplots(len(bias_disparity[attr]) - 1, 1, figsize=(10, 8))
         df = pd.DataFrame(bias_disparity[attr])[1:].dropna(axis=1).T
         if item_categories is not None:
@@ -336,11 +260,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
         plt.savefig(os.path.join(plots_path, f'{attr}.png'))
         plt.close()
 
-
-def clean_history_matrix(hist_m):
-    for col in ['topk_pred', 'cf_topk_pred']:
-        if isinstance(hist_m.iloc[0][col], str):
-            hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
+    return plots_path
 
 
 if __name__ == "__main__":
@@ -349,7 +269,8 @@ if __name__ == "__main__":
     parser.add_argument('--explainer_config_file', default='../config/gcmc_explainer.yaml')
     parser.add_argument('--hops_analysis', action='store_true')
     parser.add_argument('--load', action='store_true')
-    parser.add_argument('--best_exp_col', nargs="+", default=["loss_total"])
+    parser.add_argument('--load_config_id', default=-1)
+    parser.add_argument('--best_exp_col', default="loss_total")
     parser.add_argument('--bias_orig_pred', action='store_true')
 
     args = parser.parse_args()
@@ -364,8 +285,9 @@ if __name__ == "__main__":
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                           args.explainer_config_file)
 
-    train_bias_ratio = generate_bias_ratio(
+    train_bias_ratio = utils.generate_bias_ratio(
         train_data,
+        config,
         sensitive_attrs=config['sensitive_attributes'],
         mapped_keys=False if args.hops_analysis else True
     )
@@ -376,7 +298,7 @@ if __name__ == "__main__":
         diam, pref_data = hops_analysis(config, model, test_data, diam=loaded_diam)
         update_diameter_info(loaded_diam, diam_info, diam)
     else:
-        base_exps_filepath = get_base_exps_filepath(config)
+        base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
 
         if not args.load:
             explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio)
@@ -387,31 +309,30 @@ if __name__ == "__main__":
         exps_data = utils.load_exps_file(base_exps_filepath)
         save_exps_df(base_exps_filepath, exps_data)
 
-        top_exp_col = [utils.EXPS_COLUMNS.index(be) for be in
-                       args.best_exp_col] if args.best_exp_col is not None else None
+        top_exp_col = utils.EXPS_COLUMNS.index(args.best_exp_col) if args.best_exp_col is not None else None
 
         pref_data = []
         for user_id, user_exps in exps_data.items():
             u_exps = user_exps
             if top_exp_col is not None and user_exps:
-                for tec in top_exp_col:
-                    u_exps = sorted(u_exps, key=lambda x: x[tec])
+                u_exps = sorted(u_exps, key=lambda x: x[top_exp_col])
                 u_exps = [u_exps[0]]
             if u_exps:
-                pref_data.append([user_id, u_exps[0][1], u_exps[0][2]])
+                pref_data.append([user_id, u_exps[0][1].squeeze(), u_exps[0][2].squeeze()])
 
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
 
     if not pref_data.empty:
-        rec_bias_ratio = generate_bias_ratio(
+        rec_bias_ratio = utils.generate_bias_ratio(
             train_data,
+            config,
             pred_col='topk_pred' if args.bias_orig_pred else 'cf_topk_pred',
             sensitive_attrs=config['sensitive_attributes'],
             history_matrix=pref_data,
             mapped_keys=False if args.hops_analysis else True
         )
 
-        plot_bias_analysis_disparity(
+        plot_bias_path = plot_bias_analysis_disparity(
             train_bias_ratio,
             rec_bias_ratio,
             train_data,
