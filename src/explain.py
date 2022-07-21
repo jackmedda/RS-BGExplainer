@@ -269,7 +269,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_file', required=True)
-    parser.add_argument('--explainer_config_file', default='config\gcmc_explainer.yaml')
+    parser.add_argument('--explainer_config_file', default=os.path.join("config","gcmc_explainer.yaml"))
     parser.add_argument('--hops_analysis', action='store_true')
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--load_config_id', default=-1)

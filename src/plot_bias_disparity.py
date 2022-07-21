@@ -489,7 +489,7 @@ def create_table_bias_disparity(bd, config_ids):
 # %%
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_file', required=True)
-parser.add_argument('--explainer_config_file', default='..\config\gcmc_explainer.yaml')
+parser.add_argument('--explainer_config_file', default=os.path.join("config", "gcmc_explainer.yaml"))
 parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1, 1],
                     help="follows the order ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'], set -1 to skip")
 parser.add_argument('--best_exp_col', default="loss_total")
