@@ -26,7 +26,9 @@ cf_dist: damerau_levenshtein
 fair_beta: 0.5
 
 device: cpu
-data_path: 'src\dataset\lastfm-1k' # for Last.FM 1K
+
+# Last.FM 1K
+data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
 
 # does not consider the interactions of the user to explain, only the last hop
 sub_matrix_only_last_level: False

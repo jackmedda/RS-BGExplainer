@@ -93,7 +93,7 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
     user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
 
     loaded_user_ids = load_already_done_exps_user_id(base_exps_file)
-    user_data = user_data[~torch.isin(user_data, torch.tensor(loaded_user_ids))]
+    user_data = user_data[~(user_data[..., None] == torch.tensor(loaded_user_ids)).any(-1)]
 
     user_data = user_data.split(config['user_batch_exp'])
     iter_data = (
@@ -117,7 +117,7 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
     for batch_idx, batched_user in enumerate(iter_data):
         # user_id = batched_data[0].interaction[model.USER_ID]
         user_id = batched_user
-        user_df_mask = torch.isin(test_data.user_df[test_data.uid_field], user_id)
+        user_df_mask = (test_data.user_df[test_data.uid_field][..., None] == user_id).any(-1)
         user_df = Interaction({k: v[user_df_mask] for k, v in test_data.user_df.interaction.items()})
         history_item = test_data.uid2history_item[user_id]
 
@@ -127,6 +127,7 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
         else:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
+
         batched_data = (user_df, (history_u, history_i), None, None)
 
         gc.collect()

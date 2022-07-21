@@ -260,9 +260,9 @@ class BGExplainer:
                 scores = self._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
 
         scores = scores.view(-1, tot_item_num)
-        scores[:, 0] = -torch.inf
+        scores[:, 0] = -float("inf")
         if history_index is not None and not self.keep_history:
-            scores[history_index] = -torch.inf
+            scores[history_index] = -float("inf")
 
         return scores
 
