@@ -10,7 +10,7 @@ import networkx as nx
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-import utils
+import src.utils as utils
 
 
 class Describer(object):

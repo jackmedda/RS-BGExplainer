@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 from recbole.utils import set_color
 from recbole.data.interaction import Interaction
 
-import utils
-from explainers.explainer import BGExplainer
+import src.utils as utils
+from src.explainers.explainer import BGExplainer
 
 
 def load_already_done_exps_user_id(base_exps_file):
@@ -41,18 +41,21 @@ def get_base_exps_filepath(config, config_id=-1):
         raise ValueError(f"`{explain_scope}` is not in {exp_scopes}")
     base_exps_file = os.path.join(base_exps_file, explain_scope)
 
-    if config_id == -1:
-        i = 1
-        for path_c in sorted(os.listdir(base_exps_file), key=int):
-            with open(os.path.join(base_exps_file, path_c, 'config.pkl'), 'rb') as f:
-                _c = pickle.load(f)
-            if config.final_config_dict == _c.final_config_dict:
-                break
-            i += 1
+    if os.path.exists(base_exps_file):
+        if config_id == -1:
+            i = 1
+            for path_c in sorted(os.listdir(base_exps_file), key=int):
+                with open(os.path.join(base_exps_file, path_c, 'config.pkl'), 'rb') as f:
+                    _c = pickle.load(f)
+                if config.final_config_dict == _c.final_config_dict:
+                    break
+                i += 1
 
-        base_exps_file = os.path.join(base_exps_file, str(i))
+            base_exps_file = os.path.join(base_exps_file, str(i))
+        else:
+            base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
-        base_exps_file = os.path.join(base_exps_file, str(config_id))
+        base_exps_file = os.path.join(base_exps_file, "1")
 
     return base_exps_file
 
@@ -266,7 +269,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_file', required=True)
-    parser.add_argument('--explainer_config_file', default='../config/gcmc_explainer.yaml')
+    parser.add_argument('--explainer_config_file', default='config\gcmc_explainer.yaml')
     parser.add_argument('--hops_analysis', action='store_true')
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--load_config_id', default=-1)

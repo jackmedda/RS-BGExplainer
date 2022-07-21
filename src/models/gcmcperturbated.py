@@ -33,7 +33,7 @@ from recbole.utils import InputType
 
 sys.path.append('..')
 
-import utils
+import src.utils as utils
 
 from memory_profiler import profile
 

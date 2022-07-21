@@ -14,8 +14,8 @@ from torchviz import make_dot
 
 sys.path.append('..')
 
-import utils
-from models import GCMCPerturbated
+import src.utils as utils
+from src.models import GCMCPerturbated
 
 import subprocess
 import os

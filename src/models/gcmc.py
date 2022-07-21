@@ -33,7 +33,7 @@ from recbole.utils import InputType
 
 sys.path.append('..')
 
-import utils
+import src.utils as utils
 
 
 class GCMC(GeneralRecommender):

@@ -265,6 +265,7 @@ def generate_bias_ratio(_train_data,
                 continue
 
             group_users = demo_df['user_id'].to_numpy()
+            # TODO: only consider history len of users with data in pref_matrix
             group_pref = pref_matrix[group_users, :].sum(dim=0)
             group_history_len = history_len[group_users].sum()
             bias_ratio[attr][gr_idx] = group_pref / group_history_len
@@ -277,6 +278,13 @@ def clean_history_matrix(hist_m):
     for col in ['topk_pred', 'cf_topk_pred']:
         if isinstance(hist_m.iloc[0][col], str):
             hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
+
+
+def legend_without_duplicate_labels(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    unique = [(h, l) for i, (h, l) in enumerate(zip(handles, labels)) if l not in labels[:i]]
+    ax.legend(*zip(*unique))
+    return unique
 
 
 def damerau_levenshtein_distance(s1, s2):
