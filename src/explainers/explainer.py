@@ -85,12 +85,31 @@ class BGExplainer:
         self.train_bias_ratio = kwargs.get("train_bias_ratio", None)
         self.sensitive_attributes = config['sensitive_attributes']
 
-    def explain(self, batched_data, epochs, topk=10):
+        self.scores_args, self.topk_args = None, None
+        self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
+
+    def explain(self, batched_data, epochs, topk=10, loaded_scores=None, old_field2token_id=None):
         best_cf_example = []
         best_loss = np.inf
         first_fair_loss = None
+
+        _, history_index, positive_u, positive_i = batched_data
+        self.scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
+
+        self.topk_args = {'topk': topk, 'history_index': history_index if self.keep_history else None}
+
+        if loaded_scores is not None:
+            new_field2token_id = self.dataset.field2token_id[self.model.ITEM_ID_FIELD]
+            scores_order = [new_field2token_id[k] for k in old_field2token_id]
+            self.model_scores = torch.tensor(loaded_scores[self.user_id[0].item()])[scores_order].to(self.device)
+        else:
+            self.model_scores = self.get_scores(self.model, *self.scores_args, pred=None)
+
+        # topk_idx contains the ids of the topk items
+        self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
+
         for epoch in range(epochs):
-            new_example, loss_total, fair_loss = self.train(batched_data, epoch, topk=topk)
+            new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
             if epoch == 0:
                 first_fair_loss = fair_loss
             if new_example is not None and abs(loss_total) < best_loss:
@@ -106,36 +125,27 @@ class BGExplainer:
 
         print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
 
-        return best_cf_example
+        return best_cf_example, self.model_scores.detach().cpu().numpy()
 
     # @profile
-    def train(self, batched_data, epoch, topk=10):
+    def train(self, epoch, topk=10):
         t = time.time()
 
         self.cf_model.eval()
 
-        _, history_index, positive_u, positive_i = batched_data
-        scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
-
-        get_topk_args = {'topk': topk, 'history_index': history_index if self.keep_history else None}
-
-        # topk_idx contains the ids of the topk items
-        scores = self.get_scores(self.model, *scores_args, pred=None)
-        scores_topk, topk_idx = self.get_top_k(scores, positive_u, positive_i, **get_topk_args)
-
         with torch.no_grad():
-            cf_scores_pred = self.get_scores(self.cf_model, *scores_args, pred=True)
-            cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, positive_u, positive_i, **get_topk_args)
+            cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
+            cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, **self.topk_args)
 
         self.cf_optimizer.zero_grad()
         self.cf_model.train()
 
         # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
-        cf_scores = self.get_scores(self.cf_model, *scores_args, pred=False)
-        cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, positive_u, positive_i, **get_topk_args)
+        cf_scores = self.get_scores(self.cf_model, *self.scores_args, pred=False)
+        cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
 
-        relevance_scores = torch.zeros_like(scores).float().to(self.device)
-        relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], topk_idx] = 1
+        relevance_scores = torch.zeros_like(self.model_scores).float().to(self.device)
+        relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], self.model_topk_idx] = 1
 
         kwargs = {}
         if self.train_bias_ratio is not None:
@@ -151,7 +161,8 @@ class BGExplainer:
                         self.train_bias_ratio,
                         self.dataset.item_feat['class'],
                         self.sensitive_attributes,
-                        user_feat
+                        user_feat,
+                        topk=topk
                     )
                 }
             else:
@@ -168,7 +179,7 @@ class BGExplainer:
         loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj = self.cf_model.loss(
             cf_scores,
             relevance_scores,
-            topk_idx,
+            self.model_topk_idx,
             cf_topk_pred_idx,
             self.dist,
             **kwargs
@@ -199,14 +210,14 @@ class BGExplainer:
               'fair loss: {:.4f}'.format(fair_loss),
               'graph loss: {:.4f}'.format(loss_graph_dist.item()),
               'nnz sub adj: {}'.format(nnz_sub_adj))
-        print('Orig output: {}\n'.format(scores),
+        print('Orig output: {}\n'.format(self.model_scores),
               'Output: {}\n'.format(cf_scores),
               'Output nondiff: {}\n'.format(cf_scores_pred),
-              'orig pred: {}, new pred: {}, new pred nondiff: {}'.format(topk_idx, cf_topk_idx, cf_topk_pred_idx))
+              'orig pred: {}, new pred: {}, new pred nondiff: {}'.format(self.model_topk_idx, cf_topk_idx, cf_topk_pred_idx))
         print(" ")
 
         cf_stats = None
-        cf_check = [self.dist(_pred, _topk_idx) > 0 for _pred, _topk_idx in zip(cf_topk_pred_idx, topk_idx)]
+        cf_check = [self.dist(_pred, _topk_idx) > 0 for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
         if any(cf_check) or self.force_return:
             cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
             del_edges = np.sort(np.stack((adj != cf_adj).nonzero(), axis=0).T, axis=1)
@@ -218,8 +229,8 @@ class BGExplainer:
             del_edges = del_edges.T
 
             cf_stats = [self.user_id.detach().numpy(),
-                        topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
-                        [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, topk_idx)],
+                        self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
+                        [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)],
                         loss_total.item(), loss_pred.mean().item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
 
         return cf_stats, loss_total.item(), fair_loss
@@ -267,7 +278,7 @@ class BGExplainer:
         return scores
 
     @staticmethod
-    def get_top_k(scores_tensor, positive_u, positive_i, topk=10, history_index=None):
+    def get_top_k(scores_tensor, topk=10, history_index=None):
         while True:
             scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
             if history_index is None:
@@ -313,6 +324,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                                                                           demo_groups,
                                                                           topk=self.topk)
 
+        # return (sorted_target.max() - sorted_target * sorted_input).mean(dim=1)
         return (sorted_target * sorted_input).mean(dim=1)
 
 
@@ -353,7 +365,17 @@ def get_bias_disparity_sorted_target(scores,
 
     target /= len(sensitive_attributes)
 
-    mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
+    # mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
+    # target[:] = 0
+    # target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
+
+    mask_topk = []
+    for row in target:
+        low_bias_topk = (row < 1).nonzero().squeeze()[:topk]
+        items_until_last_low = torch.arange(low_bias_topk.max() + 1).to(target.device)
+        mask_topk.append(items_until_last_low[~items_until_last_low.unsqueeze(1).eq(low_bias_topk).any(-1)])
+
+    mask_topk = torch.stack(mask_topk)
     target[:] = 0
     target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
 

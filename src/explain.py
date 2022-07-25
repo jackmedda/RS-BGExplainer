@@ -75,8 +75,9 @@ def save_exps_df(base_exps_file, exps):
     )
 
 
-def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
+def explain(config, model, test_data, base_exps_file, **kwargs):
     epochs = config['cf_epochs']
+    topk = config['cf_topk']
 
     # iter_data = (
     #     tqdm.tqdm(
@@ -108,12 +109,19 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
     if not config["explain_fairness"]:
         kwargs['train_bias_ratio'] = None
 
+    loaded_scores, field2token_id = None, None
+    loaded_scores_path = os.path.join(base_exps_file, os.path.splitext(args.model_file)[0] + '.pkl')
+    if os.path.exists(loaded_scores_path):
+        with open(loaded_scores_path, 'rb') as scores_file:
+            loaded_scores, field2id_token = pickle.load(scores_file)
+
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
 
     with open(os.path.join(base_exps_filepath, "config.json"), 'w') as config_json:
         json.dump(config.final_config_dict, config_json, indent=4, default=lambda x: str(x))
 
+    orig_scores = {}
     for batch_idx, batched_user in enumerate(iter_data):
         # user_id = batched_data[0].interaction[model.USER_ID]
         user_id = batched_user
@@ -124,6 +132,8 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
         if len(user_id) > 1:
             history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
             history_i = torch.cat(list(history_item))
+
+            loaded_scores, field2id_token = None, None  # not supported
         else:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
@@ -132,8 +142,11 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
 
         gc.collect()
         bge = BGExplainer(config, train_data.dataset, model, user_id, dist=config['cf_dist'], **kwargs)
-        exp = bge.explain(batched_data, epochs, topk=topk)
+        exp, scores = bge.explain(batched_data, epochs, topk=topk, loaded_scores=loaded_scores, old_field2token_id=field2token_id)
         del bge
+
+        if loaded_scores is None and len(user_id) == 1:
+            orig_scores[user_id[0].item()] = scores[0]
 
         if len(user_id) == 1:
             exps_file_user = os.path.join(base_exps_file, f"user_{user_id[0].item()}.pkl")
@@ -142,6 +155,10 @@ def explain(config, model, test_data, base_exps_file, topk=10, **kwargs):
 
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
+
+    if loaded_scores is None:
+        with open(loaded_scores_path, 'wb') as scores_file:
+            pickle.dump(orig_scores, dataset.field2token_id[model.ITEM_ID_FIELD])
 
 
 def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levenshtein", diam=None):
@@ -270,7 +287,7 @@ def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categor
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_file', required=True)
-    parser.add_argument('--explainer_config_file', default=os.path.join("config","gcmc_explainer.yaml"))
+    parser.add_argument('--explainer_config_file', default=os.path.join("config", "gcmc_explainer.yaml"))
     parser.add_argument('--hops_analysis', action='store_true')
     parser.add_argument('--load', action='store_true')
     parser.add_argument('--load_config_id', default=-1)
@@ -293,7 +310,7 @@ if __name__ == "__main__":
         train_data,
         config,
         sensitive_attrs=config['sensitive_attributes'],
-        mapped_keys=False if args.hops_analysis else True
+        mapped_keys=False
     )
 
     if args.hops_analysis:

@@ -109,6 +109,12 @@ def get_nx_adj_matrix(config, dataset):
     return nx.Graph(A)
 
 
+def get_nx_biadj_matrix(dataset):
+    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
+
+    return nx.bipartite.from_biadjacency_matrix(inter_matrix)
+
+
 def compute_uniform_categories_prob(_item_df, _item_categories_map, raw=False):
     uni_cat_prob = np.zeros(_item_categories_map.shape)
     for cat_list in _item_df['class']:

@@ -157,7 +157,7 @@ class GCMCPerturbated(GeneralRecommender):
             num_weights=self.num_basis_functions
         ).to(self.device)
         # self.loss_function = nn.CrossEntropyLoss()
-        self.loss_function = NDCGApproxLoss()
+        self.loss_function = utils.NDCGApproxLoss()
 
     def reset_parameters(self, eps=1e-4):
         # Think more about how to initialize this
@@ -586,40 +586,3 @@ def orthogonal(shape, scale=1.1):
     q = u if u.shape == flat_shape else v
     q = q.reshape(shape)
     return torch.tensor(scale * q[:shape[0], :shape[1]], dtype=torch.float32)
-
-
-class NDCGApproxLoss(torch.nn.modules.loss._Loss):
-    __constants__ = ['reduction']
-
-    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1) -> None:
-        super(NDCGApproxLoss, self).__init__(size_average, reduce, reduction)
-        self.temperature = temperature
-
-    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        _input = _input / self.temperature
-
-        def approx_ranks(inp):
-            shape = inp.shape[1]
-
-            a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
-            b = torch.tile(torch.unsqueeze(inp, 1), [1, shape, 1])
-            return torch.sum(torch.sigmoid(b - a), dim=-1) + .5
-
-        def inverse_max_dcg(_target,
-                            gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
-                            rank_discount_fn=lambda rank: 1. / rank.log1p()):
-            ideal_sorted_target = torch.topk(_target, _target.shape[1]).values
-            rank = (torch.arange(ideal_sorted_target.shape[1]) + 1).to(_target.device)
-            discounted_gain = gain_fn(ideal_sorted_target).to(_target.device) * rank_discount_fn(rank)
-            discounted_gain = torch.sum(discounted_gain, dim=1, keepdim=True)
-            return torch.where(discounted_gain > 0., 1. / discounted_gain, torch.zeros_like(discounted_gain))
-
-        def ndcg(_target, _ranks):
-            discounts = 1. / _ranks.log1p()
-            gains = torch.pow(2., _target).to(_target.device) - 1.
-            dcg = torch.sum(gains * discounts, dim=-1, keepdim=True)
-            return dcg * inverse_max_dcg(_target)
-
-        ranks = approx_ranks(_input)
-
-        return -ndcg(target, ranks)

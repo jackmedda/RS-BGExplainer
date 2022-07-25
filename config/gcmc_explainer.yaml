@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 1400 # 1200 for NDCGApprox
+cf_learning_rate: 1000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -18,6 +18,8 @@ pred_same: False
 cf_beta: 0.8
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
+# how many top items to consider for model outcome list and fairness loss
+cf_topk: 10
 
 # loss weight for the fairness loss (used only if `explain_fairness` == True)
 # FairBD
@@ -25,22 +27,25 @@ cf_dist: damerau_levenshtein
 # FairNDCGApproxLoss
 fair_beta: 0.5
 
-device: cpu
+# device: cpu
 
 # Last.FM 1K
-data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
+# data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
 
-# does not consider the interactions of the user to explain, only the last hop
+# consider only the nodes at the last hop
 sub_matrix_only_last_level: False
 # does not consider the interactions of the user to explain, consider the remaining hops
 not_user_sub_matrix: False
 # does not perform perturbation, uses only the subgraph of the user to `explain` (used for analysis)
 only_subgraph: False
 
+# FairBD 6: row > 1
+# FairBD 7: row < 1 and sorted_target.max() - sorted_target * sorted_input
+# FairBD 8: row > 1 taking all the items until the last row < 1
 # if to use fairness loss
 explain_fairness: True
 # uses FairNDCGApprox instead of FairBD
-explain_fairness_NDCGApprox: False
+explain_fairness_NDCGApprox: True
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
 
