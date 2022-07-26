@@ -369,7 +369,7 @@ def plot_explanations_fairness_trend(_bd_data_all, _n_users_data_all, orig_dispa
 
                 plot_df = pd.DataFrame(plot_data, columns=['# Del Edges', 'Attribute', 'Bias Disparity']).dropna()
 
-                ax = sns.lineplot(x='# Del Edges', y='Bias Disparity', hue='Attribute', data=plot_df)
+                ax = sns.lineplot(x='# Del Edges', y='Bias Disparity', hue='Attribute', data=plot_df, ci="sd")
                 n_ticks = len(ax.get_xticks())
                 nud_keys = list(n_users_data.keys())
                 xticks = np.linspace(1, len(nud_keys), n_ticks, dtype=int)
@@ -639,14 +639,14 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
 
             topk_dist_df_plot = topk_dist_df[topk_dist_df['# Del Edges'] <= max_del_edges]
 
-            sns.lineplot(x='# Del Edges', y='Edit Dist', data=topk_dist_df_plot, label='Edit Dist', ax=axs[0])
-            sns.lineplot(x='# Del Edges', y='Set Dist', data=topk_dist_df_plot, label='Set Dist', ax=axs[0])
+            sns.lineplot(x='# Del Edges', y='Edit Dist', data=topk_dist_df_plot, label='Edit Dist', ax=axs[0], ci="sd")
+            sns.lineplot(x='# Del Edges', y='Set Dist', data=topk_dist_df_plot, label='Set Dist', ax=axs[0], ci="sd")
 
             bd_attr_df = pd.DataFrame(bd_attr_data, columns=['# Del Edges', 'Bias Disparity', 'Demo Group']).dropna()
 
             bd_attr_df_plot = bd_attr_df[bd_attr_df['# Del Edges'] <= max_del_edges]
 
-            sns.lineplot(x='# Del Edges', y='Bias Disparity', hue='Demo Group', data=bd_attr_df_plot, ax=axs[1], palette="colorblind")
+            sns.lineplot(x='# Del Edges', y='Bias Disparity', hue='Demo Group', data=bd_attr_df_plot, ax=axs[1], palette="colorblind", ci="sd")
             axs[1].xaxis.set_minor_locator(mpl_tick.AutoMinorLocator())
 
             axs[1].grid(which='both', axis='x')
@@ -661,6 +661,9 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
 def plot_del_edges_hops(dfs, _config_ids):
     sens_attrs = config['sensitive_attributes']
     td_G = utils.get_nx_adj_matrix(config, train_data.dataset)
+
+    color_0 = "red"
+    color_1 = "blue"
 
     for e_type, e_df in dfs.items():
         _df = e_df[['user_id', 'del_edges']]
@@ -679,23 +682,35 @@ def plot_del_edges_hops(dfs, _config_ids):
         for attr in sens_attrs:
             data_hops = []
             for (u_attr, u_id), u_df in new_df.groupby([attr, 'user_id']):
+                # if e_type == "GCMC+NDCG":
+                #     print(u_attr, u_id)
+                #     print(u_df)
+                #     input()
+                # continue
                 u_G = nx.Graph()
                 e = u_df['edge'].to_numpy()
+                import pdb; pdb.set_trace()
+                sub = td_G.subgraph(np.unique(np.append(e, u_id))).copy()
+                top_nodes = {n for n, d in sub.nodes(data=True) if d['bipartite'] == 0}
+                node_color = list({n: color_0 if d['bipartite'] == 0 else color_1 for n, d in sub.nodes(data=True)}.values())
 
-                u_G.add_edges_from(e)
+                nx.draw(sub, nx.bipartite_layout(sub, top_nodes), node_color=node_color)
+                plt.show()
+                input()
+                # u_G.add_edges_from(e)
 
-                max_hop = 0
-                while True:
-                    try:
-                        if len(nx.descendants_at_distance(u_G, u_id, max_hop + 1)) > 0:
-                            max_hop += 1
-                        else:
-                            break
-                    except Exception as e:
-                        import pdb; pdb.set_trace()
-                        break
-
-                data_hops.append([u_id, max_hop])
+                # max_hop = 0
+                # while True:
+                #     try:
+                #         if len(nx.descendants_at_distance(u_G, u_id, max_hop + 1)) > 0:
+                #             max_hop += 1
+                #         else:
+                #             break
+                #     except Exception as e:
+                #         import pdb; pdb.set_trace()
+                #         break
+                #
+                # data_hops.append([u_id, max_hop])
 
             df_hops = pd.DataFrame(data_hops, columns=['user_id', 'max_hops'])
 
@@ -840,7 +855,7 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": ["loss_graph_dist", 30], "GCMC+NDCG": ["loss_graph_dist", 5]}
+args.best_exp_col = {"GCMC+BD": ["loss_graph_dist", 17], "GCMC+NDCG": ["loss_graph_dist", 32]}
 
 # %%
 bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)

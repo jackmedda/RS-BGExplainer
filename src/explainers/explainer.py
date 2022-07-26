@@ -365,17 +365,17 @@ def get_bias_disparity_sorted_target(scores,
 
     target /= len(sensitive_attributes)
 
-    # mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
-    # target[:] = 0
-    # target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
+    mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
+    target[:] = 0
+    target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
 
-    mask_topk = []
-    for row in target:
-        low_bias_topk = (row < 1).nonzero().squeeze()[:topk]
-        items_until_last_low = torch.arange(low_bias_topk.max() + 1).to(target.device)
-        mask_topk.append(items_until_last_low[~items_until_last_low.unsqueeze(1).eq(low_bias_topk).any(-1)])
+    # mask_topk = []
+    # for row in target:
+    #     low_bias_topk = (row < 1).nonzero().squeeze()[:topk]
+    #     items_until_last_low = torch.arange(low_bias_topk.max() + 1).to(target.device)
+    #     mask_topk.append(items_until_last_low[~items_until_last_low.unsqueeze(1).eq(low_bias_topk).any(-1)])
+    # mask_topk = torch.stack(mask_topk)
 
-    mask_topk = torch.stack(mask_topk)
     target[:] = 0
     target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
 

@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 1000 # 1200 for NDCGApprox
+cf_learning_rate: 1400 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -19,7 +19,7 @@ cf_beta: 0.8
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
-cf_topk: 10
+cf_topk: 20
 
 # loss weight for the fairness loss (used only if `explain_fairness` == True)
 # FairBD
