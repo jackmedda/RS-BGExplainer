@@ -20,12 +20,23 @@ from src.explainers.explainer import BGExplainer
 
 
 def load_already_done_exps_user_id(base_exps_file):
+    """
+    Only used for `individual` or 'group' explanations. It prevents the code from re-explaining already explained users.
+    :param base_exps_file:
+    :return:
+    """
     files = [f for f in os.listdir(base_exps_file) if re.match(r'user_\d+', f) is not None]
 
     return [int(_id) for f in files for _id in f.split('_')[1].split('.')[0].split('#')]
 
 
 def get_base_exps_filepath(config, config_id=-1):
+    """
+    return the filepath where explanations are saved
+    :param config:
+    :param config_id:
+    :return:
+    """
     epochs = config['cf_epochs']
     base_exps_file = os.path.join(script_path, 'explanations', config['dataset'])
     if config['explain_fairness']:
@@ -36,7 +47,7 @@ def get_base_exps_filepath(config, config_id=-1):
         base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
 
     explain_scope = config['explain_scope']
-    exp_scopes = ['group', 'individual']
+    exp_scopes = ['group', 'individual', 'group_explain']
     if explain_scope not in exp_scopes:
         raise ValueError(f"`{explain_scope}` is not in {exp_scopes}")
     base_exps_file = os.path.join(base_exps_file, explain_scope)
@@ -45,10 +56,12 @@ def get_base_exps_filepath(config, config_id=-1):
         if config_id == -1:
             i = 1
             for path_c in sorted(os.listdir(base_exps_file), key=int):
-                with open(os.path.join(base_exps_file, path_c, 'config.pkl'), 'rb') as f:
-                    _c = pickle.load(f)
-                if config.final_config_dict == _c.final_config_dict:
-                    break
+                config_path = os.path.join(base_exps_file, path_c, 'config.pkl')
+                if os.path.exists(config_path):
+                    with open(config_path, 'rb') as f:
+                        _c = pickle.load(f)
+                    if config.final_config_dict == _c.final_config_dict:
+                        break
                 i += 1
 
             base_exps_file = os.path.join(base_exps_file, str(i))
@@ -61,6 +74,12 @@ def get_base_exps_filepath(config, config_id=-1):
 
 
 def save_exps_df(base_exps_file, exps):
+    """
+    Saves the pandas dataframe representation of explanations
+    :param base_exps_file:
+    :param exps:
+    :return:
+    """
     data = [exp[:-3] + exp[-2:] for exp_list in exps.values() for exp in exp_list]
     data = list(map(lambda x: [x[0], *x[1:]], data))
     df = pd.DataFrame(
@@ -75,18 +94,82 @@ def save_exps_df(base_exps_file, exps):
     )
 
 
-def explain(config, model, test_data, base_exps_file, **kwargs):
+def group_explain(config, model, test_data, base_exps_file, **kwargs):
+    """
+    Function that explains in `group_explain` mode, that is generating perturbed graphs for each group of users (or
+    entire group of users). It is different from the `group` mode because this function explains each group even though
+    the training procedure learns from the considered group in batches, while the `group` mode explain each batch. Then,
+    `group_explain` is used to explain big groups.
+    :param config:
+    :param model:
+    :param test_data:
+    :param base_exps_file:
+    :param kwargs:
+    :return:
+    """
     epochs = config['cf_epochs']
     topk = config['cf_topk']
 
-    # iter_data = (
-    #     tqdm.tqdm(
-    #         test_data,
-    #         total=len(test_data),
-    #         ncols=100,
-    #         desc=set_color(f"Explaining   ", 'pink'),
-    #     )
-    # )
+    if not os.path.exists(base_exps_file):
+        os.makedirs(base_exps_file)
+
+    attr_group = config['group_explain_by']
+    if attr_group is not None:
+        user_df = pd.DataFrame({
+            'user_id': train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
+            attr_group: train_data.dataset.user_feat[attr_group].numpy()
+        })
+        user_data = {}
+        for demo_gr, demo_df in user_df.groupby(attr_group):
+            if demo_gr != 0:
+                user_data[demo_gr] = torch.tensor(demo_df[config['USER_ID_FIELD']].to_numpy())
+    else:
+        user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
+
+    if not config["explain_fairness"]:
+        kwargs['train_bias_ratio'] = None
+
+    with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
+        pickle.dump(config, config_file)
+
+    with open(os.path.join(base_exps_filepath, "config.json"), 'w') as config_json:
+        json.dump(config.final_config_dict, config_json, indent=4, default=lambda x: str(x))
+
+    sensitive_map = train_data.dataset.field2id_token[attr_group] if attr_group is not None else None
+    if isinstance(user_data, dict):
+        for attr in user_data:
+            bge = BGExplainer(config, train_data.dataset, model, user_data, dist=config['cf_dist'], **kwargs)
+            exp, scores = bge.explain((user_data[attr], test_data), epochs, topk=topk)
+            del bge
+
+            exps_file_user = os.path.join(base_exps_file, f"{attr_group}_users({sensitive_map[attr]}).pkl")
+
+            with open(exps_file_user, 'wb') as f:
+                pickle.dump(exp, f)
+    else:
+        bge = BGExplainer(config, train_data.dataset, model, user_data, dist=config['cf_dist'], **kwargs)
+        exp, _ = bge.explain((user_data, test_data), epochs, topk=topk)
+        del bge
+
+        exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
+
+        with open(exps_file_user, 'wb') as f:
+            pickle.dump(exp, f)
+
+
+def explain(config, model, test_data, base_exps_file, **kwargs):
+    """
+    This function explains for `individual` and `group` mode. Check *group_explain* function to see the difference
+    between `group` and `group_explain`.
+    :param config:
+    :param model:
+    :param test_data:
+    :param base_exps_file:
+    :param kwargs:
+    :return:
+    """
+    epochs = config['cf_epochs']
+    topk = config['cf_topk']
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
@@ -151,17 +234,26 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
         if len(user_id) == 1:
             exps_file_user = os.path.join(base_exps_file, f"user_{user_id[0].item()}.pkl")
         else:
-            exps_file_user = os.path.join(base_exps_file, f"user_{'#'.join(user_id.numpy())}.pkl")
+            exps_file_user = os.path.join(base_exps_file, f"user_{'#'.join(map(str, user_id.numpy()))}.pkl")
 
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
 
     if loaded_scores is None:
         with open(loaded_scores_path, 'wb') as scores_file:
-            pickle.dump(orig_scores, dataset.field2token_id[model.ITEM_ID_FIELD])
+            pickle.dump((orig_scores, dataset.field2token_id[model.ITEM_ID_FIELD]), scores_file)
 
 
-def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levenshtein", diam=None):
+def hops_analysis(config, model, topk=10, dist_type="damerau_levenshtein", diam=None):
+    """
+    Functions used to make analysis when different number of hops is used, that is perturb subgraphs of different sizes.
+    :param config:
+    :param model:
+    :param topk:
+    :param dist_type:
+    :param diam:
+    :return:
+    """
     if diam is None:
         graph = utils.get_nx_adj_matrix(config, dataset)
         max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
@@ -170,10 +262,13 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
         #     print(x.number_of_nodes(), x.number_of_edges(), nx.diameter(x))
         diam = nx.diameter(max_cc_graph)
 
+    user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
+
+    user_data = user_data.split(1)
     iter_data = (
         tqdm.tqdm(
-            test_data,
-            total=len(test_data),
+            user_data,
+            total=len(user_data),
             ncols=100,
             desc=set_color(f"Explaining   ", 'pink'),
         )
@@ -189,8 +284,16 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
 
     exps = []
     pref_data = []
-    for batch_idx, batched_data in enumerate(iter_data):
-        user_id = batched_data[0].interaction[model.USER_ID][0]
+    for batch_idx, batched_user in enumerate(iter_data):
+        user_id = batched_user
+        user_df_mask = (test_data.user_df[test_data.uid_field][..., None] == user_id).any(-1)
+        user_df = Interaction({k: v[user_df_mask] for k, v in test_data.user_df.interaction.items()})
+        history_item = test_data.uid2history_item[user_id]
+
+        history_u = torch.full_like(history_item, 0)
+        history_i = history_item
+
+        batched_data = (user_df, (history_u, history_i), None, None)
         for n_hops in range(1, stop_hops):
             config['n_hops'] = n_hops
 
@@ -201,10 +304,10 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
 
             try:
                 bge = BGExplainer(config, train_data.dataset, model, user_id, dist=dist_type)
-                exp = bge.explain(batched_data, 1, topk=topk)
-                exps.append([n_hops, user_id.item(), len(set(exp[0][1]) & set(exp[0][2])), exp[0][3], exp[0][-2] // 2])
+                exp, _ = bge.explain(batched_data, 1, topk=topk)
+                exps.append([n_hops, user_id.item(), len(set(exp[0][1][0]) & set(exp[0][2][0])), exp[0][3], exp[0][-2] // 2])
                 if fair_analysis and n_hops == (stop_hops - 1):
-                    pref_data.append([user_id.item(), exp[0][1]])
+                    pref_data.append([user_id.item(), exp[0][1][0]])
             except Exception as e:
                 print(e)
                 pass
@@ -215,6 +318,9 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
     df = pd.DataFrame(exps, columns=['n_hops', 'uid', 'intersection', 'edit_dist', 'n_edges'])
 
     df.to_csv(f'{config["dataset"]}_exps_test_1_epoch_{hops_info}hops_all_users.csv', index=False)
+
+    pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred'])
+    pref_data.to_csv(os.path.join(script_path, 'pref_data_GCMC_original.csv'), index=None)
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 6))
     inters_box = sns.boxplot(x='n_hops', y='intersection', data=df, ax=axs[0])
@@ -231,10 +337,14 @@ def hops_analysis(config, model, test_data, topk=10, dist_type="damerau_levensht
     fig.savefig(f'{config["dataset"]}_{hops_info}hops_analysis_boxplot_inters_edit.png')
     plt.close()
 
-    return diam, pd.DataFrame(pref_data, columns=['user_id', 'topk'])
+    return diam, pref_data
 
 
 def load_diameter_info():
+    """
+    Load the diameter of the graph of the current dataset.
+    :return:
+    """
     _diam_info = {}
     diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
     if os.path.exists(diam_info_path):
@@ -248,6 +358,13 @@ def load_diameter_info():
 
 
 def update_diameter_info(_loaded_diam, _diam_info, _diam):
+    """
+    Updates the dictionary (json format) that stores the diameter info of each dataset.
+    :param _loaded_diam:
+    :param _diam_info:
+    :param _diam:
+    :return:
+    """
     diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
 
     if _loaded_diam is None:
@@ -257,6 +374,14 @@ def update_diameter_info(_loaded_diam, _diam_info, _diam):
 
 
 def plot_bias_analysis_disparity(train_bias, rec_bias, _train_data, item_categories=None):
+    """
+    Used to plot bias disparity as an heatmap when hops analysis is performed
+    :param train_bias:
+    :param rec_bias:
+    :param _train_data:
+    :param item_categories:
+    :return:
+    """
     plots_path = os.path.join(script_path, os.pardir,
                               f'bias_disparity_plots{"_analysis" if args.hops_analysis else ""}', config['dataset'])
     if config['explain_fairness']:
@@ -293,6 +418,7 @@ if __name__ == "__main__":
     parser.add_argument('--load_config_id', default=-1)
     parser.add_argument('--best_exp_col', default="loss_total")
     parser.add_argument('--bias_orig_pred', action='store_true')
+    parser.add_argument('--verbose', action='store_true')
 
     args = parser.parse_args()
 
@@ -303,9 +429,11 @@ if __name__ == "__main__":
 
     print(args)
 
+    # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
-                                                                                          args.explainer_config_file)
 
+                                                                                          args.explainer_config_file)
+    # measure bias ratio in training set
     train_bias_ratio = utils.generate_bias_ratio(
         train_data,
         config,
@@ -316,13 +444,16 @@ if __name__ == "__main__":
     if args.hops_analysis:
         loaded_diam, diam_info = load_diameter_info()
 
-        diam, pref_data = hops_analysis(config, model, test_data, diam=loaded_diam)
+        diam, pref_data = hops_analysis(config, model, diam=loaded_diam)
         update_diameter_info(loaded_diam, diam_info, diam)
     else:
         base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
 
         if not args.load:
-            explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio)
+            if not config['group_explain']:
+                explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio, verbose=args.verbose)
+            else:
+                group_explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio, verbose=args.verbose)
         else:
             with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
                 config = pickle.load(config_file)

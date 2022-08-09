@@ -1,5 +1,4 @@
 import os
-import re
 import pickle
 from logging import getLogger
 from collections import defaultdict
@@ -64,7 +63,7 @@ def load_data_and_model(model_file, explainer_config_file):
     #     config['eval_batch_size'] = dataset.item_num
     # else:
     #     raise ValueError(f"`{config['explain_scope']}` is not in {['group', 'individual']}")
-    config['explain_scope'] = 'group' if config['user_batch_exp'] > 1 else 'individual'
+    config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
 
     logger.info(dataset)
     train_data, valid_data, test_data = data_preparation(config, dataset)
@@ -77,16 +76,23 @@ def load_data_and_model(model_file, explainer_config_file):
     return config, model, dataset, train_data, valid_data, test_data
 
 
-# TODO: to implement with group explanations
 def load_exps_file(base_exps_file):
-    files = [f for f in os.scandir(base_exps_file) if re.match(r'user_\d+', f.name) is not None]
+    files = [f for f in os.scandir(base_exps_file) if 'config' not in f.name]
 
-    exps = {}
+    group_exp = False
+    exps = []
     for f in files:
-        user_id = int(f.name.split('_')[1].split('.')[0])
-        with open(f.path, 'rb') as file:
-            exp = pickle.load(file)
-        exps[user_id] = exp
+        if '#' in f.name or 'group_explain' in f.path:
+            group_exp = True
+            with open(f.path, 'rb') as file:
+                exp = pickle.load(file)
+            exps.append(exp)
+        else:
+            user_id = int(f.name.split('_')[1].split('.')[0])
+            with open(f.path, 'rb') as file:
+                exp = pickle.load(file)
+            exps.append((user_id, exp))
+    exps = dict(exps) if not group_exp else exps
 
     return exps
 
@@ -282,7 +288,7 @@ def generate_bias_ratio(_train_data,
 
 def clean_history_matrix(hist_m):
     for col in ['topk_pred', 'cf_topk_pred']:
-        if isinstance(hist_m.iloc[0][col], str):
+        if col in hist_m and isinstance(hist_m.iloc[0][col], str):
             hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
 
 

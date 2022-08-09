@@ -109,14 +109,8 @@ class GCMCPerturbated(GeneralRecommender):
             not_user_sub_matrix=self.not_user_sub_matrix
         )
         self.support = [self.Graph]
-        # self.support = [self.sub_Graph.to_dense()]
 
         self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2) # + self.num_all
-
-        # if self.edge_additions:
-        #     self.P_vec = Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)))
-        # else:
-        #     self.P_vec = Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
 
         self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
 
@@ -214,49 +208,61 @@ class GCMCPerturbated(GeneralRecommender):
     #     return loss
 
     def loss(self, output, y_pred_orig, y_pred_orig_top_k, y_pred_new_actual_top_k, dist, **kwargs):
+        """
+
+        :param output: output of the model with perturbed adj matrix
+        :param y_pred_orig: output of the original model without perturbation
+        :param y_pred_orig_top_k: top-k items recommended by the original model without perturbation
+        :param y_pred_new_actual_top_k: top-k items recommended by the model with non-differentiable perturbed adj matrix
+        :param dist: the function used to compute the distance between `y_pred_orig_top_k` and `y_pred_new_actual_top_k`
+        :param kwargs: it could contain the fairness loss function and the target items to recommende to improve fairness
+        :return:
+        """
         adj = self.support[0]
 
+        # remove neginf from output
         output = torch.nan_to_num(output, neginf=(torch.min(output[~torch.isinf(output)]) - 1).item())
-        # activate only if top-k is equal
-        pred_same = (torch.tensor([
-            dist(y_orig, y_new) == 0 if self.pred_same else True
-            for y_orig, y_new in zip(y_pred_orig_top_k, y_pred_new_actual_top_k)
-        ])).float()[:, None].to(self.device)
 
-        # cf_adj = self.GcEncoder.P * adj
+        # activate only if top-k is equal
+        if self.pred_same:
+            topk_dist = torch.tensor([dist(y_orig, y_new) for y_orig, y_new in zip(y_pred_orig_top_k, y_pred_new_actual_top_k)])
+            pred_same = (topk_dist == 0).float()[:, None].to(self.device)
+        else:
+            topk_dist = None
+            pred_same = torch.ones(y_pred_orig_top_k.shape[0], dtype=float)[:, None].to(self.device)
+
+        # non-differentiable adj matrix is taken to compute the graph dist loss
         cf_adj = self.GcEncoder.P_loss
         cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
 
         fair_loss_f = kwargs.get("fair_loss_f", None)
         target = kwargs.get("target", None)
 
+        # compute fairness loss
         fair_loss = None
         if fair_loss_f is not None:
-            fair_loss = torch.abs(fair_loss_f(output, target))
+            fair_loss = fair_loss_f(output, target)
 
-        # Want negative in front to maximize loss instead of minimizing it to find CFs
+        # compute pred loss (Silvestri et al. method)
         if not self.not_pred or fair_loss is None:
             loss_pred = self.loss_function(
                 output,
-                y_pred_orig  # torch.nan_to_num(y_pred_orig, neginf=(torch.min(y_pred_orig[~torch.isinf(y_pred_orig)]) - 1).item())
-            )
+                y_pred_orig
+            ).abs()
         else:
             loss_pred = torch.tensor(0.)
 
-        if fair_loss_f is not None:
-            loss_pred = torch.abs(loss_pred)
-        # loss_pred = torch.tensor(0)
-
+        # compute normalized graph dist loss (logistic sigmoid is not used because reaches too fast 1)
         orig_loss_graph_dist = (cf_adj - adj).abs().sum() / 2  # Number of edges changed (symmetrical)
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
         # Zero-out loss_pred with pred_same if prediction flips
-        loss_total = (pred_same * loss_pred).mean() + self.beta * loss_graph_dist  # / (self.sub_Graph._nnz() * self.beta)
-        # loss_total = loss_pred + self.beta * loss_graph_dist
+        loss_total = (pred_same * loss_pred).mean() + self.beta * loss_graph_dist
+
         if fair_loss is not None:
             loss_total = (pred_same * fair_loss).mean() * self.fair_beta + loss_total
 
-        return loss_total, loss_pred, orig_loss_graph_dist, fair_loss, cf_adj, adj, self.sub_Graph.shape[1]  # self.sub_Graph._nnz()
+        return loss_total, loss_pred, orig_loss_graph_dist, fair_loss, cf_adj, adj, self.sub_Graph.shape[1], topk_dist  # self.sub_Graph._nnz()
 
     def predict(self, interaction, pred=False):
         user = interaction[self.USER_ID]
@@ -404,6 +410,8 @@ class GcEncoder(nn.Module):
     # @profile
     def perturbate_adj_matrix(self, i, pred=False):
         graph_A = self.support[i]
+        # self.P_loss = graph_A
+        # return graph_A.to_sparse()
         num_all = self.num_all
 
         if pred:

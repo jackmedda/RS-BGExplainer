@@ -9,6 +9,7 @@ import pyvis
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
 import matplotlib.ticker as mpl_tick
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -23,8 +24,9 @@ def get_plots_path():
         os.pardir,
         f'bias_disparity_plots',
         config['dataset'],
+        batch_exp_s,
         '_'.join(map(str, args.best_exp_col)) if isinstance(args.best_exp_col, list) else \
-            ('_'.join(map(str, list(args.best_exp_col.items()))) if isinstance(args.best_exp_col, dict) else args.best_exp_col)
+            ('_'.join(map(str, list(args.best_exp_col.items()))) if isinstance(args.best_exp_col, dict) else args.best_exp_col),
     )
 
     if not os.path.exists(plots_path):
@@ -71,6 +73,7 @@ def clean_history_matrix(hist_m):
 
 def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, best_exp_col):
     bias_disparity_all = {}
+    pref_data_all = {}
     for e_type, e_path in _exp_paths.items():
         if e_path is None:
             continue
@@ -82,11 +85,13 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
             bec = best_exp_col
 
         if not isinstance(bec, list):
-            bec = bec.lower()
+            bec = bec.lower() if isinstance(bec, str) else bec
         else:
             bec[0] = bec[0].lower()
         top_exp_func = None
-        if bec not in ["first", "last", "mid"] and not isinstance(bec, list):
+        if isinstance(bec, int):
+            top_exp_func = lambda exp: exp[bec]
+        elif bec not in ["first", "last", "mid"] and not isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec) if bec is not None else None
             if top_exp_col is not None:
                 top_exp_func = lambda exp: sorted(exp, key=lambda x: x[top_exp_col])[0]
@@ -101,15 +106,25 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
             top_exp_func = lambda exp: sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
 
         pref_data = []
-        for user_id, user_exps in exps_data.items():
-            u_exps = user_exps
-            if top_exp_func is not None and user_exps:
-                u_exps = top_exp_func(user_exps)
-                u_exps = [u_exps]
-            if u_exps:
-                pref_data.append([user_id, u_exps[0][1].squeeze(), u_exps[0][2].squeeze()])
+        if batch_exp_s == 'individual':
+            for user_id, user_exps in exps_data.items():
+                u_exps = user_exps
+                if top_exp_func is not None and user_exps:
+                    u_exps = top_exp_func(user_exps)
+                    u_exps = [u_exps]
+                if u_exps:
+                    pref_data.append([user_id, u_exps[0][1].squeeze(), u_exps[0][2].squeeze()])
+        elif batch_exp_s == 'group_explain':
+            for exp_entry in exps_data:
+                if top_exp_func is not None:
+                    _exp = top_exp_func(exp_entry)
+                else:
+                    _exp = exp_entry[0]
+
+                pref_data.extend(list(zip(_exp[0], _exp[1], _exp[2])))
 
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+        pref_data_all[e_type] = pref_data
 
         if not pref_data.empty:
             rec_bias_ratio = utils.generate_bias_ratio(
@@ -124,12 +139,16 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
             bias_disparity_all[e_type] = utils.compute_bias_disparity(_train_bias_ratio, rec_bias_ratio, _train_data)
 
             if 'GCMC' not in bias_disparity_all:
+                pref_data_GCMC = pd.read_csv(os.path.join(script_path, 'pref_data_GCMC_original.csv'))
+                pref_data_all["GCMC"] = pref_data_GCMC
+
                 rec_orig_bias = utils.generate_bias_ratio(
                     _train_data,
                     config,
                     pred_col='topk_pred',
                     sensitive_attrs=_config['sensitive_attributes'],
-                    history_matrix=pref_data,
+                    # history_matrix=pref_data,
+                    history_matrix=pref_data_GCMC,
                     mapped_keys=True
                 )
 
@@ -137,7 +156,7 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
         else:
             print("Pref Data is empty!")
 
-    return bias_disparity_all
+    return pref_data_all, bias_disparity_all
 
 
 def plot_bias_disparity_diff_dumbbell(bd, sens_attrs, config_ids, sort="dots"):
@@ -213,7 +232,7 @@ def plot_bias_disparity_diff_dumbbell(bd, sens_attrs, config_ids, sort="dots"):
                     plt.close()
 
 
-def plot_bias_disparity_boxplot(bd, sens_attrs, config_ids):
+def plot_bias_disparity_boxplot(bd, pref_topk_all, sens_attrs, config_ids):
     plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids))
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
@@ -234,6 +253,7 @@ def plot_bias_disparity_boxplot(bd, sens_attrs, config_ids):
         for demo_gr in bd['GCMC'][attr]:
             if bd['GCMC'][attr][demo_gr] is not None:
                 plot_data = [[], []]
+                exp_size = {}
                 for exp_type in bd:
                     if bd[exp_type][attr][demo_gr] is None:
                         continue
@@ -242,13 +262,17 @@ def plot_bias_disparity_boxplot(bd, sens_attrs, config_ids):
                     plot_data[0].extend(exp_data)
                     plot_data[1].extend([exp_type] * len(exp_data))
 
+                    exp_size[exp_type] = f"{len(pref_topk_all[exp_type]) / (train_data.dataset.user_num - 1) * 100:.1f}%"
+
                 df = pd.DataFrame(plot_data, index=['Bias Disparity', 'Recommendations Type']).T.dropna()
 
                 sns.boxplot(x='Recommendations Type', y='Bias Disparity', data=df, order=order, ax=axs[i])
                 axs[i].plot(axs[i].get_xlim(), [0., 0.], 'k--')
-                axs[1].set_xlabel("")
+                axs[i].set_xlabel("")
 
                 axs[i].set_title(f"{attr.title()}: {demo_gr.title()}")
+
+                axs[i].set_xticklabels([f"{x.get_text()} \n {exp_size.get(x.get_text(), '-')}" for x in axs[i].get_xticklabels()])
                 i += 1
 
         fig.savefig(os.path.join(attr_path, f"boxplot.png"))
@@ -273,23 +297,48 @@ def extract_all_exp_bd_data(_exp_paths, train_bias, _train_data):
         exps_data = utils.load_exps_file(e_path)
 
         data = []
-        for user_id, user_exps in exps_data.items():
-            for u_exp in user_exps:
-                exp_row_data = [user_id]
-                for col in cols:
-                    if col in [1, 2]:
-                        exp_row_data.append(u_exp[col].squeeze())
-                    elif col in [6]:
-                        exp_row_data.append(int(u_exp[col]))
-                    elif col in [3]:
-                        exp_row_data.append(u_exp[col][0])
-                    elif col == "set":
-                        comm_items = len(set(u_exp[1].squeeze()) & set(u_exp[2].squeeze()))
-                        exp_row_data.append(len(u_exp[1].squeeze()) - comm_items)
-                    else:
-                        exp_row_data.append(u_exp[col])
+        if batch_exp_s == 'individual':
+            for user_id, user_exps in exps_data.items():
+                for u_exp in user_exps:
+                    exp_row_data = [user_id]
+                    for col in cols:
+                        if col in [1, 2]:
+                            exp_row_data.append(u_exp[col].squeeze())
+                        elif col in [6]:
+                            exp_row_data.append(int(u_exp[col]))
+                        elif col in [3]:
+                            exp_row_data.append(u_exp[col][0])
+                        elif col == "set":
+                            comm_items = len(set(u_exp[1].squeeze()) & set(u_exp[2].squeeze()))
+                            exp_row_data.append(len(u_exp[1].squeeze()) - comm_items)
+                        else:
+                            exp_row_data.append(u_exp[col])
 
-                data.append(exp_row_data)
+                    data.append(exp_row_data)
+        elif batch_exp_s == 'group_explain':
+            for exp_entry in exps_data:
+                for _exp in exp_entry:
+                    exp_row_data = [_exp[0]]
+                    for col in cols:
+                        if col in [1, 2]:
+                            exp_row_data.append(_exp[col])
+                        elif col in [6]:
+                            exp_row_data.append([int(_exp[col])] * len(exp_row_data[0]))
+                        elif col in [3]:
+                            if len(_exp[col]) == len(exp_row_data[0]):
+                                exp_row_data.append(_exp[col])
+                            else:
+                                exp_row_data.append(
+                                    [utils.damerau_levenshtein_distance(_pred, _topk_idx)
+                                     for _pred, _topk_idx in zip(_exp[1], _exp[2])]
+                                )
+                        elif col == "set":
+                            comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(_exp[1], _exp[2])])
+                            exp_row_data.append(len(_exp[1][0]) - comm_items)
+                        else:
+                            exp_row_data.append([_exp[col]] * len(exp_row_data[0]))
+
+                    data.extend(list(zip(*exp_row_data)))
 
         data_df = pd.DataFrame(data, columns=col_names)
         exp_dfs[e_type] = data_df
@@ -372,8 +421,9 @@ def plot_explanations_fairness_trend(_bd_data_all, _n_users_data_all, orig_dispa
                 ax = sns.lineplot(x='# Del Edges', y='Bias Disparity', hue='Attribute', data=plot_df, ci="sd")
                 n_ticks = len(ax.get_xticks())
                 nud_keys = list(n_users_data.keys())
-                xticks = np.linspace(1, len(nud_keys), n_ticks, dtype=int)
-                xtick_labels = [f"{x} \n ({n_users_data[nud_keys[x - 1]]})" for x in xticks]
+                xticks = np.linspace(1, max(nud_keys), n_ticks, dtype=int)
+                xtick_keys = np.linspace(1, len(nud_keys) - 1, n_ticks, dtype=int)
+                xtick_labels = [f"{xticks[i]} \n ({n_users_data[nud_keys[x - 1]]})" for i, x in enumerate(xtick_keys)]
                 ax.set_xticks(xticks)
                 ax.set_xticklabels(xtick_labels)
                 ax.set_title(f"{attr.title()}: {d_gr}")
@@ -386,7 +436,7 @@ def plot_explanations_fairness_trend(_bd_data_all, _n_users_data_all, orig_dispa
 
 
 # %%
-def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, config_ids, sort="dots", bin_size=10):
+def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, config_ids, sort="dots", n_bins=10):
     sens_attributes = config["sensitive_attributes"]
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
     item_cats = train_data.dataset.field2id_token['class']
@@ -431,6 +481,7 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                 df_exp = pd.DataFrame(exp_data, columns=['# Del Edges', x, y]).dropna()
 
                 max_del_edges = max(bd_data)
+                bin_size = max_del_edges // n_bins
                 bin_map = {i: f"{e_type}: {i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
                            range(max_del_edges // bin_size + 1)}
 
@@ -445,7 +496,7 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                     bar_data = pd.DataFrame(zip(order, vals), columns=[y, x])
 
                 g = sns.JointGrid(height=12, space=0.5)
-                g.ax_marg_x.remove()
+                # g.ax_marg_x.remove()
                 sns.barplot(x=x, y=y, data=bar_data, ax=g.ax_marg_y, color="black", order=order)
 
                 df_exp_plot = df_exp.groupby(['Category', '# Del Edges']).agg(**{
@@ -453,38 +504,24 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                     "# Del Edges lab": pd.NamedAgg(column='# Del Edges lab', aggfunc='first'),
                 }).reset_index()
 
+                df_exp_plot_perc = df_exp_plot.copy()
+                norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot_perc['# Del Edges'].max())
+                df_exp_plot_perc['# Del Edges'].map(norm)
+
                 print(df_exp_plot)
 
-                sns.stripplot(x=x, y=y, color='black', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
-                              label='GCMC', zorder=2, order=order)
-                sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette="Blues_d", sizes=(50, 230),
-                                data=df_exp_plot, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
+                palette = sns.color_palette("Blues_d", as_cmap=True)
+                plot_palette = list(df_exp_plot_perc['# Del Edges'].map(palette))
 
-                # lines_df = df_orig.set_index('Category').join(df_exp.set_index('Category'), lsuffix='_orig').loc[order]
-                # lines_styles = ((lines_df[x + '_orig'].abs() - lines_df[x].abs()) < 0).map(lambda x: ':' if x else '-').values.tolist()
-                #
-                # lines_df['diff%'] = ((-(lines_df[x].abs() - lines_df[x + '_orig'].abs()) / lines_df[x + '_orig']) * 100).round(1)
-                # lines_df['abs_diff'] = (lines_df[x + '_orig'] - lines_df[x]).abs().round(1)
-                # lines_df['diff%'] = lines_df[['diff%', 'abs_diff']].apply(lambda row: f"{row['diff%']}% ({row['abs_diff']})", axis=1)
-                # del lines_df['abs_diff']
-                # for i, c in enumerate(lines_df.index):
-                #     g.ax_joint.plot(lines_df.loc[c, [x + '_orig', x]], [c, c], 'k', zorder=1, ls=lines_styles[i])
-                #     g.ax_joint.text(lines_df.loc[c, [x + '_orig', x]].mean(), i - 0.3, lines_df.loc[c, 'diff%'], ha='center')
-                #
-                # unique_labels = utils.legend_without_duplicate_labels(g.ax_joint)
-                #
-                # handles, labels = zip(*unique_labels)
-                # leg_labels_order = sorted(range(len(labels)), key=lambda x: int(labels[x].split(': ')[1].split('-')[0]) if ':' in labels[x] else -1)
-                # handles, labels = [handles[x] for x in leg_labels_order], [labels[x] for x in leg_labels_order]
-                # g.ax_joint.legend(handles, labels)
-                #
+                sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
+                              label='GCMC', zorder=2, order=order)
+                sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette=palette, sizes=(50, 230), hue_norm=norm,
+                                data=df_exp_plot_perc, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
+
                 handles, labels = zip(*utils.legend_without_duplicate_labels(g.ax_joint))
                 df_exp_plot_sizes = df_exp_plot.set_index("# Del Edges")
                 labels = [df_exp_plot_sizes.loc[int(l), "# Del Edges lab"].iloc[0] if l.isnumeric() else l for l in labels]
                 g.ax_joint.legend(handles, labels)
-                # for handle, label in zip(handles, labels):
-                #     if label in df_exp_plot_sizes.index:
-                #         handle.set_sizes([df_exp_plot_sizes.loc[label, "# Del Edges"].iloc[0]])
 
                 g.ax_joint.plot([0., 0.], g.ax_joint.get_ylim(), 'k--', zorder=1)
                 g.ax_joint.set_title(f"{attr.title()}: {d_gr}")
@@ -495,6 +532,15 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                 _ax_j.set_yticklabels([])
                 _ax_j.set_ylabel('# Interactions for each category of items', rotation=270, labelpad=15)
                 # g.ax_marg_x.set_title('# Interactions for each category of items')
+                g.ax_joint.legend().remove()
+
+                # g.ax_marg_x.get_shared_x_axes().remove(g.ax_joint)
+                gs = plt.GridSpec(12, 6)
+
+                ax_marg_x = g.fig.add_subplot(gs[1, :-1])
+
+                sm = plt.cm.ScalarMappable(cmap=palette, norm=norm)
+                plt.colorbar(cax=ax_marg_x, mappable=sm, orientation='horizontal')
 
                 plt.tight_layout()
                 plt.savefig(os.path.join(plots_path, f'{d_gr}#dumbbell_over_del_edges_{e_type}.png'))
@@ -516,11 +562,12 @@ def create_table_bias_disparity(bd, config_ids):
         for exp_type in order:
             vals.append([])
             for demo_gr in sens_map:
-                data = bd[exp_type][attr][demo_gr]
-                if exp_type == 'pred_explain' or data is None:
-                    continue
+                if exp_type != 'pred_explain' and exp_type in bd:
+                    data = bd[exp_type][attr][demo_gr]
+                    if data is None:
+                        continue
 
-                vals[-1].extend([np.nanmean(data.numpy()), np.nanstd(data.numpy())])
+                    vals[-1].extend([np.nanmean(data.numpy()), np.nanstd(data.numpy())])
 
         d_grs = [x for x in sens_map if bd['GCMC'][attr][x] is not None]
 
@@ -528,14 +575,17 @@ def create_table_bias_disparity(bd, config_ids):
         for row in vals:
             plot_vals.append([])
             for i in range(len(d_grs)):
-                plot_vals[-1].append(f"{row[2 * i]:.2f} ({row[2 * i + 1]:.2f})")
+                if row:
+                    plot_vals[-1].append(f"{row[2 * i]:.2f} ({row[2 * i + 1]:.2f})")
+                else:
+                    plot_vals[-1].append("- (-)")
 
         df_attr = pd.DataFrame(plot_vals, columns=d_grs, index=order)
         df_attr.to_markdown(os.path.join(tables_path, f"bias_disparity_table_{attr}.md"), tablefmt="github")
 
 
 # %%
-def create_table_bias_disparity_over_del_edges(_bd_all_data, orig_disparity, config_ids, bin_size=10):
+def create_table_bias_disparity_over_del_edges(_bd_all_data, orig_disparity, config_ids, n_bins=10):
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
     item_cats = train_data.dataset.field2id_token['class']
@@ -551,6 +601,7 @@ def create_table_bias_disparity_over_del_edges(_bd_all_data, orig_disparity, con
         max_del_edges_e_type = max([(k, len(x)) for k, x in _bd_all_data.items()], key=lambda v: v[1])[0]
         del_edges = sorted(list(_bd_all_data[max_del_edges_e_type]))
 
+        bin_size = max(del_edges) // n_bins
         bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
                    range(max(del_edges) // bin_size + 1)}
 
@@ -559,54 +610,61 @@ def create_table_bias_disparity_over_del_edges(_bd_all_data, orig_disparity, con
 
         d_grs = [x for x in sens_map if orig_disparity[attr][x] is not None]
 
+        exp_data = []
+        final_bins = None
+        for e_type in order[1:]:
+            exp_data.append([])
+            if e_type in _bd_all_data:
+                bd_data = _bd_all_data[e_type]
+
+                for d_gr in d_grs:
+                    if orig_disparity[attr][d_gr] is None:
+                        continue
+
+                    ch_bins = []
+                    temp_exp_data = []
+                    for n_del, bin_del in del_edges_map.items():
+                        if len(ch_bins) == 0:
+                            ch_bins.append(bin_del)
+                        elif bin_del not in ch_bins:  # nanmean over rows is executed only if new bin is met
+                            exp_data[-1].extend(np.nanmean(np.asarray(temp_exp_data), axis=0))
+                            temp_exp_data = []
+
+                            ch_bins.append(bin_del)
+
+                        if n_del in bd_data:
+                            bd_gr_data = bd_data[n_del][attr][d_gr].numpy()
+                            if not np.isnan(bd_gr_data).all():
+                                temp_exp_data.append([np.nanmean(bd_gr_data), np.nanstd(bd_gr_data)])
+                            else:
+                                temp_exp_data.append([np.nan, np.nan])
+                        else:
+                            temp_exp_data.append([np.nan, np.nan])
+
+                    final_bins = ch_bins
+
+                    exp_data[-1].extend(np.nanmean(np.asarray(temp_exp_data), axis=0))
+
         orig_data = []
         for d_gr in sens_map:
             if orig_disparity[attr][d_gr] is not None:
                 val = orig_disparity[attr][d_gr].numpy()
-                orig_data.extend(np.tile([np.nanmean(val), np.nanstd(val)], len(bins_order)))
-
-        exp_data = []
-        for e_type in order[1:]:
-            bd_data = _bd_all_data[e_type]
-            exp_data.append([])
-
-            for d_gr in sens_map:
-                if orig_disparity[attr][d_gr] is None:
-                    continue
-
-                ch_bins = []
-                temp_exp_data = []
-                for n_del, bin_del in del_edges_map.items():
-                    if len(ch_bins) == 0:
-                        ch_bins.append(bin_del)
-                    elif bin_del not in ch_bins:
-                        exp_data[-1].extend(np.nanmean(np.asarray(temp_exp_data), axis=0))
-                        temp_exp_data = []
-
-                        ch_bins.append(bin_del)
-
-                    if n_del in bd_data:
-                        bd_gr_data = bd_data[n_del][attr][d_gr].numpy()
-                        if not np.isnan(bd_gr_data).all():
-                            temp_exp_data.append([np.nanmean(bd_gr_data), np.nanstd(bd_gr_data)])
-                        else:
-                            temp_exp_data.append([np.nan, np.nan])
-                    else:
-                        temp_exp_data.append([np.nan, np.nan])
-
-                exp_data[-1].extend(np.nanmean(np.asarray(temp_exp_data), axis=0))
+                orig_data.extend(np.tile([np.nanmean(val), np.nanstd(val)], len(final_bins)))
 
         exp_data.insert(0, orig_data)
         plot_vals = []
         for row in exp_data:
             plot_vals.append([])
             for i in range(len(d_grs)):
-                for j in range(len(bins_order)):
-                    plot_vals[-1].append(f"{row[2 * i * len(bins_order) + 2 * j]:.2f} ({row[2 * i * len(bins_order) + 2 * j + 1]:.2f})")
+                for j in range(len(final_bins)):
+                    if row:
+                        plot_vals[-1].append(f"{row[2 * i * len(final_bins) + 2 * j]:.2f} ({row[2 * i * len(final_bins) + 2 * j + 1]:.2f})")
+                    else:
+                        plot_vals[-1].append("- (-)")
 
         cols = list(zip(
-            np.concatenate([[x] * len(bins_order) for x in d_grs]),
-            np.tile(bins_order, len(d_grs))
+            np.concatenate([[x] * len(final_bins) for x in d_grs]),
+            np.tile(final_bins, len(d_grs))
         ))
         cols = pd.MultiIndex.from_tuples(cols, names=["Demo Group", "Edges Bin"])
         df_attr = pd.DataFrame(plot_vals, columns=cols, index=order).T
@@ -660,7 +718,11 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
 # %%
 def plot_del_edges_hops(dfs, _config_ids):
     sens_attrs = config['sensitive_attributes']
-    td_G = utils.get_nx_adj_matrix(config, train_data.dataset)
+    # td_G = utils.get_nx_biadj_matrix(train_data.dataset)
+
+    inter_matrix = train_data.dataset.inter_matrix(form='csr').astype(np.float32)
+
+    td_G = nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
     color_0 = "red"
     color_1 = "blue"
@@ -688,15 +750,29 @@ def plot_del_edges_hops(dfs, _config_ids):
                 #     input()
                 # continue
                 u_G = nx.Graph()
-                e = u_df['edge'].to_numpy()
-                import pdb; pdb.set_trace()
-                sub = td_G.subgraph(np.unique(np.append(e, u_id))).copy()
-                top_nodes = {n for n, d in sub.nodes(data=True) if d['bipartite'] == 0}
-                node_color = list({n: color_0 if d['bipartite'] == 0 else color_1 for n, d in sub.nodes(data=True)}.values())
+                e = np.array(u_df['edge'].tolist())
+                if not (e[:, 0] == u_id).all():
+                    fig = plt.figure(figsize=(14, 14))
+                    ego = set(nx.ego_graph(td_G, u_id, radius=1, center=True, undirected=True))
+                    sub = td_G.subgraph(ego | set(np.unique(np.append(e, u_id)))).copy()
+                    top_nodes = {n for n, d in sub.nodes(data=True) if d['bipartite'] == 0}
+                    node_color = list({n: 'green' if n == u_id else (color_0 if d['bipartite'] == 0 else color_1)
+                                       for n, d in sub.nodes(data=True)}.values())
 
-                nx.draw(sub, nx.bipartite_layout(sub, top_nodes), node_color=node_color)
-                plt.show()
-                input()
+                    tuple_e = list(map(tuple, e))
+                    sub_edges = sub.edges()
+                    edge_list = [edge for edge in sub_edges if u_id in edge] + tuple_e
+                    edge_color = ['red' if edge in tuple_e else 'black' for edge in edge_list]
+                    nx.draw(
+                        sub,
+                        nx.bipartite_layout(sub, top_nodes),
+                        edgelist=edge_list,
+                        node_color=node_color,
+                        edge_color=edge_color
+                    )
+                    plt.show()
+                    plt.close("all")
+                    import pdb; pdb.set_trace()
                 # u_G.add_edges_from(e)
 
                 # max_hop = 0
@@ -787,7 +863,7 @@ parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1, 1],
                     help="follows the order ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3 1".split())
+args = parser.parse_args(r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3 7".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -815,8 +891,8 @@ config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_
 
 # %%
 sens_attrs, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
-batch_exp = 'individual' if batch_exp == 1 else 'group'
-if batch_exp == 'group':
+batch_exp_s = 'individual' if batch_exp == 1 else ('group_explain' if config['group_explain'] else 'group')
+if batch_exp_s == 'group':
     raise NotImplementedError()
 
 exp_paths = {}
@@ -828,7 +904,7 @@ for c_id, exp_t, old_exp_t in zip(
     exp_paths[exp_t] = None
     if c_id != -1:
         exp_paths[exp_t] = os.path.join(script_path, 'explanations', dataset.dataset_name,
-                                        old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(batch_exp), str(c_id))
+                                        old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(batch_exp_s), str(c_id))
 
 train_bias_ratio = utils.generate_bias_ratio(
     train_data,
@@ -855,10 +931,10 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": ["loss_graph_dist", 17], "GCMC+NDCG": ["loss_graph_dist", 32]}
+args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": -1}
 
 # %%
-bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)
+pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)
 
 # %%
 all_exp_dfs, bd_all_data, n_users_data_all, topk_dist_all = extract_all_exp_bd_data(exp_paths, train_bias_ratio, train_data)
@@ -870,20 +946,20 @@ create_table_bias_disparity(bias_disparity, cleaned_config_ids)
 plot_bias_disparity_diff_dumbbell(bias_disparity, sens_attrs, cleaned_config_ids, sort="barplot_side")
 
 # %%
-plot_bias_disparity_boxplot(bias_disparity, sens_attrs, cleaned_config_ids)
+plot_bias_disparity_boxplot(bias_disparity, pref_data_topk_all, sens_attrs, cleaned_config_ids)
 
 # %%
 plot_explanations_fairness_trend(bd_all_data, n_users_data_all, bias_disparity['GCMC'], cleaned_config_ids)
 
 # %%
 plot_explanations_fairness_trend_dumbbell(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids,
-                                          sort="barplot_side", bin_size=20)
+                                          sort="barplot_side", n_bins=20)
 
 # %%
-plot_dist_over_del_edges(topk_dist_all, bd_all_data, cleaned_config_ids, max_del_edges=80)
+plot_dist_over_del_edges(topk_dist_all, bd_all_data, cleaned_config_ids, max_del_edges=80 if batch_exp_s == 'individual' else np.inf)
 
 # %%
-create_table_bias_disparity_over_del_edges(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids, bin_size=10)
+create_table_bias_disparity_over_del_edges(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids, n_bins=10)
 
 # %%
-plot_del_edges_hops(all_exp_dfs, cleaned_config_ids)
+# plot_del_edges_hops(all_exp_dfs, cleaned_config_ids)

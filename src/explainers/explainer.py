@@ -5,11 +5,13 @@ from typing import Iterable
 
 import time
 
+import tqdm
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from recbole.data.interaction import Interaction
+from recbole.utils import set_color
 from torchviz import make_dot
 
 sys.path.append('..')
@@ -88,11 +90,22 @@ class BGExplainer:
         self.scores_args, self.topk_args = None, None
         self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
 
-    def explain(self, batched_data, epochs, topk=10, loaded_scores=None, old_field2token_id=None):
-        best_cf_example = []
-        best_loss = np.inf
-        first_fair_loss = None
+        self.verbose = kwargs.get("verbose", False)
 
+        self.group_explain = config['group_explain']
+        self.user_batch_exp = config['user_batch_exp']
+
+        self.fair_target_lambda = config['fair_target_lambda']
+
+    def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
+        """
+        Compute the predictions of the original model without perturbation
+        :param batched_data: current data in batch
+        :param topk: integer of topk items
+        :param loaded_scores: if not None loads pre-computed prediction of the original model
+        :param old_field2token_id: mapping of ids related to pre-computed predictions
+        :return:
+        """
         _, history_index, positive_u, positive_i = batched_data
         self.scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
 
@@ -108,31 +121,138 @@ class BGExplainer:
         # topk_idx contains the ids of the topk items
         self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
 
-        for epoch in range(epochs):
-            new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
-            if epoch == 0:
-                first_fair_loss = fair_loss
-            if new_example is not None and abs(loss_total) < best_loss:
-                if self.unique_graph_dist_loss and len(best_cf_example) > 0:
-                    old_graph_dist = best_cf_example[-1][-5]
-                    new_graph_dist = new_example[-4]
-                    if not (old_graph_dist < new_graph_dist):
-                        continue
+    def update_best_cf_example(self, best_cf_example, new_example, loss_total, best_loss, first_fair_loss):
+        """
+        Updates the explanations with new explanation (if not None) depending on new loss value
+        :param best_cf_example:
+        :param new_example:
+        :param loss_total:
+        :param best_loss:
+        :param first_fair_loss:
+        :return:
+        """
+        if new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss):
+            if self.unique_graph_dist_loss and len(best_cf_example) > 0:
+                old_graph_dist = best_cf_example[-1][-5]
+                new_graph_dist = new_example[-4]
+                if not (old_graph_dist < new_graph_dist):
+                    return best_loss
 
-                best_cf_example.append(new_example + [first_fair_loss])
-                if not self.unique_graph_dist_loss:
-                    best_loss = abs(loss_total)
+            best_cf_example.append(new_example + [first_fair_loss])
+            if not self.unique_graph_dist_loss:
+                return abs(loss_total)
+        return best_loss
 
-        print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
+    @staticmethod
+    def prepare_batched_data(batched_data, data):
+        """
+        Prepare the batched data according to the "recbole" pipeline
+        :param batched_data:
+        :param data:
+        :return:
+        """
+        user_id = batched_data
+        user_df_mask = (data.user_df[data.uid_field][..., None] == user_id).any(-1)
+        user_df = Interaction({k: v[user_df_mask] for k, v in data.user_df.interaction.items()})
+        history_item = data.uid2history_item[user_id]
+
+        if len(user_id) > 1:
+            history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
+            history_i = torch.cat(list(history_item))
+        else:
+            history_u = torch.full_like(history_item, 0)
+            history_i = history_item
+
+        return user_df, (history_u, history_i), None, None
+
+    def get_iter_data(self, user_data):
+        user_data = user_data.split(self.user_batch_exp)
+
+        return (
+            tqdm.tqdm(
+                user_data,
+                total=len(user_data),
+                ncols=100,
+                desc=set_color(f"Explaining   ", 'pink'),
+            )
+        )
+
+    def explain(self, batched_data, epochs, topk=10, loaded_scores=None, old_field2token_id=None):
+        """
+        The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
+        :param batched_data:
+        :param epochs:
+        :param topk:
+        :param loaded_scores:
+        :param old_field2token_id:
+        :return:
+        """
+        best_cf_example = []
+        best_loss = np.inf
+        first_fair_loss = None
+
+        if not self.group_explain:
+            self.compute_model_predictions(batched_data, topk, loaded_scores=loaded_scores, old_field2token_id=old_field2token_id)
+        else:
+            batched_data, data = batched_data
+
+        iter_epochs = tqdm.tqdm(
+            range(epochs),
+            total=epochs,
+            ncols=100,
+            desc=set_color(f"Epochs   ", 'blue'),
+        )
+
+        for epoch in iter_epochs:
+            if self.group_explain:
+                iter_data = batched_data.split(self.user_batch_exp)
+                for batch_idx, batch_user in enumerate(iter_data):
+                    self.user_id = batch_user
+                    batched_data_epoch = BGExplainer.prepare_batched_data(batch_user, data)
+                    self.compute_model_predictions(batched_data_epoch, topk)
+                    new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
+                    if epoch == 0 and batch_idx == 0:
+                        first_fair_loss = fair_loss
+
+                if new_example is not None:
+                    all_batch_data = BGExplainer.prepare_batched_data(batched_data, data)
+                    self.compute_model_predictions(all_batch_data, topk)
+                    model_topk = self.model_topk_idx.detach().cpu().numpy()
+
+                    self.cf_model.eval()
+                    with torch.no_grad():
+                        cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
+                        _, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, **self.topk_args)
+                    cf_topk_pred_idx = cf_topk_pred_idx.detach().cpu().numpy()
+                    cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, model_topk)]
+
+                    new_example = [batched_data.detach().numpy(), model_topk, cf_topk_pred_idx, cf_dist, *new_example[4:]]
+
+                    best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, first_fair_loss)
+            else:
+                new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
+                if epoch == 0:
+                    first_fair_loss = fair_loss
+                import pdb; pdb.set_trace()
+                best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, first_fair_loss)
+
+            print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
 
         return best_cf_example, self.model_scores.detach().cpu().numpy()
 
     # @profile
     def train(self, epoch, topk=10):
+        """
+        Training procedure of explanation
+        :param epoch:
+        :param topk:
+        :return:
+        """
         t = time.time()
 
         self.cf_model.eval()
 
+        # compute non-differentiable permutation of adj matrix
         with torch.no_grad():
             cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
             cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, **self.topk_args)
@@ -140,15 +260,17 @@ class BGExplainer:
         self.cf_optimizer.zero_grad()
         self.cf_model.train()
 
+        # compute differentiable permutation of adj matrix
         # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
         cf_scores = self.get_scores(self.cf_model, *self.scores_args, pred=False)
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
 
+        # target when Silvestri et al. method is used
         relevance_scores = torch.zeros_like(self.model_scores).float().to(self.device)
         relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], self.model_topk_idx] = 1
 
         kwargs = {}
-        if self.train_bias_ratio is not None:
+        if self.train_bias_ratio is not None:  # prepare the loss function for fairness purposes
             user_feat = self.dataset.user_feat
             user_id_mask = self.user_id.unsqueeze(-1) if self.user_id.dim() == 0 else self.user_id
             user_feat = {k: feat[user_id_mask] for k, feat in user_feat.interaction.items()}
@@ -162,7 +284,8 @@ class BGExplainer:
                         self.dataset.item_feat['class'],
                         self.sensitive_attributes,
                         user_feat,
-                        topk=topk
+                        topk=topk,
+                        lmb=self.fair_target_lambda
                     )
                 }
             else:
@@ -171,12 +294,13 @@ class BGExplainer:
                         self.train_bias_ratio,
                         self.dataset.item_feat['class'],
                         self.sensitive_attributes,
-                        topk=topk
+                        topk=topk,
+                        lmb=self.fair_target_lambda
                     ),
                     "target": user_feat
                 }
 
-        loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj = self.cf_model.loss(
+        loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj, cf_dist = self.cf_model.loss(
             cf_scores,
             relevance_scores,
             self.model_topk_idx,
@@ -185,20 +309,21 @@ class BGExplainer:
             **kwargs
         )
 
+        loss_total.backward()
+
+        # Code that saves in a file the computational graph for debug purposes
         # dot = make_dot(loss_total.mean(), params=dict(self.cf_model.named_parameters()), show_attrs=True, show_saved=True)
         # dot.format = 'png'
         # dot.render(f'dots_loss')
 
-        loss_total.backward()
+        # Debug code that plots the gradient of perturbation matrix
         # for name, param in self.cf_model.named_parameters():
         #     if name == "P_symm":
         #         print(param.grad[param.grad.nonzero()])
         # input()
+
         nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         self.cf_optimizer.step()
-
-        # del self.cf_model.GcEncoder.P
-        # del self.cf_model.GcEncoder.P_hat_symm
 
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
         print(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}",
@@ -210,27 +335,28 @@ class BGExplainer:
               'fair loss: {:.4f}'.format(fair_loss),
               'graph loss: {:.4f}'.format(loss_graph_dist.item()),
               'nnz sub adj: {}'.format(nnz_sub_adj))
-        print('Orig output: {}\n'.format(self.model_scores),
-              'Output: {}\n'.format(cf_scores),
-              'Output nondiff: {}\n'.format(cf_scores_pred),
-              'orig pred: {}, new pred: {}, new pred nondiff: {}'.format(self.model_topk_idx, cf_topk_idx, cf_topk_pred_idx))
+        if self.verbose:
+            print('Orig output: {}\n'.format(self.model_scores),
+                  'Output: {}\n'.format(cf_scores),
+                  'Output nondiff: {}\n'.format(cf_scores_pred),
+                  '{:20}: {},\n {:20}: {},\n {:20}: {}\n'.format(
+                      'orig pred', self.model_topk_idx,
+                      'new pred', cf_topk_idx,
+                      'new pred nondiff', cf_topk_pred_idx)
+                  )
         print(" ")
 
+        # Compute distance between original and perturbed list. Explanation maintained only if dist > 0
         cf_stats = None
-        cf_check = [self.dist(_pred, _topk_idx) > 0 for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
-        if any(cf_check) or self.force_return:
+        if cf_dist is None:
+            cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
+        if (np.array(cf_dist) > 0).any() or self.force_return:
             cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
-            del_edges = np.sort(np.stack((adj != cf_adj).nonzero(), axis=0).T, axis=1)
-            del_edges = pd.DataFrame(del_edges).drop_duplicates().values
-            del_edges = del_edges[(del_edges[:, 0] != del_edges[:, 1]) &
-                                  (del_edges[:, 0] != 0) &
-                                  (del_edges[:, 1] != 0)]
-            # del_edges = torch.stack((del_edges[:, 0], del_edges[:, 1]))
-            del_edges = del_edges.T
+            del_edges = np.stack((adj != cf_adj).nonzero(), axis=0)
+            del_edges = del_edges[:, del_edges[0, :] <= self.dataset.user_num]  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
-                        self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
-                        [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)],
+                        self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(), cf_dist,
                         loss_total.item(), loss_pred.mean().item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
 
         return cf_stats, loss_total.item(), fair_loss
@@ -289,12 +415,6 @@ class BGExplainer:
             else:
                 break
 
-        # pos_matrix = torch.zeros_like(scores_tensor, dtype=torch.int)
-        # pos_matrix[positive_u, positive_i] = 1
-        # pos_len_list = pos_matrix.sum(dim=1, keepdim=True)
-        # pos_idx = torch.gather(pos_matrix, dim=1, index=topk_idx)
-        # result = torch.cat((pos_idx, pos_len_list), dim=1)
-        # return scores_top_k, result
         return scores_top_k, topk_idx
 
 
@@ -306,6 +426,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                  item_categories_map: torch.Tensor,
                  sensitive_attributes: Iterable[str],
                  topk=10,
+                 lmb=0.5,
                  size_average=None, reduce=None, reduction: str = 'mean', margin=0.0) -> None:
         super(BiasDisparityLoss, self).__init__(size_average, reduce, reduction)
 
@@ -324,8 +445,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                                                                           demo_groups,
                                                                           topk=self.topk)
 
-        # return (sorted_target.max() - sorted_target * sorted_input).mean(dim=1)
-        return (sorted_target * sorted_input).mean(dim=1)
+        return -(sorted_target * sorted_input).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,
@@ -333,13 +453,15 @@ def get_bias_disparity_target_NDCGApprox(scores,
                                          item_categories_map,
                                          sensitive_attributes,
                                          demo_groups,
-                                         topk=10):
+                                         topk=10,
+                                         lmb=0.5):
     sorted_target, _, sorted_idxs = get_bias_disparity_sorted_target(scores,
                                                                      train_bias_ratio,
                                                                      item_categories_map,
                                                                      sensitive_attributes,
                                                                      demo_groups,
-                                                                     topk=topk)
+                                                                     topk=topk,
+                                                                     lmb=lmb)
 
     return torch.gather(sorted_target, 1, sorted_idxs)
 
@@ -349,25 +471,49 @@ def get_bias_disparity_sorted_target(scores,
                                      item_categories_map,
                                      sensitive_attributes,
                                      demo_groups,
-                                     topk=10):
+                                     topk=10,
+                                     lmb=0.5):
     sorted_scores, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
     for attr in sensitive_attributes:
-        attr_bias_ratio = train_bias_ratio[attr]
+        attr_bias_ratio = train_bias_ratio[attr]  # dict that maps demographic groups to bias ratio for each category
 
         for gr, gr_bias_ratio in attr_bias_ratio.items():
-            if gr in demo_groups[attr]:
+            if gr in demo_groups[attr]:  # if at least one user (row) in `scores` belong to the current group
                 gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
+                # each item id is mapped to its respective categories
                 gr_item_cats = item_categories_map[gr_idxs].view(-1, item_categories_map.shape[-1])
+                # each category is mapped to its bias in training and the mean is taken over the categories of each item
                 gr_mean_bias = torch.nanmean(gr_bias_ratio[gr_item_cats], dim=1).nan_to_num(0)
                 target[demo_groups[attr] == gr, :] += gr_mean_bias.view(-1, scores.shape[1]).to(target.device)
 
     target /= len(sensitive_attributes)
 
-    mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
-    target[:] = 0
-    target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
+    # mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
+
+    mask_topk = []
+    for score, row in zip(sorted_scores, target):
+        # candidated items
+        low_bias_items = (row < 1).nonzero().squeeze()[:topk]
+        last_low_bias = low_bias_items.max()
+        # we take the temporary target with the bias scores until the last topk-th item with low bias
+        _row_slice, _score_slice = row[:(last_low_bias + 1)], score[:(last_low_bias + 1)]
+        _score_slice_min, _row_slice_min = _score_slice.min(), _row_slice.min()
+        # the scores of the model are min-max normalized with min and max of the bias scores
+        _score_slice_std = (_score_slice - _score_slice_min) / (_score_slice.max() - _score_slice_min)
+        _score_row_scaled = _score_slice_std * (_row_slice.max() - _row_slice_min) + _row_slice_min
+
+        # then the scaled scores are divided by the bias scores, low bias score and high scale score result in high rank
+        _ranks = _score_row_scaled / _row_slice
+        _ranks_min, _ranks_max = _ranks[low_bias_items].min(), _ranks[low_bias_items].max()
+        # depending on `lmb` the low bias items are "boosted" with a value such that more low bias items are selected
+        _ranks[low_bias_items] += (_ranks_max - _ranks_min + 0.01) * lmb
+
+        print(low_bias_items)
+
+        mask_topk.append(torch.topk(_ranks, k=topk)[1])
+    mask_topk = torch.stack(mask_topk)
 
     # mask_topk = []
     # for row in target:
