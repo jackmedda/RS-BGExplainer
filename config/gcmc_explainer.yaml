@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 5100 # 1200 for NDCGApprox
+cf_learning_rate: 5000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -26,7 +26,7 @@ cf_topk: 10
 # fair_beta: 0.5
 # FairNDCGApproxLoss
 fair_beta: 0.5
-dropout_prob: 0.0
+dropout_prob: 0.1
 
 # hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
 fair_target_lambda: 0.90

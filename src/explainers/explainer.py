@@ -233,7 +233,7 @@ class BGExplainer:
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
                 if epoch == 0:
                     first_fair_loss = fair_loss
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, first_fair_loss)
 
             print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
@@ -263,6 +263,8 @@ class BGExplainer:
         # compute differentiable permutation of adj matrix
         # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
         cf_scores = self.get_scores(self.cf_model, *self.scores_args, pred=False)
+        # remove neginf from output
+        cf_scores = torch.nan_to_num(cf_scores, neginf=(torch.min(cf_scores[~torch.isinf(cf_scores)]) - 1).item())
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
 
         # target when Silvestri et al. method is used
@@ -510,9 +512,9 @@ def get_bias_disparity_sorted_target(scores,
         # depending on `lmb` the low bias items are "boosted" with a value such that more low bias items are selected
         _ranks[low_bias_items] += (_ranks_max - _ranks_min + 0.01) * lmb
 
-        print(low_bias_items)
-
         mask_topk.append(torch.topk(_ranks, k=topk)[1])
+        print("\n", low_bias_items)
+        print(mask_topk[-1])
     mask_topk = torch.stack(mask_topk)
 
     # mask_topk = []

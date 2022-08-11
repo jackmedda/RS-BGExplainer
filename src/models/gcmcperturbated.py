@@ -220,9 +220,6 @@ class GCMCPerturbated(GeneralRecommender):
         """
         adj = self.support[0]
 
-        # remove neginf from output
-        output = torch.nan_to_num(output, neginf=(torch.min(output[~torch.isinf(output)]) - 1).item())
-
         # activate only if top-k is equal
         if self.pred_same:
             topk_dist = torch.tensor([dist(y_orig, y_new) for y_orig, y_new in zip(y_pred_orig_top_k, y_pred_new_actual_top_k)])

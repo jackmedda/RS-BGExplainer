@@ -863,7 +863,7 @@ parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1, 1],
                     help="follows the order ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args(r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3 7".split())
+args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3 7".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
