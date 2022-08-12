@@ -931,7 +931,7 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": -1}
+args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 0}
 
 # %%
 pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)

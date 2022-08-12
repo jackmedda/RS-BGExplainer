@@ -355,7 +355,7 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         self.temperature = temperature
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        _input = torch.nn.ReLU()(_input) / self.temperature
+        _input_temp = torch.nn.ReLU()(_input) / self.temperature
 
         def approx_ranks(inp):
             shape = inp.shape[1]
@@ -379,6 +379,6 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
             dcg = torch.sum(gains * discounts, dim=-1, keepdim=True)
             return dcg * inverse_max_dcg(_target)
 
-        ranks = approx_ranks(_input)
+        ranks = approx_ranks(_input_temp)
 
         return -ndcg(target, ranks)

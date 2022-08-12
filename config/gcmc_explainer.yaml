@@ -5,11 +5,11 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 5000 # 1200 for NDCGApprox
+cf_learning_rate: 2000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
-user_batch_exp: 1
+user_batch_exp: 32
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
@@ -26,15 +26,15 @@ cf_topk: 10
 # fair_beta: 0.5
 # FairNDCGApproxLoss
 fair_beta: 0.5
-dropout_prob: 0.1
+dropout_prob: 0.3
 
 # hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
-fair_target_lambda: 0.90
+fair_target_lambda: 0.4
 
 # device: cpu
 
 # It explains the predictions for all the users in the dataset on a single graph
-group_explain: False
+group_explain: True
 group_explain_by:
 
 
@@ -54,7 +54,7 @@ only_subgraph: False
 # if to use fairness loss
 explain_fairness: True
 # uses FairNDCGApprox instead of FairBD
-explain_fairness_NDCGApprox: True
+explain_fairness_NDCGApprox: False
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
 

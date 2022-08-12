@@ -429,7 +429,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                  sensitive_attributes: Iterable[str],
                  topk=10,
                  lmb=0.5,
-                 size_average=None, reduce=None, reduction: str = 'mean', margin=0.0) -> None:
+                 size_average=None, reduce=None, reduction: str = 'mean', margin=0.1) -> None:
         super(BiasDisparityLoss, self).__init__(size_average, reduce, reduction)
 
         self.train_bias_ratio = train_bias_ratio
@@ -447,7 +447,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                                                                           demo_groups,
                                                                           topk=self.topk)
 
-        return -(sorted_target * sorted_input).mean(dim=1)
+        return (sorted_target * sorted_input - sorted_input.max() - self.margin).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,
@@ -465,7 +465,7 @@ def get_bias_disparity_target_NDCGApprox(scores,
                                                                      topk=topk,
                                                                      lmb=lmb)
 
-    return torch.gather(sorted_target, 1, sorted_idxs)
+    return torch.gather(sorted_target, 1, torch.argsort(sorted_idxs))
 
 
 def get_bias_disparity_sorted_target(scores,
@@ -474,7 +474,8 @@ def get_bias_disparity_sorted_target(scores,
                                      sensitive_attributes,
                                      demo_groups,
                                      topk=10,
-                                     lmb=0.5):
+                                     lmb=0.5,
+                                     offset=0.05):
     sorted_scores, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
@@ -501,10 +502,22 @@ def get_bias_disparity_sorted_target(scores,
         last_low_bias = low_bias_items.max()
         # we take the temporary target with the bias scores until the last topk-th item with low bias
         _row_slice, _score_slice = row[:(last_low_bias + 1)], score[:(last_low_bias + 1)]
+
         _score_slice_min, _row_slice_min = _score_slice.min(), _row_slice.min()
         # the scores of the model are min-max normalized with min and max of the bias scores
         _score_slice_std = (_score_slice - _score_slice_min) / (_score_slice.max() - _score_slice_min)
         _score_row_scaled = _score_slice_std * (_row_slice.max() - _row_slice_min) + _row_slice_min
+
+        # row slice values are rounded to force the "low bias" and "high bias" in this way:
+        # case 1: row_slice < (1 - offset) = 0.5
+        # case 2: row_slice > (1 + offset) = 1.5 .. 2.0 .. (depending if it is grater than 1 + offset or 1.5 etc)
+        # case 3: row_slice >= (1 - offset) and <= (1 + offset) = 1.0
+        # case_1 = _row_slice < (1 - offset)
+        # case_2 = _row_slice > (1 + offset)
+        # case_3 = ~(case_1 | case_2)
+        # _row_slice[case_1] = 0.5
+        # _row_slice[case_2] = torch.ceil_(_row_slice[case_2] * 2) / 2
+        # _row_slice[case_3] = 1
 
         # then the scaled scores are divided by the bias scores, low bias score and high scale score result in high rank
         _ranks = _score_row_scaled / _row_slice
@@ -513,8 +526,6 @@ def get_bias_disparity_sorted_target(scores,
         _ranks[low_bias_items] += (_ranks_max - _ranks_min + 0.01) * lmb
 
         mask_topk.append(torch.topk(_ranks, k=topk)[1])
-        print("\n", low_bias_items)
-        print(mask_topk[-1])
     mask_topk = torch.stack(mask_topk)
 
     # mask_topk = []
