@@ -127,7 +127,7 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
         pref_data_all[e_type] = pref_data
 
         if not pref_data.empty:
-            rec_bias_ratio = utils.generate_bias_ratio(
+            rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
                 _train_data,
                 config,
                 pred_col='cf_topk_pred',
@@ -142,7 +142,7 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
                 pref_data_GCMC = pd.read_csv(os.path.join(script_path, 'pref_data_GCMC_original.csv'))
                 pref_data_all["GCMC"] = pref_data_GCMC
 
-                rec_orig_bias = utils.generate_bias_ratio(
+                rec_orig_bias, rec_orig_pref = utils.generate_bias_ratio(
                     _train_data,
                     config,
                     pred_col='topk_pred',
@@ -351,7 +351,7 @@ def extract_all_exp_bd_data(_exp_paths, train_bias, _train_data):
         n_users_data[e_type] = {}
         topk_dist[e_type] = []
         for n_del, gr_df in tqdm.tqdm(data_df.groupby('n_del_edges'), desc="Extracting BD from each explanation"):
-            rec_bias_ratio = utils.generate_bias_ratio(
+            rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
                 _train_data,
                 config,
                 pred_col='cf_topk_pred',
@@ -506,7 +506,6 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
 
                 df_exp_plot_perc = df_exp_plot.copy()
                 norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot_perc['# Del Edges'].max())
-                df_exp_plot_perc['# Del Edges'].map(norm)
 
                 print(df_exp_plot)
 
@@ -538,9 +537,18 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                 gs = plt.GridSpec(12, 6)
 
                 ax_marg_x = g.fig.add_subplot(gs[1, :-1])
+                fake_ax = g.fig.add_subplot(gs[0, :-1])
+                fake_ax.set_visible(False)
 
                 sm = plt.cm.ScalarMappable(cmap=palette, norm=norm)
                 plt.colorbar(cax=ax_marg_x, mappable=sm, orientation='horizontal')
+
+                cbar_xticks = [f"{x * 100:.2f}%" for x in np.linspace(
+                    0.,
+                    max_del_edges / train_data.dataset.inter_num,
+                    len(ax_marg_x.get_xticklabels())
+                )]
+                ax_marg_x.set_xticklabels(cbar_xticks)
 
                 plt.tight_layout()
                 plt.savefig(os.path.join(plots_path, f'{d_gr}#dumbbell_over_del_edges_{e_type}.png'))
@@ -906,7 +914,7 @@ for c_id, exp_t, old_exp_t in zip(
         exp_paths[exp_t] = os.path.join(script_path, 'explanations', dataset.dataset_name,
                                         old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(batch_exp_s), str(c_id))
 
-train_bias_ratio = utils.generate_bias_ratio(
+train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
     train_data,
     config,
     sensitive_attrs=config['sensitive_attributes'],

@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 2000 # 1200 for NDCGApprox
+cf_learning_rate: 1000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -29,7 +29,7 @@ fair_beta: 0.5
 dropout_prob: 0.3
 
 # hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
-fair_target_lambda: 0.4
+fair_target_lambda: 1.0
 
 # device: cpu
 
@@ -54,7 +54,7 @@ only_subgraph: False
 # if to use fairness loss
 explain_fairness: True
 # uses FairNDCGApprox instead of FairBD
-explain_fairness_NDCGApprox: False
+explain_fairness_NDCGApprox: True
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
 

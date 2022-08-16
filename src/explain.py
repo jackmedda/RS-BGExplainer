@@ -127,7 +127,7 @@ def group_explain(config, model, test_data, base_exps_file, **kwargs):
         user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
 
     if not config["explain_fairness"]:
-        kwargs['train_bias_ratio'] = None
+        kwargs['train_bias_ratio'], kwargs['train_pref_ratio'] = None, None
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
@@ -190,7 +190,7 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
     )
 
     if not config["explain_fairness"]:
-        kwargs['train_bias_ratio'] = None
+        kwargs['train_bias_ratio'], kwargs['train_pref_ratio'] = None, None
 
     loaded_scores, field2token_id = None, None
     loaded_scores_path = os.path.join(base_exps_file, os.path.splitext(args.model_file)[0] + '.pkl')
@@ -434,12 +434,19 @@ if __name__ == "__main__":
 
                                                                                           args.explainer_config_file)
     # measure bias ratio in training set
-    train_bias_ratio = utils.generate_bias_ratio(
+    train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
         train_data,
         config,
         sensitive_attrs=config['sensitive_attributes'],
         mapped_keys=False
     )
+
+    item_df = pd.DataFrame({
+        'item_id': train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
+        'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
+    })
+    item_categories_map = train_data.dataset.field2id_token['class']
+    cat_sharing_prob = utils.compute_category_sharing_prob(item_df, len(item_categories_map))
 
     if args.hops_analysis:
         loaded_diam, diam_info = load_diameter_info()
@@ -451,9 +458,27 @@ if __name__ == "__main__":
 
         if not args.load:
             if not config['group_explain']:
-                explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio, verbose=args.verbose)
+                explain(
+                    config,
+                    model,
+                    test_data,
+                    base_exps_filepath,
+                    train_bias_ratio=train_bias_ratio,
+                    train_pref_ratio=train_pref_ratio,
+                    cat_sharing_prob=cat_sharing_prob,
+                    verbose=args.verbose
+                )
             else:
-                group_explain(config, model, test_data, base_exps_filepath, train_bias_ratio=train_bias_ratio, verbose=args.verbose)
+                group_explain(
+                    config,
+                    model,
+                    test_data,
+                    base_exps_filepath,
+                    train_bias_ratio=train_bias_ratio,
+                    train_pref_ratio=train_pref_ratio,
+                    cat_sharing_prob=cat_sharing_prob,
+                    verbose=args.verbose
+                )
         else:
             with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
                 config = pickle.load(config_file)
@@ -475,7 +500,7 @@ if __name__ == "__main__":
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
 
     if not pref_data.empty:
-        rec_bias_ratio = utils.generate_bias_ratio(
+        rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
             train_data,
             config,
             pred_col='topk_pred' if args.bias_orig_pred else 'cf_topk_pred',

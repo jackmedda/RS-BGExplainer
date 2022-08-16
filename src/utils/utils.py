@@ -121,13 +121,25 @@ def get_nx_biadj_matrix(dataset):
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
 
-def compute_uniform_categories_prob(_item_df, _item_categories_map, raw=False):
-    uni_cat_prob = np.zeros(_item_categories_map.shape)
+def compute_uniform_categories_prob(_item_df, n_categories, raw=False):
+    uni_cat_prob = np.zeros(n_categories)
     for cat_list in _item_df['class']:
         if cat_list:
             uni_cat_prob[cat_list] += 1
 
     return uni_cat_prob / (_item_df.shape[0] - 1) if not raw else (uni_cat_prob, (_item_df.shape[0] - 1))
+
+
+def compute_category_sharing_prob(_item_df, n_categories=None, raw=False):
+    if n_categories is None:
+        n_categories = _item_df['class'].to_numpy().flatten().max() + 1
+
+    cat_sharing_prob = np.zeros(n_categories)
+    for cat_list in _item_df['class']:
+        if len(cat_list) > 1:
+            cat_sharing_prob[cat_list] += 1
+
+    return cat_sharing_prob / (_item_df.shape[0] - 1) if not raw else (cat_sharing_prob, (_item_df.shape[0] - 1))
 
 
 def get_degree_matrix(adj):
@@ -263,12 +275,12 @@ def generate_bias_ratio(_train_data,
         history_matrix = np.stack(history_df[pred_col].values)
 
     pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
-    uniform_categories_prob = compute_uniform_categories_prob(item_df, item_categories_map)
+    uniform_categories_prob = compute_uniform_categories_prob(item_df, len(item_categories_map))
 
-    bias_ratio = dict.fromkeys(sensitive_attrs)
+    bias_ratio, pref_ratio = dict.fromkeys(sensitive_attrs), dict.fromkeys(sensitive_attrs)
     for attr, group_map in zip(sensitive_attrs, sensitive_maps):
         group_keys = [group_map[x] for x in range(len(group_map))] if mapped_keys else range(len(group_map))
-        bias_ratio[attr] = dict.fromkeys(group_keys)
+        bias_ratio[attr], pref_ratio[attr] = dict.fromkeys(group_keys), dict.fromkeys(group_keys)
         for demo_group, demo_df in user_df.groupby(attr):
             gr_idx = group_map[demo_group] if mapped_keys else demo_group
 
@@ -281,9 +293,10 @@ def generate_bias_ratio(_train_data,
             group_pref = pref_matrix[group_users, :].sum(dim=0)
             group_history_len = history_len[group_users].sum()
             bias_ratio[attr][gr_idx] = group_pref / group_history_len
+            pref_ratio[attr][gr_idx] = bias_ratio[attr][gr_idx]
             bias_ratio[attr][gr_idx] /= uniform_categories_prob
 
-    return bias_ratio
+    return bias_ratio, pref_ratio
 
 
 def clean_history_matrix(hist_m):
