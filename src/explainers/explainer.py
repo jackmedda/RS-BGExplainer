@@ -705,7 +705,7 @@ def get_bias_disparity_sorted_target(scores,
                                     # take the percentage of distribution of this category for each user
                                     # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
                                     # this means that for each user we can choose maximum 3 items of this cat
-                                    prob = gr_pref_ratio[cat].round(decimals=2)
+                                    prob = gr_pref_ratio[cat].numpy().round(4)
                                     prob_lmb = prob * lmb
                                     p = np.array([1 - prob_lmb if prob_lmb < 1 else 0., prob_lmb if prob_lmb < 1 else 1.])
                                     p /= p.sum()
@@ -773,7 +773,7 @@ def get_bias_disparity_sorted_target(scores,
                 # take the percentage of distribution of this category for each user
                 # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
                 # this means that for each user we can choose maximum 3 items of this cat
-                prob = train_pref_ratio[demo_groups['user_id'], cat].round(decimals=3)
+                prob = train_pref_ratio[demo_groups['user_id'], cat].numpy().round(3)
                 prob_lmb = prob * lmb
                 p = np.array([[1 - p_l, p_l] if p_l < 1 else [0., 1.] for p_l in prob_lmb])
                 p /= p.sum(axis=1)[:, None]
