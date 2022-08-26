@@ -8,6 +8,7 @@ import json
 
 import torch
 import tqdm
+import numpy as np
 import pandas as pd
 import networkx as nx
 import seaborn as sns
@@ -123,6 +124,7 @@ def group_explain(config, model, test_data, base_exps_file, **kwargs):
         for demo_gr, demo_df in user_df.groupby(attr_group):
             if demo_gr != 0:
                 user_data[demo_gr] = torch.tensor(demo_df[config['USER_ID_FIELD']].to_numpy())
+                user_data[demo_gr] = user_data[demo_gr][torch.randperm(user_data[demo_gr].shape[0])]
     else:
         user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
 
@@ -431,15 +433,85 @@ if __name__ == "__main__":
 
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
-
                                                                                           args.explainer_config_file)
-    # measure bias ratio in training set
-    train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
-        train_data,
-        config,
-        sensitive_attrs=config['sensitive_attributes'],
-        mapped_keys=False
+
+    if config['filter_categories'] is not None:
+        filter_cats = config['filter_categories']
+        item_df = pd.DataFrame({
+            'item_id': train_data.dataset.item_feat['item_id'].numpy(),
+            'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
+        })
+
+        if config['filter_categories_mode'] is None or config['filter_categories_mode'] == "random":
+            item_df['class'] = item_df['class'].apply(lambda x: np.random.permutation(x)[:filter_cats])
+        elif config['filter_categories_mode'] == "first":
+            item_df['class'] = item_df['class'].apply(lambda x: x[:1])
+        item_cats = np.stack([np.pad(x, (0, filter_cats - len(x)), mode='constant', constant_values=0) for x in item_df['class']])
+        item_cats = torch.tensor(item_cats, dtype=int)
+
+        filter_plot_str = f"_filter({config['filter_categories']})"
+    else:
+        item_cats = dataset.item_feat['class']
+        filter_plot_str = ""
+
+    n_cats = item_cats.max() + 1
+
+    heat_data = []
+    bar_data = []
+    for x in range(n_cats):
+        x_cats = item_cats[(item_cats == x).any(dim=1)]
+        cat_count = torch.bincount(x_cats.flatten(), minlength=n_cats).numpy() / x_cats.shape[0]
+        heat_data.append(cat_count)
+        bar_data.append(x_cats[(x_cats == torch.tensor([x] + [0] * (x_cats.shape[1] - 1))).all(dim=1), :].shape[0] / x_cats.shape[0])
+    heat_data = np.stack(heat_data).round(2)
+    heat_data[:, 0] = 0
+    heat_data[0] = 0
+
+    g = sns.JointGrid(height=12, space=0.5)
+    g.ax_marg_x.remove()
+    bar_df = pd.DataFrame(zip(dataset.field2id_token['class'], bar_data))
+    sns.barplot(x=1, y=0, data=bar_df, ax=g.ax_marg_y, color="black")
+    g.ax_marg_y.plot([1., 1.], g.ax_marg_y.get_ylim(), 'k--')
+    sns.heatmap(
+        pd.DataFrame(heat_data, index=dataset.field2id_token['class'], columns=dataset.field2id_token['class']),
+        ax=g.ax_joint,
+        center=0,
+        linewidths=.5,
+        annot=True
     )
+
+    g.figure.tight_layout()
+    plt.savefig(f"{config['dataset']}{filter_plot_str}_cats_share_distribution.png", bbox_inches="tight")
+    plt.close()
+
+    bias_pref_kwargs = {'item_cats': item_cats if config['filter_categories'] is not None else None}
+
+    # measure bias ratio in training set
+    if config['target_scope'] == 'group':
+        train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
+            train_data,
+            config,
+            sensitive_attrs=config['sensitive_attributes'],
+            mapped_keys=False,
+            **bias_pref_kwargs
+        )
+    elif config['target_scope'] == 'steck':
+        train_bias_ratio = None
+        train_pref_ratio = utils.generate_steck_pref_ratio(
+            train_data,
+            config,
+            sensitive_attrs=config['sensitive_attributes'],
+            mapped_keys=False,
+            **bias_pref_kwargs
+        )
+    elif config['target_scope'] == 'individual':
+        train_bias_ratio, train_pref_ratio = utils.generate_individual_bias_ratio(
+            train_data,
+            config,
+            **bias_pref_kwargs
+        )
+    else:
+        raise NotImplementedError(f"target_scope = `{config['target_scope']}` is not supported")
 
     item_df = pd.DataFrame({
         'item_id': train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
@@ -447,6 +519,13 @@ if __name__ == "__main__":
     })
     item_categories_map = train_data.dataset.field2id_token['class']
     cat_sharing_prob = utils.compute_category_sharing_prob(item_df, len(item_categories_map))
+    cat_intersharing = utils.compute_category_intersharing_distribution(item_df, len(item_categories_map))
+    attr_cat_distrib = utils.get_category_inter_distribution_over_attrs(
+        train_data,
+        config['sensitive_attributes'],
+        norm=True,
+        **bias_pref_kwargs
+    )
 
     if args.hops_analysis:
         loaded_diam, diam_info = load_diameter_info()
@@ -457,16 +536,25 @@ if __name__ == "__main__":
         base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
 
         if not args.load:
+            kwargs = dict(
+                train_bias_ratio=train_bias_ratio,
+                train_pref_ratio=train_pref_ratio,
+                cat_sharing_prob=cat_sharing_prob,
+                cat_intersharing_distrib=cat_intersharing,
+                attr_cat_distrib=attr_cat_distrib,
+                verbose=args.verbose
+            )
+
+            if config['filter_categories'] is not None:
+                kwargs['item_cats'] = item_cats
+
             if not config['group_explain']:
                 explain(
                     config,
                     model,
                     test_data,
                     base_exps_filepath,
-                    train_bias_ratio=train_bias_ratio,
-                    train_pref_ratio=train_pref_ratio,
-                    cat_sharing_prob=cat_sharing_prob,
-                    verbose=args.verbose
+                    **kwargs
                 )
             else:
                 group_explain(
@@ -474,14 +562,14 @@ if __name__ == "__main__":
                     model,
                     test_data,
                     base_exps_filepath,
-                    train_bias_ratio=train_bias_ratio,
-                    train_pref_ratio=train_pref_ratio,
-                    cat_sharing_prob=cat_sharing_prob,
-                    verbose=args.verbose
+                    **kwargs
                 )
         else:
             with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
                 config = pickle.load(config_file)
+
+        if config['filter_categories'] is not None:
+            torch.save(item_cats, os.path.join(base_exps_filepath, 'item_cats.pt'))
 
         exps_data = utils.load_exps_file(base_exps_filepath)
         save_exps_df(base_exps_filepath, exps_data)

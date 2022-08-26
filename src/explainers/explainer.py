@@ -20,8 +20,6 @@ import src.utils as utils
 from src.models import GCMCPerturbated
 
 import subprocess
-import os
-
 from memory_profiler import profile
 
 
@@ -87,6 +85,8 @@ class BGExplainer:
         self.train_bias_ratio = kwargs.get("train_bias_ratio", None)
         self.train_pref_ratio = kwargs.get("train_pref_ratio", None)
         self.cat_sharing_prob = kwargs.get("cat_sharing_prob", None)
+        self.cat_intersharing = kwargs.get("cat_intersharing_distrib", None)
+        self.attr_cat_distrib = kwargs.get("attr_cat_distrib", None)
         self.sensitive_attributes = config['sensitive_attributes']
 
         self.scores_args, self.topk_args = None, None
@@ -94,10 +94,18 @@ class BGExplainer:
 
         self.verbose = kwargs.get("verbose", False)
 
+        self.target_scope = config['target_scope']
         self.group_explain = config['group_explain']
         self.user_batch_exp = config['user_batch_exp']
 
         self.fair_target_lambda = config['fair_target_lambda']
+        self.intershare_eta = config['intershare_eta']
+        self.knapsack = config['knapsack']
+
+        if config['filter_categories'] is not None:
+            self.item_categories_map = kwargs.get('item_cats', None)
+        else:
+            self.item_categories_map = self.dataset.item_feat['class']
 
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
@@ -207,12 +215,25 @@ class BGExplainer:
 
         for epoch in iter_epochs:
             if self.group_explain:
-                iter_data = batched_data.split(self.user_batch_exp)
+                if self.knapsack:
+                    iter_data = batched_data[torch.randperm(batched_data.shape[0])].split(self.user_batch_exp)
+                    knap_counts = {}
+                    for attr in self.train_pref_ratio:
+                        knap_counts[attr] = {}
+                        user_count = torch.bincount(self.dataset.user_feat[attr])
+                        for gr, gr_data in self.train_pref_ratio[attr].items():
+                            if gr_data is not None:
+                                knap_counts[attr][gr] = (user_count[gr] * topk * gr_data).round().int()
+                            else:
+                                knap_counts[attr][gr] = None
+                else:
+                    iter_data = batched_data.split(self.user_batch_exp)
+                    knap_counts = None
                 for batch_idx, batch_user in enumerate(iter_data):
                     self.user_id = batch_user
                     batched_data_epoch = BGExplainer.prepare_batched_data(batch_user, data)
                     self.compute_model_predictions(batched_data_epoch, topk)
-                    new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
+                    new_example, loss_total, fair_loss = self.train(epoch, topk=topk, knap_counts=knap_counts)
                     if epoch == 0 and batch_idx == 0:
                         first_fair_loss = fair_loss
 
@@ -235,7 +256,6 @@ class BGExplainer:
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
                 if epoch == 0:
                     first_fair_loss = fair_loss
-                # import pdb; pdb.set_trace()
                 best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, first_fair_loss)
 
             print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
@@ -243,7 +263,7 @@ class BGExplainer:
         return best_cf_example, self.model_scores.detach().cpu().numpy()
 
     # @profile
-    def train(self, epoch, topk=10):
+    def train(self, epoch, topk=10, knap_counts=None):
         """
         Training procedure of explanation
         :param epoch:
@@ -274,7 +294,7 @@ class BGExplainer:
         relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], self.model_topk_idx] = 1
 
         kwargs = {}
-        if self.train_bias_ratio is not None:  # prepare the loss function for fairness purposes
+        if self.train_pref_ratio is not None:  # prepare the loss function for fairness purposes
             user_feat = self.dataset.user_feat
             user_id_mask = self.user_id.unsqueeze(-1) if self.user_id.dim() == 0 else self.user_id
             user_feat = {k: feat[user_id_mask] for k, feat in user_feat.interaction.items()}
@@ -284,27 +304,125 @@ class BGExplainer:
                     "fair_loss_f": utils.NDCGApproxLoss(),
                     "target": get_bias_disparity_target_NDCGApprox(
                         cf_scores,
-                        self.train_bias_ratio,
                         self.train_pref_ratio,
-                        self.dataset.item_feat['class'],
+                        self.item_categories_map,
                         self.sensitive_attributes,
                         user_feat,
+                        target_scope=self.target_scope,
                         topk=topk,
-                        lmb=self.fair_target_lambda
+                        lmb=self.fair_target_lambda,
+                        cat_sharing_prob=self.cat_sharing_prob,
+                        cat_intersharing=self.cat_intersharing,
+                        attr_cat_distrib=self.attr_cat_distrib,
+                        eta=self.intershare_eta,
+                        knap_counts=knap_counts
                     )
                 }
             else:
                 kwargs = {
                     "fair_loss_f": BiasDisparityLoss(
-                        self.train_bias_ratio,
                         self.train_pref_ratio,
-                        self.dataset.item_feat['class'],
+                        self.item_categories_map,
                         self.sensitive_attributes,
+                        target_scope=self.target_scope,
                         topk=topk,
-                        lmb=self.fair_target_lambda
+                        lmb=self.fair_target_lambda,
+                        cat_sharing_prob=self.cat_sharing_prob,
+                        cat_intersharing=self.cat_intersharing,
+                        attr_cat_distrib=self.attr_cat_distrib,
+                        eta=self.intershare_eta,
+                        knap_counts=knap_counts
                     ),
                     "target": user_feat
                 }
+
+        ###############################################
+        debug = False
+        if debug:
+            target = []
+            cf_topk_pred_idx_np = cf_topk_pred_idx.cpu().numpy()
+            for i, l_t in enumerate(kwargs['target'].cpu().numpy()):
+                recs = l_t.nonzero()[0]
+                if len(recs) < topk:
+                    l_ctp = cf_topk_pred_idx_np[i]
+                    l_ctp_mask = (l_ctp[:, None] == np.intersect1d(l_ctp, recs)).any(axis=1)
+                    target.append(np.concatenate([recs, l_ctp[~l_ctp_mask]])[:topk].tolist())
+                else:
+                    target.append(recs.tolist())
+            # target = pd.DataFrame(kwargs['target'].nonzero().cpu().numpy())
+            # target[0] = target[0].map(dict(zip(range(self.user_id.shape[0]), self.user_id.numpy())))
+            # target = target.groupby(0).apply(lambda _df: pd.Series({1: _df[1].tolist()})).reset_index()
+            # target.rename(columns={0: 'user_id', 1: 'cf_topk_pred'}, inplace=True)
+            target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
+            class a: pass
+            a.dataset = self.dataset
+            config = {'USER_ID_FIELD': 'user_id', 'ITEM_ID_FIELD': 'item_id'}
+            old_pred = pd.DataFrame(zip(self.user_id.numpy(), cf_topk_pred_idx.cpu().numpy())).rename(columns={0: 'user_id', 1: 'cf_topk_pred'})
+            train_bias_user, _ = utils.generate_bias_ratio(a,
+                                                           config,
+                                                           sensitive_attrs=self.sensitive_attributes,
+                                                           user_subset=self.user_id.numpy())
+
+            old_rec_bias, _ = utils.generate_bias_ratio(a,
+                                                        config,
+                                                        sensitive_attrs=self.sensitive_attributes,
+                                                        history_matrix=old_pred)
+
+            rec_bias, _ = utils.generate_bias_ratio(a,
+                                                    config,
+                                                    sensitive_attrs=self.sensitive_attributes,
+                                                    history_matrix=target_df)
+            bd_old = utils.compute_bias_disparity(train_bias_user, old_rec_bias, a)
+            bd_new = utils.compute_bias_disparity(train_bias_user, rec_bias, a)
+
+            n_cat = bd_old['gender']['M'].shape[0]
+            m_df = pd.DataFrame(zip(
+                np.abs(bd_old['gender']['M'].numpy()) - np.abs(bd_new['gender']['M'].numpy()),
+                list(range(n_cat))
+            ))
+            f_df = pd.DataFrame(zip(
+                np.abs(bd_old['gender']['F'].numpy()) - np.abs(bd_new['gender']['F'].numpy()),
+                list(range(n_cat))
+            ))
+
+            import seaborn as sns
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
+            sns.barplot(y=0, x=1, data=m_df, ax=ax[0])
+            sns.barplot(y=0, x=1, data=f_df, ax=ax[1])
+            plt.show()
+            plt.close()
+
+            fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
+            i = 0
+            for gr, gr_s in enumerate(self.dataset.field2id_token['gender']):
+                gr_mask = user_feat['gender'] == gr
+                if not gr_mask.any():
+                    continue
+
+                new_items = torch.stack([torch.repeat_interleave(self.user_id[gr_mask], topk), torch.tensor(target)[gr_mask].flatten()])
+                n_users = (self.user_id[gr_mask].shape[0] * topk)
+                new_pref = torch.bincount(self.item_categories_map[new_items.T].flatten()) / n_users
+                new_pref[0] = 0
+                old_pref = self.train_pref_ratio['gender']
+
+                pref_df = pd.DataFrame(zip(
+                    np.concatenate([old_pref[gr].numpy(), new_pref.numpy()]),
+                    list(range(n_cat)) + list(range(n_cat)),
+                    ['old'] * n_cat + ['new'] * n_cat
+                ))
+
+                sns.barplot(x=1, y=0, hue=2, data=pref_df, ax=ax[i])
+                i += 1
+
+            # kkk = (self.item_categories_map[new_items.T] == 5).nonzero()[:,:2]
+            # self.item_categories_map[new_items.T][kkk[:, 0], kkk[:, 1]]
+
+            plt.show(block=False)
+            plt.pause(1)
+            import pdb; pdb.set_trace()
+            plt.close()
+        ###############################################
 
         loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj, cf_dist = self.cf_model.loss(
             cf_scores,
@@ -428,181 +546,259 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
     __constants__ = ['reduction']
 
     def __init__(self,
-                 train_bias_ratio: dict,
+                 train_pref_ratio: dict,
                  item_categories_map: torch.Tensor,
                  sensitive_attributes: Iterable[str],
+                 target_scope="group",
                  topk=10,
                  lmb=0.5,
+                 eta=0.1,
+                 cat_sharing_prob=None,
+                 cat_intersharing=None,
+                 attr_cat_distrib=None,
+                 knap_counts=None,
                  size_average=None, reduce=None, reduction: str = 'mean', margin=0.1) -> None:
         super(BiasDisparityLoss, self).__init__(size_average, reduce, reduction)
 
-        self.train_bias_ratio = train_bias_ratio
+        self.train_pref_ratio = train_pref_ratio
         self.item_categories_map = item_categories_map
         self.sensitive_attributes = sensitive_attributes
+        self.target_scope = target_scope
         self.topk = topk
+        self.lmb = lmb
+        self.eta = eta
+        self.cat_sharing_prob = cat_sharing_prob
+        self.cat_intersharing = cat_intersharing
+        self.attr_cat_distrib = attr_cat_distrib
+        self.knap_counts = knap_counts
 
         self.margin = margin
 
     def forward(self, _input: torch.Tensor, demo_groups: torch.Tensor) -> torch.Tensor:
         sorted_target, sorted_input, _ = get_bias_disparity_sorted_target(_input,
-                                                                          self.train_bias_ratio,
+                                                                          self.train_pref_ratio,
                                                                           self.item_categories_map,
                                                                           self.sensitive_attributes,
                                                                           demo_groups,
-                                                                          topk=self.topk)
+                                                                          target_scope=self.target_scope,
+                                                                          topk=self.topk,
+                                                                          lmb=self.lmb,
+                                                                          eta=self.eta,
+                                                                          cat_sharing_prob=self.cat_sharing_prob,
+                                                                          cat_intersharing=self.cat_intersharing,
+                                                                          attr_cat_distrib=self.attr_cat_distrib,
+                                                                          knap_counts=self.knap_counts)
 
-        return (sorted_target * sorted_input - sorted_input.max() - self.margin).mean(dim=1)
+        return (-sorted_target * sorted_input).mean(dim=1)
 
 
 def get_bias_disparity_target_NDCGApprox(scores,
-                                         train_bias_ratio,
                                          train_pref_ratio,
                                          item_categories_map,
                                          sensitive_attributes,
                                          demo_groups,
+                                         target_scope="group",
                                          topk=10,
                                          lmb=0.5,
-                                         cat_sharing_prob=None):
+                                         eta=0.1,
+                                         cat_sharing_prob=None,
+                                         cat_intersharing=None,
+                                         attr_cat_distrib=None,
+                                         knap_counts=None):
     sorted_target, _, sorted_idxs = get_bias_disparity_sorted_target(scores,
-                                                                     train_bias_ratio,
                                                                      train_pref_ratio,
                                                                      item_categories_map,
                                                                      sensitive_attributes,
                                                                      demo_groups,
+                                                                     target_scope=target_scope,
                                                                      topk=topk,
                                                                      lmb=lmb,
-                                                                     cat_sharing_prob=cat_sharing_prob)
+                                                                     eta=eta,
+                                                                     cat_sharing_prob=cat_sharing_prob,
+                                                                     cat_intersharing=cat_intersharing,
+                                                                     attr_cat_distrib=attr_cat_distrib,
+                                                                     knap_counts=knap_counts)
 
     return torch.gather(sorted_target, 1, torch.argsort(sorted_idxs))
 
 
 def get_bias_disparity_sorted_target(scores,
-                                     train_bias_ratio,
                                      train_pref_ratio,
                                      item_categories_map,
                                      sensitive_attributes,
                                      demo_groups,
+                                     target_scope="group",
                                      topk=10,
-                                     lmb=0.5,
+                                     lmb=1.2,
+                                     eta=0.1,
                                      offset=0.05,
-                                     cat_sharing_prob=None):
+                                     cat_sharing_prob=None,
+                                     cat_intersharing=None,
+                                     attr_cat_distrib=None,
+                                     knap_counts=None):
     sorted_scores, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
-    for attr in sensitive_attributes:
-        attr_pref_ratio = train_pref_ratio[attr]  # dict that maps demographic groups to pref ratio for each category
-        assert len(sensitive_attributes) == 1, "Not supported with multiple sensitive attributes at once"
-        for gr, gr_pref_ratio in attr_pref_ratio.items():
-            if gr in demo_groups[attr]:
-                gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
-                gr_target = torch.zeros_like(gr_idxs, dtype=torch.float)
+    if target_scope == "group":
+        for attr in sensitive_attributes:
+            attr_pref_ratio = train_pref_ratio[attr]  # dict that maps demographic groups to pref ratio for each category
+            assert len(sensitive_attributes) == 1, "Not supported with multiple sensitive attributes at once"
 
-                cat_order = torch.randperm(gr_pref_ratio.shape[0])  # random order of cat to avoid attention on first
-                for cat in cat_order:
-                    if not torch.isnan(gr_pref_ratio[cat]):
-                        # counts how many ones are already in the target of each user
-                        one_counts = torch.count_nonzero((gr_target > 0), dim=1).cpu().numpy()
-                        count_df = pd.DataFrame(
-                            zip(np.arange(one_counts.shape[0]), one_counts),
-                            columns=["user", "count"]
-                        )
+            cat_order = torch.randperm(item_categories_map.max() + 1)  # random order of cat to avoid attention on first
+            for gr, gr_pref_ratio in attr_pref_ratio.items():
+                if gr in demo_groups[attr]:
+                    gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
+                    gr_target = torch.zeros_like(gr_idxs, dtype=torch.float)
 
-                        # generate dataframe with all items with category cat in the list of scores of the current users
-                        rank_df = pd.DataFrame(
-                            (item_categories_map[gr_idxs] == cat).nonzero().detach().cpu().numpy(),
-                            columns=['user', 'rank', 'cat']
-                        )
+                    if knap_counts is not None:
+                        for i in range(gr_idxs.shape[0]):
+                            i_cats = item_categories_map[gr_idxs[i]]
+                            one_counts = 0
 
-                        df = rank_df.join(count_df.set_index("user"), on="user")
-                        # if some users have the topk full => don't add
-                        df_filt = df[df["count"] < topk]
+                            if not (knap_counts[attr][gr] > 0).any():
+                                continue
 
-                        if not df_filt.empty:
-                            df_filt = df_filt.sort_values("rank")
-                            # take the percentage of distribution of this category for each user
-                            # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
-                            # this means that for each user we can choose maximum 3 items of this cat
-                            prob = gr_pref_ratio[cat].round(decimals=2)
-                            p = np.array([1 - prob, prob])
-                            p /= p.sum()
-                            # if the probability is too low for n_target to be 1, then n_target becomes 1 depending
-                            # on a random choice based on the probability itself
-                            n_target = max(int(prob * topk), np.random.choice([0, 1], p=p))
-                            # n_target is reduced for a category `cat` if many items share `cat` with other categories
-                            if cat_sharing_prob is not None:
-                                n_target = int(n_target * (1 - cat_sharing_prob[cat]))
-                            target_items = df_filt.iloc[:(n_target * one_counts.shape[0])].groupby("user").apply(
-                                lambda _df: _df.take(np.arange(min(_df.shape[0], topk - _df["count"].head(1).values)))
-                            )
-                            target_items = torch.tensor(target_items[["user", "rank"]].values)
+                            for pos, (j, j_cat) in enumerate(zip(gr_idxs[i], i_cats)):
+                                safe_cats = j_cat[j_cat.nonzero()]
+                                if (knap_counts[attr][gr][safe_cats] > 0).all():
+                                    knap_counts[attr][gr][safe_cats] -= 1
+                                    gr_target[i, pos] = 1
+                                    one_counts += 1
 
-                            gr_target[target_items[:, 0], target_items[:, 1]] = 1
-                        else:
-                            break
+                                if one_counts == topk:
+                                    break
+                    else:
+                        mean_intersharing = None
+                        if attr_cat_distrib is not None and cat_intersharing is not None:
+                            mean_intersharing = np.nanmean(attr_cat_distrib[attr][gr] * cat_intersharing, axis=1)
+                            mean_intersharing = mean_intersharing.sum() / (cat_intersharing.shape[0] - 1)
 
-                target[demo_groups[attr] == gr, :] = gr_target
+                        for cat in cat_order:
+                            if not torch.isnan(gr_pref_ratio[cat]):
+                                # counts how many ones are already in the target of each user
+                                one_counts = torch.count_nonzero((gr_target > 0), dim=1).cpu().numpy()
+                                count_df = pd.DataFrame(
+                                    zip(np.arange(one_counts.shape[0]), one_counts),
+                                    columns=["user", "count"]
+                                )
 
-    # target = torch.zeros_like(sorted_idxs, dtype=torch.float)
-    # for attr in sensitive_attributes:
-    #     attr_bias_ratio = train_bias_ratio[attr]  # dict that maps demographic groups to bias ratio for each category
-    #
-    #     for gr, gr_bias_ratio in attr_bias_ratio.items():
-    #         if gr in demo_groups[attr]:  # if at least one user (row) in `scores` belong to the current group
-    #             gr_idxs = sorted_idxs[demo_groups[attr] == gr, :]
-    #             # each item id is mapped to its respective categories
-    #             gr_item_cats = item_categories_map[gr_idxs].view(-1, item_categories_map.shape[-1])
-    #             # each category is mapped to its bias in training and the mean is taken over the categories of each item
-    #             gr_mean_bias = torch.nanmean(gr_bias_ratio[gr_item_cats], dim=1).nan_to_num(0)
-    #             target[demo_groups[attr] == gr, :] += gr_mean_bias.view(-1, scores.shape[1]).to(target.device)
-    #             import pdb; pdb.set_trace()
-    #
-    # target /= len(sensitive_attributes)
-    #
-    # # mask_topk = torch.stack([(row < 1).nonzero().squeeze()[:topk] for row in target])
-    #
-    # import pdb; pdb.set_trace()
-    #
-    # mask_topk = []
-    # for score, row in zip(sorted_scores, target):
-    #     # candidated items
-    #     low_bias_items = (row < 1).nonzero().squeeze()[:topk]
-    #     last_low_bias = low_bias_items.max()
-    #     # we take the temporary target with the bias scores until the last topk-th item with low bias
-    #     _row_slice, _score_slice = row[:(last_low_bias + 1)], score[:(last_low_bias + 1)]
-    #
-    #     _score_slice_min, _row_slice_min = _score_slice.min(), _row_slice.min()
-    #     # the scores of the model are min-max normalized with min and max of the bias scores
-    #     _score_slice_std = (_score_slice - _score_slice_min) / (_score_slice.max() - _score_slice_min)
-    #     _score_row_scaled = _score_slice_std * (_row_slice.max() - _row_slice_min) + _row_slice_min
-    #
-    #     # row slice values are rounded to force the "low bias" and "high bias" in this way:
-    #     # case 1: row_slice < (1 - offset) = 0.5
-    #     # case 2: row_slice > (1 + offset) = 1.5 .. 2.0 .. (depending if it is grater than 1 + offset or 1.5 etc)
-    #     # case 3: row_slice >= (1 - offset) and <= (1 + offset) = 1.0
-    #     # case_1 = _row_slice < (1 - offset)
-    #     # case_2 = _row_slice > (1 + offset)
-    #     # case_3 = ~(case_1 | case_2)
-    #     # _row_slice[case_1] = 0.5
-    #     # _row_slice[case_2] = torch.ceil_(_row_slice[case_2] * 2) / 2
-    #     # _row_slice[case_3] = 1
-    #
-    #     # then the scaled scores are divided by the bias scores, low bias score and high scale score result in high rank
-    #     _ranks = _score_row_scaled / _row_slice
-    #     _ranks_min, _ranks_max = _ranks[low_bias_items].min(), _ranks[low_bias_items].max()
-    #     # depending on `lmb` the low bias items are "boosted" with a value such that more low bias items are selected
-    #     _ranks[low_bias_items] += (_ranks_max - _ranks_min + 0.01) * lmb
-    #
-    #     mask_topk.append(torch.topk(_ranks, k=topk)[1])
-    # mask_topk = torch.stack(mask_topk)
-    #
-    # # mask_topk = []
-    # # for row in target:
-    # #     low_bias_topk = (row < 1).nonzero().squeeze()[:topk]
-    # #     items_until_last_low = torch.arange(low_bias_topk.max() + 1).to(target.device)
-    # #     mask_topk.append(items_until_last_low[~items_until_last_low.unsqueeze(1).eq(low_bias_topk).any(-1)])
-    # # mask_topk = torch.stack(mask_topk)
-    #
-    # target[:] = 0
-    # target[torch.arange(target.shape[0])[:, None], mask_topk] = 1
+                                # generate dataframe with all items with category cat in the list of scores of the current users
+                                rank_df = pd.DataFrame(
+                                    (item_categories_map[gr_idxs] == cat).nonzero().detach().cpu().numpy(),
+                                    columns=['user', 'rank', 'cat']
+                                )
+
+                                df = rank_df.join(count_df.set_index("user"), on="user")
+                                # if some users have the topk full => don't add
+                                df_filt = df[df["count"] < topk]
+
+                                if not df_filt.empty:
+                                    df_filt = df_filt.sort_values("rank")
+
+                                    # array(['[PAD]',
+                                    #        'Animation', "Children's", 'Comedy', 'Action',
+                                    #        'Adventure', 'Thriller', 'Drama', 'Crime',
+                                    #        'Sci-Fi', 'War', 'Romance', 'Horror',
+                                    #        'Musical', 'Documentary', 'Western', 'Fantasy',
+                                    #        'Film-Noir', 'Mystery', 'unknown'], dtype='<U11')
+
+                                    # take the percentage of distribution of this category for each user
+                                    # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
+                                    # this means that for each user we can choose maximum 3 items of this cat
+                                    prob = gr_pref_ratio[cat].round(decimals=2)
+                                    prob_lmb = prob * lmb
+                                    p = np.array([1 - prob_lmb if prob_lmb < 1 else 0., prob_lmb if prob_lmb < 1 else 1.])
+                                    p /= p.sum()
+                                    # if the probability is too low for n_target to be 1, then n_target becomes 1 depending
+                                    # on a random choice based on the probability itself
+                                    n_target = max(int(prob * topk * one_counts.shape[0]), np.random.choice([0, 1], p=p))
+                                    # n_target is reduced for a category `cat` if many items share `cat` with other categories
+                                    if cat_sharing_prob is not None:
+                                        if mean_intersharing is not None:
+                                            share_prob = 1 - cat_sharing_prob[cat]
+                                            curr_cat_intershare = np.nanmean(attr_cat_distrib[attr][gr] * cat_intersharing[cat])
+                                            share_prob *= 1 - eta * (curr_cat_intershare - mean_intersharing)
+                                        else:
+                                            share_prob = 1 - cat_sharing_prob[cat]
+                                    else:
+                                        share_prob = 1
+
+                                    n_target = int(round((n_target * share_prob)))
+
+                                    target_items = df_filt.groupby("user").apply(
+                                        lambda _df: _df.take(np.arange(min(_df.shape[0], topk - _df["count"].head(1).values)))
+                                    ).iloc[:n_target]
+                                    target_items = torch.tensor(target_items[["user", "rank"]].values)
+
+                                    gr_target[target_items[:, 0], target_items[:, 1]] = 1
+                                else:
+                                    break
+                    target[demo_groups[attr] == gr, :] = gr_target
+    elif target_scope == "individual":
+        cat_order = torch.randperm(item_categories_map.max() + 1)  # random order of cat to avoid attention on first
+
+        # mean_intersharing = None
+        # if attr_cat_distrib is not None and cat_intersharing is not None:
+        #     mean_intersharing = np.nanmean(attr_cat_distrib[attr][gr] * cat_intersharing, axis=1)
+        #     mean_intersharing = mean_intersharing.sum() / (cat_intersharing.shape[0] - 1)
+
+        for cat in cat_order:
+            # counts how many ones are already in the target of each user
+            one_counts = torch.count_nonzero((target > 0), dim=1).cpu().numpy()
+            count_df = pd.DataFrame(
+                zip(np.arange(one_counts.shape[0]), one_counts),
+                columns=["user", "count"]
+            )
+
+            # generate dataframe with all items with category cat in the list of scores of the current users
+            rank_df = pd.DataFrame(
+                (item_categories_map[sorted_idxs] == cat).nonzero().detach().cpu().numpy(),
+                columns=['user', 'rank', 'cat']
+            )
+
+            df = rank_df.join(count_df.set_index("user"), on="user")
+            # if some users have the topk full => don't add
+            df_filt = df[df["count"] < topk]
+
+            if not df_filt.empty:
+                df_filt = df_filt.sort_values("rank")
+
+                # array(['[PAD]',
+                #        'Animation', "Children's", 'Comedy', 'Action',
+                #        'Adventure', 'Thriller', 'Drama', 'Crime',
+                #        'Sci-Fi', 'War', 'Romance', 'Horror',
+                #        'Musical', 'Documentary', 'Western', 'Fantasy',
+                #        'Film-Noir', 'Mystery', 'unknown'], dtype='<U11')
+
+                # take the percentage of distribution of this category for each user
+                # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
+                # this means that for each user we can choose maximum 3 items of this cat
+                prob = train_pref_ratio[demo_groups['user_id'], cat].round(decimals=3)
+                prob_lmb = prob * lmb
+                p = np.array([[1 - p_l, p_l] if p_l < 1 else [0., 1.] for p_l in prob_lmb])
+                p /= p.sum(axis=1)[:, None]
+
+                # if the probability is too low for n_target to be 1, then n_target becomes 1 depending
+                # on a random choice based on the probability itself
+                n_target = []
+                for user_prob, user_p in zip(prob_lmb, p):
+                    n_target.append(max(int(user_prob * topk), np.random.choice([0, 1], p=user_p)))
+                n_target = np.array(n_target)
+
+                # n_target is reduced for a category `cat` if many items share `cat` with other categories
+                share_prob = 1 - cat_sharing_prob[cat] if cat_sharing_prob is not None else 1
+
+                n_target = (n_target * share_prob).round().astype(int)
+
+                target_items = df_filt.groupby("user").apply(
+                    lambda _df: _df.take(np.arange(min(n_target[_df["user"].head(1).values], topk - _df["count"].head(1).values)))
+                )
+                target_items = torch.tensor(target_items[["user", "rank"]].values)
+
+                target[target_items[:, 0], target_items[:, 1]] = 1
+            else:
+                break
+    else:
+        raise NotImplementedError(f"target_scope = `{target_scope}` is not supported")
 
     return target, sorted_scores, sorted_idxs

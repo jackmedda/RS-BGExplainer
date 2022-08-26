@@ -6,6 +6,7 @@ from collections import defaultdict
 
 import tqdm
 import pyvis
+import torch
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -127,32 +128,57 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
         pref_data_all[e_type] = pref_data
 
         if not pref_data.empty:
-            rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
-                _train_data,
-                config,
-                pred_col='cf_topk_pred',
-                sensitive_attrs=_config['sensitive_attributes'],
-                history_matrix=pref_data,
-                mapped_keys=True
-            )
+            if config['target_scope'] == 'group':
+                rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
+                    _train_data,
+                    config,
+                    pred_col='cf_topk_pred',
+                    sensitive_attrs=_config['sensitive_attributes'],
+                    history_matrix=pref_data,
+                    mapped_keys=True,
+                    item_cats=item_cats_exp[e_type]
+                )
 
-            bias_disparity_all[e_type] = utils.compute_bias_disparity(_train_bias_ratio, rec_bias_ratio, _train_data)
+                bias_disparity_all[e_type] = utils.compute_bias_disparity(_train_bias_ratio, rec_bias_ratio, _train_data)
+            elif config['target_scope'] == 'individual':
+                rec_bias_ratio, rec_pref_ratio = utils.generate_individual_bias_ratio(
+                    _train_data,
+                    config,
+                    pred_col='cf_topk_pred',
+                    history_matrix=pref_data,
+                    item_cats=item_cats_exp[e_type]
+                )
+
+                bias_disparity_all[e_type] = utils.compute_calibration(_train_bias_ratio, rec_bias_ratio)
 
             if 'GCMC' not in bias_disparity_all:
                 pref_data_GCMC = pd.read_csv(os.path.join(script_path, 'pref_data_GCMC_original.csv'))
                 pref_data_all["GCMC"] = pref_data_GCMC
 
-                rec_orig_bias, rec_orig_pref = utils.generate_bias_ratio(
-                    _train_data,
-                    config,
-                    pred_col='topk_pred',
-                    sensitive_attrs=_config['sensitive_attributes'],
-                    # history_matrix=pref_data,
-                    history_matrix=pref_data_GCMC,
-                    mapped_keys=True
-                )
+                if config['target_scope'] == 'group':
+                    rec_orig_bias, rec_orig_pref = utils.generate_bias_ratio(
+                        _train_data,
+                        config,
+                        pred_col='topk_pred',
+                        sensitive_attrs=_config['sensitive_attributes'],
+                        # history_matrix=pref_data,
+                        history_matrix=pref_data_GCMC,
+                        mapped_keys=True,
+                        item_cats=item_cats_exp[e_type]
+                    )
 
-                bias_disparity_all['GCMC'] = utils.compute_bias_disparity(_train_bias_ratio, rec_orig_bias, _train_data)
+                    bias_disparity_all['GCMC'] = utils.compute_bias_disparity(_train_bias_ratio, rec_orig_bias, _train_data)
+                elif config['target_scope'] == 'individual':
+                    rec_orig_bias, rec_orig_pref = utils.generate_individual_bias_ratio(
+                        _train_data,
+                        config,
+                        pred_col='topk_pred',
+                        # history_matrix=pref_data,
+                        history_matrix=pref_data_GCMC,
+                        item_cats=item_cats_exp[e_type]
+                    )
+
+                    bias_disparity_all['GCMC'] = utils.compute_calibration(_train_bias_ratio, rec_orig_bias)
         else:
             print("Pref Data is empty!")
 
@@ -351,16 +377,29 @@ def extract_all_exp_bd_data(_exp_paths, train_bias, _train_data):
         n_users_data[e_type] = {}
         topk_dist[e_type] = []
         for n_del, gr_df in tqdm.tqdm(data_df.groupby('n_del_edges'), desc="Extracting BD from each explanation"):
-            rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
-                _train_data,
-                config,
-                pred_col='cf_topk_pred',
-                sensitive_attrs=sens_attributes,
-                history_matrix=gr_df[['user_id', 'topk_pred', 'cf_topk_pred']],
-                mapped_keys=True
-            )
+            if config['target_scope'] == 'group':
+                rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
+                    _train_data,
+                    config,
+                    pred_col='cf_topk_pred',
+                    sensitive_attrs=sens_attributes,
+                    history_matrix=gr_df[['user_id', 'topk_pred', 'cf_topk_pred']],
+                    mapped_keys=True,
+                    item_cats=item_cats_exp[e_type]
+                )
 
-            bd = utils.compute_bias_disparity(train_bias, rec_bias_ratio, _train_data)
+                bd = utils.compute_bias_disparity(train_bias, rec_bias_ratio, _train_data)
+            elif config['target_scope'] == 'individual':
+                rec_bias_ratio, rec_pref_ratio = utils.generate_individual_bias_ratio(
+                    _train_data,
+                    config,
+                    pred_col='cf_topk_pred',
+                    history_matrix=gr_df[['user_id', 'topk_pred', 'cf_topk_pred']],
+                    item_cats=item_cats_exp[e_type]
+                )
+
+                bd = utils.compute_calibration(train_bias, rec_bias_ratio)
+
             bd_data[e_type][n_del] = bd
 
             t_dist = gr_df['topk_dist'].to_numpy()
@@ -368,11 +407,12 @@ def extract_all_exp_bd_data(_exp_paths, train_bias, _train_data):
                 zip([n_del] * len(t_dist), t_dist / len(t_dist), gr_df['topk_set_dist'].to_numpy() / len(t_dist))
             ))
 
-            gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
-            n_users_data[e_type][n_del] = {attr: gr_df_attr[attr].value_counts().to_dict() for attr in sens_attributes}
-            for attr in sens_attributes:
-                n_users_del = n_users_data[e_type][n_del][attr]
-                n_users_data[e_type][n_del][attr] = {sensitive_maps[attr][dg]: n_users_del[dg] for dg in n_users_del}
+            if config['target_scope'] == 'group':
+                gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
+                n_users_data[e_type][n_del] = {attr: gr_df_attr[attr].value_counts().to_dict() for attr in sens_attributes}
+                for attr in sens_attributes:
+                    n_users_del = n_users_data[e_type][n_del][attr]
+                    n_users_data[e_type][n_del][attr] = {sensitive_maps[attr][dg]: n_users_del[dg] for dg in n_users_del}
 
     return exp_dfs, bd_data, n_users_data, topk_dist
 
@@ -504,18 +544,21 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                     "# Del Edges lab": pd.NamedAgg(column='# Del Edges lab', aggfunc='first'),
                 }).reset_index()
 
-                df_exp_plot_perc = df_exp_plot.copy()
-                norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot_perc['# Del Edges'].max())
+                norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot['# Del Edges'].max())
+
+                df_exp_plot_gb, df_orig_gb = df_exp_plot.groupby(y), df_orig.groupby(y)
+                df_exp_plot = pd.concat([df_exp_plot_gb.get_group(g) for g in order])
+                df_orig = pd.concat([df_orig_gb.get_group(g) for g in order])
 
                 print(df_exp_plot)
 
                 palette = sns.color_palette("Blues_d", as_cmap=True)
-                plot_palette = list(df_exp_plot_perc['# Del Edges'].map(palette))
+                # plot_palette = list(df_exp_plot['# Del Edges'].map(palette))
 
                 sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
-                              label='GCMC', zorder=2, order=order)
+                              label='GCMC', zorder=2) #, order=order)
                 sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette=palette, sizes=(50, 230), hue_norm=norm,
-                                data=df_exp_plot_perc, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
+                                data=df_exp_plot, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
 
                 handles, labels = zip(*utils.legend_without_duplicate_labels(g.ax_joint))
                 df_exp_plot_sizes = df_exp_plot.set_index("# Del Edges")
@@ -553,6 +596,118 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                 plt.tight_layout()
                 plt.savefig(os.path.join(plots_path, f'{d_gr}#dumbbell_over_del_edges_{e_type}.png'))
                 plt.close()
+
+
+# %%
+def plot_explanations_fairness_trend_dumbbell_individual(_bd_all_data, orig_disparity, config_ids, sort="dots", n_bins=10):
+    item_cats = train_data.dataset.field2id_token['class']
+
+    x, y = 'Bias Disparity', 'Category'
+
+    dot_size = 50
+
+    if sort not in ["dots", "barplot_side"]:
+        raise NotImplementedError(f"sort = {sort} not supported for dumbbell")
+
+    for e_type in _bd_all_data:
+        bd_data = _bd_all_data[e_type]
+        plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), 'individual')
+        if not os.path.exists(plots_path):
+            os.makedirs(plots_path)
+
+        class_counts = joint_df.explode('class').value_counts('class')
+        class_counts.index = class_counts.index.map(item_cats.__getitem__)
+        cats_inter_counts = class_counts.to_dict()
+
+        exp_data = []
+        plot_bd_keys = []
+        for n_del in bd_data:
+            bd_n_del_data = bd_data[n_del].numpy()
+            if not np.isnan(bd_n_del_data).all():
+                l = len(item_cats)
+                exp_data.extend(list(zip([n_del] * l, bd_n_del_data, item_cats)))
+                plot_bd_keys.append(n_del)
+
+        orig_data = list(zip(['GCMC'] * len(item_cats), orig_disparity.numpy(), item_cats))
+
+        df_orig = pd.DataFrame(orig_data, columns=['Attribute', x, y]).dropna()
+        df_exp = pd.DataFrame(exp_data, columns=['# Del Edges', x, y]).dropna()
+
+        max_del_edges = max(bd_data)
+        bin_size = max_del_edges // n_bins
+        bin_map = {i: f"{e_type}: {i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
+                   range(max_del_edges // bin_size + 1)}
+
+        df_exp['# Del Edges lab'] = df_exp['# Del Edges'].map(lambda x: bin_map[x // bin_size])
+        df_exp['# Del Edges'] = df_exp['# Del Edges'].map(lambda x: (x // bin_size))  # * dot_size
+
+        if sort == "dots":
+            order = df_orig.sort_values(x)[y].to_list()
+            bar_data = pd.DataFrame(cats_inter_counts.items(), columns=[y, x])
+        elif sort == "barplot_side":
+            order, vals = map(list, zip(*(sorted(cats_inter_counts.items(), key=lambda x: x[1])[::-1])))
+            bar_data = pd.DataFrame(zip(order, vals), columns=[y, x])
+
+        g = sns.JointGrid(height=12, space=0.5)
+        # g.ax_marg_x.remove()
+        sns.barplot(x=x, y=y, data=bar_data, ax=g.ax_marg_y, color="black", order=order)
+
+        df_exp_plot = df_exp.groupby(['Category', '# Del Edges']).agg(**{
+            "Bias Disparity": pd.NamedAgg(column='Bias Disparity', aggfunc='mean'),
+            "# Del Edges lab": pd.NamedAgg(column='# Del Edges lab', aggfunc='first'),
+        }).reset_index()
+
+        norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot['# Del Edges'].max())
+
+        df_exp_plot_gb, df_orig_gb = df_exp_plot.groupby(y), df_orig.groupby(y)
+        df_exp_plot = pd.concat([df_exp_plot_gb.get_group(g) for g in order])
+        df_orig = pd.concat([df_orig_gb.get_group(g) for g in order])
+
+        print(df_exp_plot)
+
+        palette = sns.color_palette("Blues_d", as_cmap=True)
+        # plot_palette = list(df_exp_plot['# Del Edges'].map(palette))
+
+        sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
+                      label='GCMC', zorder=2) #, order=order)
+        sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette=palette, sizes=(50, 230), hue_norm=norm,
+                        data=df_exp_plot, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
+
+        handles, labels = zip(*utils.legend_without_duplicate_labels(g.ax_joint))
+        df_exp_plot_sizes = df_exp_plot.set_index("# Del Edges")
+        labels = [df_exp_plot_sizes.loc[int(l), "# Del Edges lab"].iloc[0] if l.isnumeric() else l for l in labels]
+        g.ax_joint.legend(handles, labels)
+
+        g.ax_joint.plot([0., 0.], g.ax_joint.get_ylim(), 'k--', zorder=1)
+        g.ax_joint.grid(axis='y', ls=(0, (1, 3)))
+
+        _ax_j = g.ax_joint.twinx()
+        _ax_j.tick_params(right=False)
+        _ax_j.set_yticklabels([])
+        _ax_j.set_ylabel('# Interactions for each category of items', rotation=270, labelpad=15)
+        # g.ax_marg_x.set_title('# Interactions for each category of items')
+        g.ax_joint.legend().remove()
+
+        # g.ax_marg_x.get_shared_x_axes().remove(g.ax_joint)
+        gs = plt.GridSpec(12, 6)
+
+        ax_marg_x = g.fig.add_subplot(gs[1, :-1])
+        fake_ax = g.fig.add_subplot(gs[0, :-1])
+        fake_ax.set_visible(False)
+
+        sm = plt.cm.ScalarMappable(cmap=palette, norm=norm)
+        plt.colorbar(cax=ax_marg_x, mappable=sm, orientation='horizontal')
+
+        cbar_xticks = [f"{x * 100:.2f}%" for x in np.linspace(
+            0.,
+            max_del_edges / train_data.dataset.inter_num,
+            len(ax_marg_x.get_xticklabels())
+        )]
+        ax_marg_x.set_xticklabels(cbar_xticks)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_path, f'dumbbell_over_del_edges_{e_type}.png'))
+        plt.close()
 
 
 def create_table_bias_disparity(bd, config_ids):
@@ -904,26 +1059,47 @@ if batch_exp_s == 'group':
     raise NotImplementedError()
 
 exp_paths = {}
+item_cats_exp = {}
 for c_id, exp_t, old_exp_t in zip(
     args.load_config_ids,
     ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'],
     ['pred_explain', 'FairBD', 'FairNDCGApprox']
 ):
     exp_paths[exp_t] = None
+    item_cats_exp[exp_t] = None
     if c_id != -1:
         exp_paths[exp_t] = os.path.join(script_path, 'explanations', dataset.dataset_name,
                                         old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(batch_exp_s), str(c_id))
 
-train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
-    train_data,
-    config,
-    sensitive_attrs=config['sensitive_attributes'],
-    mapped_keys=True
-)
+        if config['filter_categories'] is not None:
+            item_cats_exp[exp_t] = torch.load(os.path.join(exp_paths[exp_t], 'item_cats.pt'))
+
+# measure bias ratio in training set
+if config['target_scope'] == 'group':
+    train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
+        train_data,
+        config,
+        sensitive_attrs=config['sensitive_attributes'],
+        mapped_keys=True,
+        item_cats=item_cats_exp['GCMC+NDCG']
+    )
+elif config['target_scope'] == 'individual':
+    train_bias_ratio, train_pref_ratio = utils.generate_individual_bias_ratio(
+        train_data,
+        config,
+        item_cats=item_cats_exp['GCMC+NDCG']
+    )
+else:
+    raise NotImplementedError(f"target_scope = `{config['target_scope']}` is not supported")
+
+if item_cats_exp['GCMC+NDCG'] is not None:
+    item_class = item_cats_exp['GCMC+NDCG'].numpy().tolist()
+else:
+    item_class = map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
 
 item_df = pd.DataFrame({
     'item_id': train_data.dataset.item_feat['item_id'].numpy(),
-    'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
+    'class': item_class
 })
 
 user_df = pd.DataFrame({
@@ -939,7 +1115,7 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 0}
+args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 15}
 
 # %%
 pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)
@@ -948,26 +1124,32 @@ pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bia
 all_exp_dfs, bd_all_data, n_users_data_all, topk_dist_all = extract_all_exp_bd_data(exp_paths, train_bias_ratio, train_data)
 
 cleaned_config_ids = list(map(str, args.load_config_ids))
-# %%
-create_table_bias_disparity(bias_disparity, cleaned_config_ids)
 
-plot_bias_disparity_diff_dumbbell(bias_disparity, sens_attrs, cleaned_config_ids, sort="barplot_side")
+if config['target_scope'] == 'group':
+    # %%
+    create_table_bias_disparity(bias_disparity, cleaned_config_ids)
 
-# %%
-plot_bias_disparity_boxplot(bias_disparity, pref_data_topk_all, sens_attrs, cleaned_config_ids)
+    plot_bias_disparity_diff_dumbbell(bias_disparity, sens_attrs, cleaned_config_ids, sort="barplot_side")
 
-# %%
-plot_explanations_fairness_trend(bd_all_data, n_users_data_all, bias_disparity['GCMC'], cleaned_config_ids)
+    # %%
+    plot_bias_disparity_boxplot(bias_disparity, pref_data_topk_all, sens_attrs, cleaned_config_ids)
 
-# %%
-plot_explanations_fairness_trend_dumbbell(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids,
-                                          sort="barplot_side", n_bins=20)
+    # %%
+    plot_explanations_fairness_trend(bd_all_data, n_users_data_all, bias_disparity['GCMC'], cleaned_config_ids)
 
-# %%
-plot_dist_over_del_edges(topk_dist_all, bd_all_data, cleaned_config_ids, max_del_edges=80 if batch_exp_s == 'individual' else np.inf)
+    # %%
+    plot_explanations_fairness_trend_dumbbell(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids,
+                                              sort="barplot_side", n_bins=20)
 
-# %%
-create_table_bias_disparity_over_del_edges(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids, n_bins=10)
+    # %%
+    plot_dist_over_del_edges(topk_dist_all, bd_all_data, cleaned_config_ids, max_del_edges=80 if batch_exp_s == 'individual' else np.inf)
 
-# %%
-# plot_del_edges_hops(all_exp_dfs, cleaned_config_ids)
+    # %%
+    create_table_bias_disparity_over_del_edges(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids, n_bins=10)
+
+    # %%
+    # plot_del_edges_hops(all_exp_dfs, cleaned_config_ids)
+elif config['target_scope'] == 'individual':
+    plot_explanations_fairness_trend_dumbbell_individual(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids,
+                                                         sort="barplot_side", n_bins=20)
+
