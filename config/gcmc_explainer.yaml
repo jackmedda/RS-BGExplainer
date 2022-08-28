@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 536 # 1200 for NDCGApprox
+cf_learning_rate: 609 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -29,12 +29,14 @@ fair_beta: 0.5
 dropout_prob: 0.3
 
 # hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
-fair_target_lambda: 2.5
+fair_target_lambda: 2.7
 
 intershare_eta: 0
 
-knapsack: False
+knapsack: True
+knap_theta: 0.3
 
+cats_vs_all:
 filter_categories: 1
 filter_categories_mode: random
 
@@ -42,7 +44,7 @@ filter_categories_mode: random
 
 # It explains the predictions for all the users in the dataset on a single graph or for each demographic group
 group_explain: True
-group_explain_by:
+group_explain_by: gender
 
 # The losses chooses the target to optimize bias disparity (group) or calibration (individual)
 target_scope: group

@@ -1,9 +1,9 @@
 # Based on https://github.com/RexYing/gnn-model-explainer/blob/master/explainer/explain.py
 
 import sys
-from typing import Iterable
-
 import time
+import copy
+from typing import Iterable
 
 import tqdm
 import numpy as np
@@ -101,11 +101,14 @@ class BGExplainer:
         self.fair_target_lambda = config['fair_target_lambda']
         self.intershare_eta = config['intershare_eta']
         self.knapsack = config['knapsack']
+        self.knap_theta = config['knap_theta']
 
-        if config['filter_categories'] is not None:
+        if config['filter_categories'] is not None or config['cats_vs_all'] is not None:
             self.item_categories_map = kwargs.get('item_cats', None)
         else:
             self.item_categories_map = self.dataset.item_feat['class']
+
+        self.old_graph_dist = 0
 
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
@@ -143,12 +146,13 @@ class BGExplainer:
         """
         if new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss):
             if self.unique_graph_dist_loss and len(best_cf_example) > 0:
-                old_graph_dist = best_cf_example[-1][-5]
+                self.old_graph_dist = best_cf_example[-1][-5]
                 new_graph_dist = new_example[-4]
-                if not (old_graph_dist < new_graph_dist):
+                if not (self.old_graph_dist < new_graph_dist):
                     return best_loss
 
             best_cf_example.append(new_example + [first_fair_loss])
+            self.old_graph_dist = new_example[-4]
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
         return best_loss
@@ -213,22 +217,24 @@ class BGExplainer:
             desc=set_color(f"Epochs   ", 'blue'),
         )
 
+        if self.knapsack and self.group_explain:
+            knap_counts_data = {}
+            for attr in self.train_pref_ratio:
+                knap_counts_data[attr] = {}
+                user_count = torch.bincount(self.dataset.user_feat[attr][batched_data])
+                for gr, gr_data in self.train_pref_ratio[attr].items():
+                    import pdb; pdb.set_trace()
+                    if gr_data is not None:
+                        knap_counts_data[attr][gr] = (user_count[gr] * topk * gr_data).round().int()
+                    else:
+                        knap_counts_data[attr][gr] = None
+        else:
+            knap_counts_data = None
+
         for epoch in iter_epochs:
             if self.group_explain:
-                if self.knapsack:
-                    iter_data = batched_data[torch.randperm(batched_data.shape[0])].split(self.user_batch_exp)
-                    knap_counts = {}
-                    for attr in self.train_pref_ratio:
-                        knap_counts[attr] = {}
-                        user_count = torch.bincount(self.dataset.user_feat[attr])
-                        for gr, gr_data in self.train_pref_ratio[attr].items():
-                            if gr_data is not None:
-                                knap_counts[attr][gr] = (user_count[gr] * topk * gr_data).round().int()
-                            else:
-                                knap_counts[attr][gr] = None
-                else:
-                    iter_data = batched_data.split(self.user_batch_exp)
-                    knap_counts = None
+                knap_counts = copy.deepcopy(knap_counts_data) if knap_counts_data is not None else None
+                iter_data = batched_data[torch.randperm(batched_data.shape[0])].split(self.user_batch_exp)
                 for batch_idx, batch_user in enumerate(iter_data):
                     self.user_id = batch_user
                     batched_data_epoch = BGExplainer.prepare_batched_data(batch_user, data)
@@ -315,7 +321,8 @@ class BGExplainer:
                         cat_intersharing=self.cat_intersharing,
                         attr_cat_distrib=self.attr_cat_distrib,
                         eta=self.intershare_eta,
-                        knap_counts=knap_counts
+                        knap_counts=knap_counts,
+                        knap_theta=self.knap_theta
                     )
                 }
             else:
@@ -331,98 +338,11 @@ class BGExplainer:
                         cat_intersharing=self.cat_intersharing,
                         attr_cat_distrib=self.attr_cat_distrib,
                         eta=self.intershare_eta,
-                        knap_counts=knap_counts
+                        knap_counts=knap_counts,
+                        knap_theta=self.knap_theta
                     ),
                     "target": user_feat
                 }
-
-        ###############################################
-        debug = False
-        if debug:
-            target = []
-            cf_topk_pred_idx_np = cf_topk_pred_idx.cpu().numpy()
-            for i, l_t in enumerate(kwargs['target'].cpu().numpy()):
-                recs = l_t.nonzero()[0]
-                if len(recs) < topk:
-                    l_ctp = cf_topk_pred_idx_np[i]
-                    l_ctp_mask = (l_ctp[:, None] == np.intersect1d(l_ctp, recs)).any(axis=1)
-                    target.append(np.concatenate([recs, l_ctp[~l_ctp_mask]])[:topk].tolist())
-                else:
-                    target.append(recs.tolist())
-            # target = pd.DataFrame(kwargs['target'].nonzero().cpu().numpy())
-            # target[0] = target[0].map(dict(zip(range(self.user_id.shape[0]), self.user_id.numpy())))
-            # target = target.groupby(0).apply(lambda _df: pd.Series({1: _df[1].tolist()})).reset_index()
-            # target.rename(columns={0: 'user_id', 1: 'cf_topk_pred'}, inplace=True)
-            target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
-            class a: pass
-            a.dataset = self.dataset
-            config = {'USER_ID_FIELD': 'user_id', 'ITEM_ID_FIELD': 'item_id'}
-            old_pred = pd.DataFrame(zip(self.user_id.numpy(), cf_topk_pred_idx.cpu().numpy())).rename(columns={0: 'user_id', 1: 'cf_topk_pred'})
-            train_bias_user, _ = utils.generate_bias_ratio(a,
-                                                           config,
-                                                           sensitive_attrs=self.sensitive_attributes,
-                                                           user_subset=self.user_id.numpy())
-
-            old_rec_bias, _ = utils.generate_bias_ratio(a,
-                                                        config,
-                                                        sensitive_attrs=self.sensitive_attributes,
-                                                        history_matrix=old_pred)
-
-            rec_bias, _ = utils.generate_bias_ratio(a,
-                                                    config,
-                                                    sensitive_attrs=self.sensitive_attributes,
-                                                    history_matrix=target_df)
-            bd_old = utils.compute_bias_disparity(train_bias_user, old_rec_bias, a)
-            bd_new = utils.compute_bias_disparity(train_bias_user, rec_bias, a)
-
-            n_cat = bd_old['gender']['M'].shape[0]
-            m_df = pd.DataFrame(zip(
-                np.abs(bd_old['gender']['M'].numpy()) - np.abs(bd_new['gender']['M'].numpy()),
-                list(range(n_cat))
-            ))
-            f_df = pd.DataFrame(zip(
-                np.abs(bd_old['gender']['F'].numpy()) - np.abs(bd_new['gender']['F'].numpy()),
-                list(range(n_cat))
-            ))
-
-            import seaborn as sns
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
-            sns.barplot(y=0, x=1, data=m_df, ax=ax[0])
-            sns.barplot(y=0, x=1, data=f_df, ax=ax[1])
-            plt.show()
-            plt.close()
-
-            fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
-            i = 0
-            for gr, gr_s in enumerate(self.dataset.field2id_token['gender']):
-                gr_mask = user_feat['gender'] == gr
-                if not gr_mask.any():
-                    continue
-
-                new_items = torch.stack([torch.repeat_interleave(self.user_id[gr_mask], topk), torch.tensor(target)[gr_mask].flatten()])
-                n_users = (self.user_id[gr_mask].shape[0] * topk)
-                new_pref = torch.bincount(self.item_categories_map[new_items.T].flatten()) / n_users
-                new_pref[0] = 0
-                old_pref = self.train_pref_ratio['gender']
-
-                pref_df = pd.DataFrame(zip(
-                    np.concatenate([old_pref[gr].numpy(), new_pref.numpy()]),
-                    list(range(n_cat)) + list(range(n_cat)),
-                    ['old'] * n_cat + ['new'] * n_cat
-                ))
-
-                sns.barplot(x=1, y=0, hue=2, data=pref_df, ax=ax[i])
-                i += 1
-
-            # kkk = (self.item_categories_map[new_items.T] == 5).nonzero()[:,:2]
-            # self.item_categories_map[new_items.T][kkk[:, 0], kkk[:, 1]]
-
-            plt.show(block=False)
-            plt.pause(1)
-            import pdb; pdb.set_trace()
-            plt.close()
-        ###############################################
 
         loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj, cf_dist = self.cf_model.loss(
             cf_scores,
@@ -482,6 +402,145 @@ class BGExplainer:
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(), cf_dist,
                         loss_total.item(), loss_pred.mean().item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
+
+        ###############################################
+        debug = True
+        if debug and cf_stats is not None and loss_graph_dist.item() > self.old_graph_dist:
+            # target = []
+            # cf_topk_pred_idx_np = cf_topk_pred_idx.cpu().numpy()
+            # for i, l_t in enumerate(kwargs['target'].cpu().numpy()):
+            #     recs = l_t.nonzero()[0]
+            #     if len(recs) < topk:
+            #         l_ctp = cf_topk_pred_idx_np[i]
+            #         l_ctp_mask = (l_ctp[:, None] == np.intersect1d(l_ctp, recs)).any(axis=1)
+            #         target.append(np.concatenate([recs, l_ctp[~l_ctp_mask]])[:topk].tolist())
+            #     else:
+            #         target.append(recs.tolist())
+            # # target = pd.DataFrame(kwargs['target'].nonzero().cpu().numpy())
+            # # target[0] = target[0].map(dict(zip(range(self.user_id.shape[0]), self.user_id.numpy())))
+            # # target = target.groupby(0).apply(lambda _df: pd.Series({1: _df[1].tolist()})).reset_index()
+            # # target.rename(columns={0: 'user_id', 1: 'cf_topk_pred'}, inplace=True)
+            # target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
+
+            with torch.no_grad():
+                cf_scores_pred_after = self.get_scores(self.cf_model, *self.scores_args, pred=True)
+                _, cf_topk_pred_idx_after = self.get_top_k(cf_scores_pred, **self.topk_args)
+
+            self.cf_model.eval()
+            target = cf_topk_pred_idx_after.cpu().numpy()
+
+            target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
+
+            class a:
+                pass
+
+            a.dataset = self.dataset
+            config = {'USER_ID_FIELD': 'user_id', 'ITEM_ID_FIELD': 'item_id'}
+            old_pred = pd.DataFrame(zip(self.user_id.numpy(), cf_topk_pred_idx.cpu().numpy())).rename(
+                columns={0: 'user_id', 1: 'cf_topk_pred'})
+            train_bias_user, _ = utils.generate_bias_ratio(a,
+                                                           config,
+                                                           sensitive_attrs=self.sensitive_attributes,
+                                                           user_subset=self.user_id.numpy(),
+                                                           item_cats=self.item_categories_map)
+
+            old_rec_bias, _ = utils.generate_bias_ratio(a,
+                                                        config,
+                                                        sensitive_attrs=self.sensitive_attributes,
+                                                        history_matrix=old_pred,
+                                                        item_cats=self.item_categories_map)
+
+            rec_bias, _ = utils.generate_bias_ratio(a,
+                                                    config,
+                                                    sensitive_attrs=self.sensitive_attributes,
+                                                    history_matrix=target_df,
+                                                    item_cats=self.item_categories_map)
+
+            bd_old = utils.compute_bias_disparity(train_bias_user, old_rec_bias, a)
+            bd_new = utils.compute_bias_disparity(train_bias_user, rec_bias, a)
+
+            n_cat = self.item_categories_map.unique().shape[0]
+
+            fake_data = np.zeros_like(bd_old['gender']['M'].numpy())
+            bd_df = {
+                (self.dataset.field2id_token['gender'] == 'M').nonzero()[0].item(): pd.DataFrame(zip(
+                        np.concatenate([
+                            fake_data,
+                            fake_data,
+                            np.abs(bd_old['gender']['M'].numpy()) - np.abs(bd_new['gender']['M'].numpy()),
+                        ]),
+                        list(range(n_cat)) + list(range(n_cat)) + list(range(n_cat)),
+                        [''] * n_cat + [''] * n_cat + ['bd'] * n_cat
+                     )),
+                (self.dataset.field2id_token['gender'] == 'F').nonzero()[0].item(): pd.DataFrame(zip(
+                        np.concatenate([
+                            fake_data,
+                            fake_data,
+                            np.abs(bd_old['gender']['F'].numpy()) - np.abs(bd_new['gender']['F'].numpy()),
+                        ]),
+                        list(range(n_cat)) + list(range(n_cat)) + list(range(n_cat)),
+                        [''] * n_cat + [''] * n_cat + ['bd'] * n_cat
+                     )),
+            }
+
+            import seaborn as sns
+            import matplotlib.pyplot as plt
+            # fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
+            # sns.barplot(y=0, x=1, data=m_df, ax=ax[0])
+            # sns.barplot(y=0, x=1, data=f_df, ax=ax[1])
+            # plt.show()
+            # plt.close()
+
+            fig, ax = plt.subplots(1, 2, sharey=True, figsize=(12, 5))
+            i = 0
+            check = False
+            for gr, gr_s in enumerate(self.dataset.field2id_token['gender']):
+                gr_mask = user_feat['gender'] == gr
+                if not gr_mask.any():
+                    continue
+
+                new_items = torch.tensor(target)[gr_mask].flatten()
+                n_users = (self.user_id[gr_mask].shape[0] * topk)
+                new_pref = torch.bincount(self.item_categories_map[new_items].flatten(), minlength=n_cat) / n_users
+                new_pref[0] = 0
+
+                old_pred_items = cf_topk_pred_idx.cpu().numpy()[gr_mask].flatten()
+                old_pref = torch.bincount(self.item_categories_map[old_pred_items].flatten(), minlength=n_cat) / n_users
+                old_pref[0] = 0
+
+                orig_pref = self.train_pref_ratio['gender']
+
+                pref_df = pd.DataFrame(zip(
+                    np.concatenate([
+                        orig_pref[gr].numpy() - new_pref.numpy(),
+                        orig_pref[gr].numpy() - old_pref.numpy(),
+                        np.zeros(orig_pref[gr].shape[0])
+                    ]),
+                    list(range(n_cat)) + list(range(n_cat)) + list(range(n_cat)),
+                    ['new'] * n_cat + ['old'] * n_cat + [''] * n_cat
+                ))
+
+                if (np.stack(target_df['cf_topk_pred']) != np.stack(old_pred['cf_topk_pred'])).any():
+                    check = True
+
+                sns.barplot(x=1, y=0, hue=2, data=pref_df, ax=ax[i])
+
+                ax_twinx = ax[i].twinx()
+                sns.barplot(x=1, y=0, data=bd_df[gr], ax=ax_twinx)
+
+                i += 1
+
+            # kkk = (self.item_categories_map[new_items.T] == 5).nonzero()[:,:2]
+            # self.item_categories_map[new_items.T][kkk[:, 0], kkk[:, 1]]
+
+            if check:
+                plt.show(block=False)
+                plt.pause(1)
+                import pdb; pdb.set_trace()
+
+            # import pdb; pdb.set_trace()
+            plt.close()
+        ###############################################
 
         return cf_stats, loss_total.item(), fair_loss
 
@@ -557,6 +616,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                  cat_intersharing=None,
                  attr_cat_distrib=None,
                  knap_counts=None,
+                 knap_theta=8,
                  size_average=None, reduce=None, reduction: str = 'mean', margin=0.1) -> None:
         super(BiasDisparityLoss, self).__init__(size_average, reduce, reduction)
 
@@ -571,6 +631,7 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
         self.cat_intersharing = cat_intersharing
         self.attr_cat_distrib = attr_cat_distrib
         self.knap_counts = knap_counts
+        self.knap_theta = knap_theta
 
         self.margin = margin
 
@@ -587,7 +648,8 @@ class BiasDisparityLoss(torch.nn.modules.loss._Loss):
                                                                           cat_sharing_prob=self.cat_sharing_prob,
                                                                           cat_intersharing=self.cat_intersharing,
                                                                           attr_cat_distrib=self.attr_cat_distrib,
-                                                                          knap_counts=self.knap_counts)
+                                                                          knap_counts=self.knap_counts,
+                                                                          knap_theta=self.knap_theta)
 
         return (-sorted_target * sorted_input).mean(dim=1)
 
@@ -604,7 +666,8 @@ def get_bias_disparity_target_NDCGApprox(scores,
                                          cat_sharing_prob=None,
                                          cat_intersharing=None,
                                          attr_cat_distrib=None,
-                                         knap_counts=None):
+                                         knap_counts=None,
+                                         knap_theta=0.01):
     sorted_target, _, sorted_idxs = get_bias_disparity_sorted_target(scores,
                                                                      train_pref_ratio,
                                                                      item_categories_map,
@@ -617,7 +680,8 @@ def get_bias_disparity_target_NDCGApprox(scores,
                                                                      cat_sharing_prob=cat_sharing_prob,
                                                                      cat_intersharing=cat_intersharing,
                                                                      attr_cat_distrib=attr_cat_distrib,
-                                                                     knap_counts=knap_counts)
+                                                                     knap_counts=knap_counts,
+                                                                     knap_theta=knap_theta)
 
     return torch.gather(sorted_target, 1, torch.argsort(sorted_idxs))
 
@@ -635,7 +699,8 @@ def get_bias_disparity_sorted_target(scores,
                                      cat_sharing_prob=None,
                                      cat_intersharing=None,
                                      attr_cat_distrib=None,
-                                     knap_counts=None):
+                                     knap_counts=None,
+                                     knap_theta=8):
     sorted_scores, sorted_idxs = torch.topk(scores, scores.shape[1])
 
     target = torch.zeros_like(sorted_idxs, dtype=torch.float)
@@ -651,6 +716,31 @@ def get_bias_disparity_sorted_target(scores,
                     gr_target = torch.zeros_like(gr_idxs, dtype=torch.float)
 
                     if knap_counts is not None:
+                        # cats = item_categories_map[gr_idxs]
+                        # cats_flat = cats.view((cats.shape[0] * cats.shape[1], cats.shape[-1])).numpy()
+                        # cats_data = np.stack([
+                        #     np.repeat(np.arange(cats.shape[0]), cats.shape[1]),
+                        #     np.tile(np.arange(cats.shape[1]), cats.shape[0])
+                        # ], axis=0)
+                        #
+                        # rank_df = pd.DataFrame(zip(*cats_data, cats_flat), columns=['user', 'pos', 'cats'])
+                        # rank_df['cats'] = rank_df['cats'].map(lambda x: np.array([]) if all(cat == 0 for cat in x) else np.array(x))
+                        # rank_df['safe_cat'] = rank_df['cats'].map(lambda x: knap_counts[attr][gr][x[x.nonzero()]].all().item())
+                        # rank_df = rank_df[rank_df['safe_cat']]
+                        # cat_distrib = rank_df['cats'].map(lambda x: np.mean([attr_cat_distrib[attr][gr][c] for c in x] if len(x) > 0 else np.nan))
+                        # rank_df['rank'] = (2 ** ((rank_df['pos'] + 1) / knap_theta)).replace(0, np.nan) * cat_distrib
+                        #
+                        # rank_df.sort_values('rank', ascending=True, inplace=True)
+                        #
+                        # target_items = rank_df.groupby("user").head(topk)
+                        #
+                        # for cat in target_items['cats']:
+                        #     knap_counts[attr][gr][cat] -= 1
+                        #
+                        # target_items = torch.tensor(target_items[["user", "pos"]].values.tolist())
+                        #
+                        # gr_target[target_items[:, 0], target_items[:, 1]] = 1
+
                         for i in range(gr_idxs.shape[0]):
                             i_cats = item_categories_map[gr_idxs[i]]
                             one_counts = 0
@@ -658,10 +748,36 @@ def get_bias_disparity_sorted_target(scores,
                             if not (knap_counts[attr][gr] > 0).any():
                                 continue
 
-                            for pos, (j, j_cat) in enumerate(zip(gr_idxs[i], i_cats)):
-                                safe_cats = j_cat[j_cat.nonzero()]
-                                if (knap_counts[attr][gr][safe_cats] > 0).all():
-                                    knap_counts[attr][gr][safe_cats] -= 1
+                            distrib = attr_cat_distrib[attr][gr][i_cats.numpy()].mean(axis=1)
+
+                            pos_rec = np.arange(i_cats.shape[0])
+
+                            # take low percentage items if they are close to the topk and insert them into the final
+                            # spots of the topk
+                            candidate_items = (distrib < np.quantile(distrib[~np.isnan(distrib)], 1 / cat_order.shape[0]))
+                            candidate_items, = candidate_items[:(topk + round(topk * knap_theta))].nonzero()
+                            candidate_items = candidate_items[candidate_items >= topk]
+                            if candidate_items.shape[0] > 0:
+                                n_items = candidate_items.shape[0]
+                                temp = i_cats[(topk - n_items):topk].clone()
+                                i_cats[(topk - n_items):topk] = i_cats[candidate_items]
+                                i_cats[candidate_items] = temp
+                                temp_pos = pos_rec[(topk - n_items):topk].copy()
+                                pos_rec[(topk - n_items):topk] = pos_rec[candidate_items]
+                                pos_rec[candidate_items] = temp_pos
+
+                            # rank_score = 2 ** ((np.arange(gr_idxs[i].shape[0]) + 1) / knap_theta)
+                            # # rank_score2 = np.log10(np.arange(gr_idxs[i].shape[0]) + 1) / np.log10(np.full(gr_idxs[i].shape[0], topk))
+                            # rank_score *= distrib
+                            # rank = np.argsort(rank_score)
+
+                            # if (np.sort(rank[:topk]) == np.arange(topk)).all():
+                            #     rank = np.concatenate([np.arange(topk), rank[topk:]])
+
+                            for pos, j_cat, dstb in zip(pos_rec, i_cats, distrib):
+                                safe_cat = j_cat[j_cat.nonzero()]
+                                if (knap_counts[attr][gr][safe_cat] > 0).all():
+                                    knap_counts[attr][gr][safe_cat] -= 1
                                     gr_target[i, pos] = 1
                                     one_counts += 1
 
@@ -705,13 +821,14 @@ def get_bias_disparity_sorted_target(scores,
                                     # take the percentage of distribution of this category for each user
                                     # if gr_pref_ratio[cat] = 0.3, n_target would be 3 in a top-10 setting
                                     # this means that for each user we can choose maximum 3 items of this cat
-                                    prob = gr_pref_ratio[cat].numpy().round(4)
+                                    prob = gr_pref_ratio[cat].item()
                                     prob_lmb = prob * lmb
+
                                     p = np.array([1 - prob_lmb if prob_lmb < 1 else 0., prob_lmb if prob_lmb < 1 else 1.])
                                     p /= p.sum()
                                     # if the probability is too low for n_target to be 1, then n_target becomes 1 depending
                                     # on a random choice based on the probability itself
-                                    n_target = max(int(prob * topk * one_counts.shape[0]), np.random.choice([0, 1], p=p))
+                                    n_target = max(round(prob * topk * one_counts.shape[0]), np.random.choice([0, 1], p=p))
                                     # n_target is reduced for a category `cat` if many items share `cat` with other categories
                                     if cat_sharing_prob is not None:
                                         if mean_intersharing is not None:
@@ -726,8 +843,8 @@ def get_bias_disparity_sorted_target(scores,
                                     n_target = int(round((n_target * share_prob)))
 
                                     target_items = df_filt.groupby("user").apply(
-                                        lambda _df: _df.take(np.arange(min(_df.shape[0], topk - _df["count"].head(1).values)))
-                                    ).iloc[:n_target]
+                                        lambda _df: _df.head(min(_df.shape[0], topk - _df["count"].head(1).item()))
+                                    ).reset_index(drop=True).iloc[:n_target]
                                     target_items = torch.tensor(target_items[["user", "rank"]].values)
 
                                     gr_target[target_items[:, 0], target_items[:, 1]] = 1

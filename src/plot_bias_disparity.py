@@ -555,7 +555,7 @@ def plot_explanations_fairness_trend_dumbbell(_bd_all_data, orig_disparity, conf
                 palette = sns.color_palette("Blues_d", as_cmap=True)
                 # plot_palette = list(df_exp_plot['# Del Edges'].map(palette))
 
-                sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
+                sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=20, marker="X", jitter=False,
                               label='GCMC', zorder=2) #, order=order)
                 sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette=palette, sizes=(50, 230), hue_norm=norm,
                                 data=df_exp_plot, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
@@ -668,7 +668,7 @@ def plot_explanations_fairness_trend_dumbbell_individual(_bd_all_data, orig_disp
         palette = sns.color_palette("Blues_d", as_cmap=True)
         # plot_palette = list(df_exp_plot['# Del Edges'].map(palette))
 
-        sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=13, marker="X", jitter=False,
+        sns.stripplot(x=x, y=y, color='#780808', data=df_orig, ax=g.ax_joint, s=25, marker="X", jitter=False,
                       label='GCMC', zorder=2) #, order=order)
         sns.scatterplot(x=x, y=y, hue="# Del Edges", size="# Del Edges", palette=palette, sizes=(50, 230), hue_norm=norm,
                         data=df_exp_plot, ax=g.ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
@@ -708,6 +708,112 @@ def plot_explanations_fairness_trend_dumbbell_individual(_bd_all_data, orig_disp
         plt.tight_layout()
         plt.savefig(os.path.join(plots_path, f'dumbbell_over_del_edges_{e_type}.png'))
         plt.close()
+
+
+# %%
+def plot_bias_disparity_scatterplot(_bd_all_data, orig_disparity, config_ids, n_bins=10):
+    sens_attributes = config["sensitive_attributes"]
+    sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
+    item_cats = train_data.dataset.field2id_token['class']
+
+    x, y = 'Bias Disparity', 'Category'
+
+    for e_type in _bd_all_data:
+        bd_data = _bd_all_data[e_type]
+        for attr in sens_attributes:
+            sens_map = sensitive_maps[attr]
+            plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), attr)
+            if not os.path.exists(plots_path):
+                os.makedirs(plots_path)
+
+            for d_gr in sens_map:
+                if orig_disparity[attr][d_gr] is None:
+                    continue
+
+                exp_data = []
+                plot_bd_keys = []
+                for n_del in bd_data:
+                    bd_gr_data = bd_data[n_del][attr][d_gr].numpy()
+                    if not np.isnan(bd_gr_data).all():
+                        l = len(item_cats)
+                        exp_data.extend(list(zip([n_del] * l, bd_gr_data, item_cats)))
+                        plot_bd_keys.append(n_del)
+
+                orig_data = list(zip(['GCMC'] * len(item_cats), orig_disparity[attr][d_gr].numpy(), item_cats))
+
+                df_orig = pd.DataFrame(orig_data, columns=['Attribute', x, y]).dropna()
+                df_exp = pd.DataFrame(exp_data, columns=['# Del Edges', x, y]).dropna()
+
+                max_del_edges = max(bd_data)
+                bin_size = max_del_edges // n_bins
+                bin_map = {i: f"{e_type}: {i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
+                           range(max_del_edges // bin_size + 1)}
+
+                df_exp['# Del Edges lab'] = df_exp['# Del Edges'].map(lambda x: bin_map[x // bin_size])
+                df_exp['# Del Edges'] = df_exp['# Del Edges'].map(lambda x: (x // bin_size))  # * dot_size
+
+                # g = sns.JointGrid(height=12, ratio=11, space=0.5)
+                # g.ax_marg_y.remove()
+                # g.ax_marg_x.get_shared_x_axes().remove(g.ax_joint)
+
+                fig = plt.figure(figsize=(12, 12))
+                gs = plt.GridSpec(12, 6)
+                ax_marg_x = fig.add_subplot(gs[0, :])
+                ax_joint = fig.add_subplot(gs[1:, :])
+                fig.subplots_adjust(hspace=1.0, wspace=1.0)
+
+                ax_joint.spines['left'].set_position('zero')
+                ax_joint.spines['bottom'].set_position('zero')
+
+                # Eliminate upper and right axes
+                ax_joint.spines['right'].set_color('none')
+                ax_joint.spines['top'].set_color('none')
+
+                # Show ticks in the left and lower axes only
+                ax_joint.xaxis.set_ticks_position('bottom')
+                ax_joint.yaxis.set_ticks_position('left')
+
+                df_exp_plot = df_exp.groupby(['# Del Edges']).agg(**{
+                    "Bias Disparity Mean": pd.NamedAgg(column='Bias Disparity', aggfunc='mean'),
+                    "Bias Disparity Std": pd.NamedAgg(column='Bias Disparity', aggfunc='std'),
+                    "# Del Edges lab": pd.NamedAgg(column='# Del Edges lab', aggfunc='first'),
+                }).reset_index()
+
+                norm = mpl.colors.Normalize(vmin=0, vmax=df_exp_plot['# Del Edges'].max())
+
+                print(df_exp_plot)
+
+                palette = sns.color_palette("Blues_d", as_cmap=True)
+
+                sns.scatterplot(x="Bias Disparity Std", y="Bias Disparity Mean", hue="# Del Edges", size="# Del Edges",
+                                palette=palette, sizes=(50, 230), hue_norm=norm,
+                                data=df_exp_plot, ax=ax_joint, zorder=2, legend="full")  # , jitter=False, order=order)
+                ax_joint.plot(df_orig['Bias Disparity'].std(), df_orig['Bias Disparity'].mean(),
+                                color='#780808', ms=25, marker="X", zorder=2)
+                ax_joint.plot(0, 0, ms=1)
+
+                handles, labels = zip(*utils.legend_without_duplicate_labels(ax_joint))
+                df_exp_plot_sizes = df_exp_plot.set_index("# Del Edges")
+                labels = [df_exp_plot_sizes.loc[int(l), "# Del Edges lab"] if l.isnumeric() else l for l in labels]
+                ax_joint.legend(handles, labels)
+
+                ax_joint.set_title(f"{attr.title()}: {d_gr}")
+
+                ax_joint.legend().remove()
+
+                sm = plt.cm.ScalarMappable(cmap=palette, norm=norm)
+                plt.colorbar(cax=ax_marg_x, mappable=sm, orientation='horizontal')
+
+                cbar_xticks = [f"{x * 100:.2f}%" for x in np.linspace(
+                    0.,
+                    max_del_edges / train_data.dataset.inter_num,
+                    len(ax_marg_x.get_xticklabels())
+                )]
+                ax_marg_x.set_xticklabels(cbar_xticks)
+
+                plt.tight_layout()
+                plt.savefig(os.path.join(plots_path, f'{d_gr}#scatterplot_bd_str_over_del_edges_{e_type}.png'))
+                plt.close()
 
 
 def create_table_bias_disparity(bd, config_ids):
@@ -1026,7 +1132,7 @@ parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1, 1],
                     help="follows the order ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3 7".split())
+args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 -1 72".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -1115,7 +1221,7 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 15}
+args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 20}
 
 # %%
 pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)
@@ -1133,6 +1239,9 @@ if config['target_scope'] == 'group':
 
     # %%
     plot_bias_disparity_boxplot(bias_disparity, pref_data_topk_all, sens_attrs, cleaned_config_ids)
+
+    # %%
+    plot_bias_disparity_scatterplot(bd_all_data, bias_disparity['GCMC'], cleaned_config_ids, n_bins=10)
 
     # %%
     plot_explanations_fairness_trend(bd_all_data, n_users_data_all, bias_disparity['GCMC'], cleaned_config_ids)

@@ -5,6 +5,7 @@ import argparse
 import inspect
 import pickle
 import json
+from typing import Iterable
 
 import torch
 import tqdm
@@ -435,7 +436,35 @@ if __name__ == "__main__":
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                           args.explainer_config_file)
 
-    if config['filter_categories'] is not None:
+    map_cat = None
+    filter_plot_str = ""
+    cats_vs_all = config['cats_vs_all']
+    if cats_vs_all is not None:
+        if not isinstance(cats_vs_all, Iterable):
+            cats_vs_all = [cats_vs_all]
+        if isinstance(cats_vs_all[0], str):
+            cats_vs_all = [(dataset.field2id_token['class'] == cat).nonzero().item() for cat in cats_vs_all]
+        elif not isinstance(cats_vs_all[0], int):
+            raise NotImplementedError(f"one_cat_vs_all = {cats_vs_all} is not supported")
+
+        if 0 in cats_vs_all:
+            raise ValueError("cats_vs_all cannot be or contain zero")
+
+        item_df = pd.DataFrame({
+            'item_id': train_data.dataset.item_feat['item_id'].numpy(),
+            'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
+        })
+
+        import pdb; pdb.set_trace()
+
+        map_cat = dict(zip(cats_vs_all + [-1], list(range(1, len(cats_vs_all) + 2))))
+        item_df['class'] = item_df['class'].map(lambda x: np.unique([map_cat[cat] if cat in map_cat else map_cat[-1] for cat in x if cat != 0]))
+        n_max_cat = max(map(len, item_df['class'].tolist()))
+        item_cats = np.stack([np.pad(x, (0, n_max_cat - len(x)), mode='constant', constant_values=0) for x in item_df['class']])
+        item_cats = torch.tensor(item_cats, dtype=int)
+
+        filter_plot_str = f"_vs_all({'_'.join(map(str, cats_vs_all))})"
+    elif config['filter_categories'] is not None and cats_vs_all is None:
         filter_cats = config['filter_categories']
         item_df = pd.DataFrame({
             'item_id': train_data.dataset.item_feat['item_id'].numpy(),
@@ -443,16 +472,15 @@ if __name__ == "__main__":
         })
 
         if config['filter_categories_mode'] is None or config['filter_categories_mode'] == "random":
-            item_df['class'] = item_df['class'].apply(lambda x: np.random.permutation(x)[:filter_cats])
+            item_df['class'] = item_df['class'].map(lambda x: np.random.permutation(x)[:filter_cats])
         elif config['filter_categories_mode'] == "first":
-            item_df['class'] = item_df['class'].apply(lambda x: x[:1])
+            item_df['class'] = item_df['class'].map(lambda x: x[:1])
         item_cats = np.stack([np.pad(x, (0, filter_cats - len(x)), mode='constant', constant_values=0) for x in item_df['class']])
         item_cats = torch.tensor(item_cats, dtype=int)
 
-        filter_plot_str = f"_filter({config['filter_categories']})"
+        filter_plot_str = f"_filter({filter_cats})"
     else:
         item_cats = dataset.item_feat['class']
-        filter_plot_str = ""
 
     n_cats = item_cats.max() + 1
 
@@ -484,7 +512,9 @@ if __name__ == "__main__":
     plt.savefig(f"{config['dataset']}{filter_plot_str}_cats_share_distribution.png", bbox_inches="tight")
     plt.close()
 
-    bias_pref_kwargs = {'item_cats': item_cats if config['filter_categories'] is not None else None}
+    bias_pref_kwargs = dict(
+        item_cats=item_cats if (config['filter_categories'] is not None or config['cats_vs_all'] is not None) else None
+    )
 
     # measure bias ratio in training set
     if config['target_scope'] == 'group':
@@ -515,7 +545,7 @@ if __name__ == "__main__":
 
     item_df = pd.DataFrame({
         'item_id': train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
-        'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
+        'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
     item_categories_map = train_data.dataset.field2id_token['class']
     cat_sharing_prob = utils.compute_category_sharing_prob(item_df, len(item_categories_map))
@@ -568,8 +598,12 @@ if __name__ == "__main__":
             with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
                 config = pickle.load(config_file)
 
-        if config['filter_categories'] is not None:
+        if config['filter_categories'] is not None or map_cat is not None:
             torch.save(item_cats, os.path.join(base_exps_filepath, 'item_cats.pt'))
+
+        if map_cat is not None:
+            with open(os.path.join(base_exps_filepath, 'map_cats.pkl'), 'rb') as f:
+                pickle.dump(map_cat, f)
 
         exps_data = utils.load_exps_file(base_exps_filepath)
         save_exps_df(base_exps_filepath, exps_data)
