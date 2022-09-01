@@ -221,11 +221,13 @@ class BGExplainer:
             knap_counts_data = {}
             for attr in self.train_pref_ratio:
                 knap_counts_data[attr] = {}
-                user_count = torch.bincount(self.dataset.user_feat[attr][batched_data])
+                user_count = torch.bincount(self.dataset.user_feat[attr][batched_data], minlength=len(self.train_pref_ratio[attr]))
                 for gr, gr_data in self.train_pref_ratio[attr].items():
-                    import pdb; pdb.set_trace()
-                    if gr_data is not None:
+                    if gr_data is not None and user_count[gr] > 0:
                         knap_counts_data[attr][gr] = (user_count[gr] * topk * gr_data).round().int()
+                        max_count = torch.argmax(knap_counts_data[attr][gr])
+                        knap_sum = knap_counts_data[attr][gr].sum()
+                        knap_counts_data[attr][gr][max_count] -= knap_sum - (user_count[gr] * topk)
                     else:
                         knap_counts_data[attr][gr] = None
         else:
@@ -422,11 +424,11 @@ class BGExplainer:
             # # target.rename(columns={0: 'user_id', 1: 'cf_topk_pred'}, inplace=True)
             # target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
 
+            self.cf_model.eval()
             with torch.no_grad():
                 cf_scores_pred_after = self.get_scores(self.cf_model, *self.scores_args, pred=True)
-                _, cf_topk_pred_idx_after = self.get_top_k(cf_scores_pred, **self.topk_args)
+                _, cf_topk_pred_idx_after = self.get_top_k(cf_scores_pred_after, **self.topk_args)
 
-            self.cf_model.eval()
             target = cf_topk_pred_idx_after.cpu().numpy()
 
             target_df = pd.DataFrame(zip(self.user_id.numpy(), target), columns=['user_id', 'cf_topk_pred'])
@@ -716,31 +718,6 @@ def get_bias_disparity_sorted_target(scores,
                     gr_target = torch.zeros_like(gr_idxs, dtype=torch.float)
 
                     if knap_counts is not None:
-                        # cats = item_categories_map[gr_idxs]
-                        # cats_flat = cats.view((cats.shape[0] * cats.shape[1], cats.shape[-1])).numpy()
-                        # cats_data = np.stack([
-                        #     np.repeat(np.arange(cats.shape[0]), cats.shape[1]),
-                        #     np.tile(np.arange(cats.shape[1]), cats.shape[0])
-                        # ], axis=0)
-                        #
-                        # rank_df = pd.DataFrame(zip(*cats_data, cats_flat), columns=['user', 'pos', 'cats'])
-                        # rank_df['cats'] = rank_df['cats'].map(lambda x: np.array([]) if all(cat == 0 for cat in x) else np.array(x))
-                        # rank_df['safe_cat'] = rank_df['cats'].map(lambda x: knap_counts[attr][gr][x[x.nonzero()]].all().item())
-                        # rank_df = rank_df[rank_df['safe_cat']]
-                        # cat_distrib = rank_df['cats'].map(lambda x: np.mean([attr_cat_distrib[attr][gr][c] for c in x] if len(x) > 0 else np.nan))
-                        # rank_df['rank'] = (2 ** ((rank_df['pos'] + 1) / knap_theta)).replace(0, np.nan) * cat_distrib
-                        #
-                        # rank_df.sort_values('rank', ascending=True, inplace=True)
-                        #
-                        # target_items = rank_df.groupby("user").head(topk)
-                        #
-                        # for cat in target_items['cats']:
-                        #     knap_counts[attr][gr][cat] -= 1
-                        #
-                        # target_items = torch.tensor(target_items[["user", "pos"]].values.tolist())
-                        #
-                        # gr_target[target_items[:, 0], target_items[:, 1]] = 1
-
                         for i in range(gr_idxs.shape[0]):
                             i_cats = item_categories_map[gr_idxs[i]]
                             one_counts = 0
@@ -765,14 +742,6 @@ def get_bias_disparity_sorted_target(scores,
                                 temp_pos = pos_rec[(topk - n_items):topk].copy()
                                 pos_rec[(topk - n_items):topk] = pos_rec[candidate_items]
                                 pos_rec[candidate_items] = temp_pos
-
-                            # rank_score = 2 ** ((np.arange(gr_idxs[i].shape[0]) + 1) / knap_theta)
-                            # # rank_score2 = np.log10(np.arange(gr_idxs[i].shape[0]) + 1) / np.log10(np.full(gr_idxs[i].shape[0], topk))
-                            # rank_score *= distrib
-                            # rank = np.argsort(rank_score)
-
-                            # if (np.sort(rank[:topk]) == np.arange(topk)).all():
-                            #     rank = np.concatenate([np.arange(topk), rank[topk:]])
 
                             for pos, j_cat, dstb in zip(pos_rec, i_cats, distrib):
                                 safe_cat = j_cat[j_cat.nonzero()]
@@ -854,11 +823,6 @@ def get_bias_disparity_sorted_target(scores,
     elif target_scope == "individual":
         cat_order = torch.randperm(item_categories_map.max() + 1)  # random order of cat to avoid attention on first
 
-        # mean_intersharing = None
-        # if attr_cat_distrib is not None and cat_intersharing is not None:
-        #     mean_intersharing = np.nanmean(attr_cat_distrib[attr][gr] * cat_intersharing, axis=1)
-        #     mean_intersharing = mean_intersharing.sum() / (cat_intersharing.shape[0] - 1)
-
         for cat in cat_order:
             # counts how many ones are already in the target of each user
             one_counts = torch.count_nonzero((target > 0), dim=1).cpu().numpy()
@@ -908,7 +872,7 @@ def get_bias_disparity_sorted_target(scores,
                 n_target = (n_target * share_prob).round().astype(int)
 
                 target_items = df_filt.groupby("user").apply(
-                    lambda _df: _df.take(np.arange(min(n_target[_df["user"].head(1).values], topk - _df["count"].head(1).values)))
+                    lambda _df: _df.head(min(n_target[_df["user"].head(1).values], topk - _df["count"].head(1).values))
                 )
                 target_items = torch.tensor(target_items[["user", "rank"]].values)
 

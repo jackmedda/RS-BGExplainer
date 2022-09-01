@@ -436,6 +436,8 @@ if __name__ == "__main__":
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                           args.explainer_config_file)
 
+    import pdb; pdb.set_trace()
+
     map_cat = None
     filter_plot_str = ""
     cats_vs_all = config['cats_vs_all']
@@ -454,8 +456,6 @@ if __name__ == "__main__":
             'item_id': train_data.dataset.item_feat['item_id'].numpy(),
             'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
         })
-
-        import pdb; pdb.set_trace()
 
         map_cat = dict(zip(cats_vs_all + [-1], list(range(1, len(cats_vs_all) + 2))))
         item_df['class'] = item_df['class'].map(lambda x: np.unique([map_cat[cat] if cat in map_cat else map_cat[-1] for cat in x if cat != 0]))
@@ -497,11 +497,15 @@ if __name__ == "__main__":
 
     g = sns.JointGrid(height=12, space=0.5)
     g.ax_marg_x.remove()
-    bar_df = pd.DataFrame(zip(dataset.field2id_token['class'], bar_data))
+    if map_cat is not None:
+        class_names = dataset.field2id_token['class'][[0] + list(map_cat.values())]
+    else:
+        class_names = dataset.field2id_token['class']
+    bar_df = pd.DataFrame(zip(class_names, bar_data))
     sns.barplot(x=1, y=0, data=bar_df, ax=g.ax_marg_y, color="black")
     g.ax_marg_y.plot([1., 1.], g.ax_marg_y.get_ylim(), 'k--')
     sns.heatmap(
-        pd.DataFrame(heat_data, index=dataset.field2id_token['class'], columns=dataset.field2id_token['class']),
+        pd.DataFrame(heat_data, index=class_names, columns=class_names),
         ax=g.ax_joint,
         center=0,
         linewidths=.5,
@@ -602,7 +606,7 @@ if __name__ == "__main__":
             torch.save(item_cats, os.path.join(base_exps_filepath, 'item_cats.pt'))
 
         if map_cat is not None:
-            with open(os.path.join(base_exps_filepath, 'map_cats.pkl'), 'rb') as f:
+            with open(os.path.join(base_exps_filepath, 'map_cats.pkl'), 'wb') as f:
                 pickle.dump(map_cat, f)
 
         exps_data = utils.load_exps_file(base_exps_filepath)

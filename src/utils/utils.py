@@ -55,14 +55,6 @@ def load_data_and_model(model_file, explainer_config_file):
 
     dataset = create_dataset(config)
 
-    # # specifying tot_item_num to the number of unique items makes the dataloader for evaluation to be batched
-    # # on interactions of one user at a time
-    # if config['explain_scope'] == "group":
-    #     config['eval_batch_size'] = dataset.item_num * config['user_batch_exp']
-    # elif config['explain_scope'] == "individual":
-    #     config['eval_batch_size'] = dataset.item_num
-    # else:
-    #     raise ValueError(f"`{config['explain_scope']}` is not in {['group', 'individual']}")
     config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
 
     logger.info(dataset)
@@ -539,8 +531,9 @@ def damerau_levenshtein_distance(s1, s2):
 class NDCGApproxLoss(torch.nn.modules.loss._Loss):
     __constants__ = ['reduction']
 
-    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1) -> None:
+    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
         super(NDCGApproxLoss, self).__init__(size_average, reduce, reduction)
+        self.topk = topk
         self.temperature = temperature
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -556,15 +549,18 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         def inverse_max_dcg(_target,
                             gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
                             rank_discount_fn=lambda rank: 1. / rank.log1p()):
-            ideal_sorted_target = torch.topk(_target, _target.shape[1]).values
+            topk = self.topk or _target.shape[1]
+            ideal_sorted_target = torch.topk(_target, topk).values
             rank = (torch.arange(ideal_sorted_target.shape[1]) + 1).to(_target.device)
             discounted_gain = gain_fn(ideal_sorted_target).to(_target.device) * rank_discount_fn(rank)
             discounted_gain = torch.sum(discounted_gain, dim=1, keepdim=True)
             return torch.where(discounted_gain > 0., 1. / discounted_gain, torch.zeros_like(discounted_gain))
 
         def ndcg(_target, _ranks):
-            discounts = 1. / _ranks.log1p()
-            gains = torch.pow(2., _target).to(_target.device) - 1.
+            topk = self.topk or _target.shape[1]
+            sorted_target, sorted_idxs = torch.topk(_target, topk)
+            discounts = 1. / _ranks[torch.arange(_ranks.shape[0])[:, None], sorted_idxs].log1p()
+            gains = torch.pow(2., sorted_target).to(_target.device) - 1.
             dcg = torch.sum(gains * discounts, dim=-1, keepdim=True)
             return dcg * inverse_max_dcg(_target)
 

@@ -15,6 +15,9 @@ import matplotlib as mpl
 import matplotlib.ticker as mpl_tick
 import matplotlib.pyplot as plt
 import networkx as nx
+import recbole.evaluator.collector as recb_collector
+from recbole.evaluator import Evaluator
+from recbole.trainer import Trainer
 from networkx.algorithms import bipartite
 
 import src.utils as utils
@@ -25,9 +28,8 @@ def get_plots_path():
     plots_path = os.path.join(
         script_path,
         os.pardir,
-        f'bias_disparity_plots',
+        f'dp_plots',
         config['dataset'],
-        batch_exp_s,
         '_'.join(map(str, args.best_exp_col)) if isinstance(args.best_exp_col, list) else \
             ('_'.join(map(str, list(args.best_exp_col.items()))) if isinstance(args.best_exp_col, dict) else args.best_exp_col),
     )
@@ -74,8 +76,23 @@ def clean_history_matrix(hist_m):
             hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
 
 
-def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, best_exp_col):
-    bias_disparity_all = {}
+def compute_result(pref_data, pred_col, metric):
+    dataobject = recb_collector.DataStruct()
+    pos_matrix = np.zeros((user_num, item_num), dtype=int)
+    pos_matrix[pref_data['user_id'][:, None], test_hist_matrix[pref_data['user_id']], :] = 1
+    pos_len_list = torch.tensor(pos_matrix.sum(axis=1, keepdims=True))
+    pos_idx = torch.tensor(pos_matrix[pref_data['user_id'][:, None], pref_data[pred_col]])
+    pos_data = torch.cat((pos_idx, pos_len_list), dim=1)
+    dataobject.set('rec.topk', result)
+
+    pos_index, pos_len = evaluator.metric_class[metric].used_info(dataobject)
+    result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
+
+    return result
+
+
+def extract_best_metrics(_exp_paths, best_exp_col):
+    result_all = {}
     pref_data_all = {}
     for e_type, e_path in _exp_paths.items():
         if e_path is None:
@@ -93,98 +110,46 @@ def extract_bias_disparity(_exp_paths, _train_bias_ratio, _train_data, _config, 
             bec[0] = bec[0].lower()
         top_exp_func = None
         if isinstance(bec, int):
-            top_exp_func = lambda exp: exp[bec]
+            def top_exp_func(exp): return exp[bec]
         elif bec not in ["first", "last", "mid"] and not isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec) if bec is not None else None
             if top_exp_col is not None:
-                top_exp_func = lambda exp: sorted(exp, key=lambda x: x[top_exp_col])[0]
+                def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
         elif bec == "first":
-            top_exp_func = lambda exp: exp[0]
+            def top_exp_func(exp): return exp[0]
         elif bec == "last":
-            top_exp_func = lambda exp: exp[-1]
+            def top_exp_func(exp): return exp[-1]
         elif bec == "mid":
-            top_exp_func = lambda exp: exp[len(exp) // 2]
+            def top_exp_func(exp): return exp[len(exp) // 2]
         elif isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec[0])
-            top_exp_func = lambda exp: sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
+            def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
 
         pref_data = []
-        if batch_exp_s == 'individual':
-            for user_id, user_exps in exps_data.items():
-                u_exps = user_exps
-                if top_exp_func is not None and user_exps:
-                    u_exps = top_exp_func(user_exps)
-                    u_exps = [u_exps]
-                if u_exps:
-                    pref_data.append([user_id, u_exps[0][1].squeeze(), u_exps[0][2].squeeze()])
-        elif batch_exp_s == 'group_explain':
-            for exp_entry in exps_data:
-                if top_exp_func is not None:
-                    _exp = top_exp_func(exp_entry)
-                else:
-                    _exp = exp_entry[0]
+        for exp_entry in exps_data:
+            if top_exp_func is not None:
+                _exp = top_exp_func(exp_entry)
+            else:
+                _exp = exp_entry[0]
 
-                pref_data.extend(list(zip(_exp[0], _exp[1], _exp[2])))
+            pref_data.extend(list(zip(_exp[0], _exp[1], _exp[2])))
 
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
         pref_data_all[e_type] = pref_data
 
         if not pref_data.empty:
-            if config['target_scope'] == 'group':
-                rec_bias_ratio, rec_pref_ratio = utils.generate_bias_ratio(
-                    _train_data,
-                    config,
-                    pred_col='cf_topk_pred',
-                    sensitive_attrs=_config['sensitive_attributes'],
-                    history_matrix=pref_data,
-                    mapped_keys=True,
-                    item_cats=item_cats_exp[e_type]
-                )
+            result_all[e_type] = {}
+            for metric in evaluator.metrics:
+                result_all[e_type][metric] = compute_result(pref_data, 'cf_topk_pred', metric)
 
-                bias_disparity_all[e_type] = utils.compute_bias_disparity(_train_bias_ratio, rec_bias_ratio, _train_data)
-            elif config['target_scope'] == 'individual':
-                rec_bias_ratio, rec_pref_ratio = utils.generate_individual_bias_ratio(
-                    _train_data,
-                    config,
-                    pred_col='cf_topk_pred',
-                    history_matrix=pref_data,
-                    item_cats=item_cats_exp[e_type]
-                )
-
-                bias_disparity_all[e_type] = utils.compute_calibration(_train_bias_ratio, rec_bias_ratio)
-
-            if 'GCMC' not in bias_disparity_all:
-                pref_data_GCMC = pd.read_csv(os.path.join(script_path, 'pref_data_GCMC_original.csv'))
-                pref_data_all["GCMC"] = pref_data_GCMC
-
-                if config['target_scope'] == 'group':
-                    rec_orig_bias, rec_orig_pref = utils.generate_bias_ratio(
-                        _train_data,
-                        config,
-                        pred_col='topk_pred',
-                        sensitive_attrs=_config['sensitive_attributes'],
-                        # history_matrix=pref_data,
-                        history_matrix=pref_data_GCMC,
-                        mapped_keys=True,
-                        item_cats=item_cats_exp[e_type]
-                    )
-
-                    bias_disparity_all['GCMC'] = utils.compute_bias_disparity(_train_bias_ratio, rec_orig_bias, _train_data)
-                elif config['target_scope'] == 'individual':
-                    rec_orig_bias, rec_orig_pref = utils.generate_individual_bias_ratio(
-                        _train_data,
-                        config,
-                        pred_col='topk_pred',
-                        # history_matrix=pref_data,
-                        history_matrix=pref_data_GCMC,
-                        item_cats=item_cats_exp[e_type]
-                    )
-
-                    bias_disparity_all['GCMC'] = utils.compute_calibration(_train_bias_ratio, rec_orig_bias)
+                if 'GCMC' not in result_all:
+                    result_all['GCMC'] = {}
+                    if metric not in result_all['GCMC']:
+                        result_all['GCMC'][metric] = compute_result(pref_data, 'topk_pred', metric)
         else:
             print("Pref Data is empty!")
 
-    return pref_data_all, bias_disparity_all
+    return pref_data_all, result_all
 
 
 def plot_bias_disparity_diff_dumbbell(bd, sens_attrs, config_ids, sort="dots"):
@@ -1156,7 +1121,7 @@ parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1, 1],
                     help="follows the order ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args(r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 -1 82".split())
+args = parser.parse_args() #  r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 -1 82".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -1168,6 +1133,12 @@ print(args)
 
 config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                       args.explainer_config_file)
+
+user_num, item_num = dataset.user_num, dataset.item_num
+test_hist_matrix, _, test_hist_len = test_data.dataset.history_item_matrix()
+test_hist_matrix, test_hist_len = test_hist_matrix.numpy(), test_hist_len.numpy()
+evaluator = Evaluator(config)
+
 # %%
 # G=utils.get_nx_biadj_matrix(train_data.dataset)
 # # top = nx.bipartite.sets(G)[0]
@@ -1184,88 +1155,29 @@ config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_
 
 # %%
 sens_attrs, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
-batch_exp_s = 'individual' if batch_exp == 1 else ('group_explain' if config['group_explain'] else 'group')
-if batch_exp_s == 'group':
-    raise NotImplementedError()
 
 exp_paths = {}
-item_cats_exp = {}
-map_cats_exp = {}
 for c_id, exp_t, old_exp_t in zip(
     args.load_config_ids,
-    ['Silvestri et al.', 'GCMC+BD', 'GCMC+NDCG'],
-    ['pred_explain', 'FairBD', 'FairNDCGApprox']
+    ['Silvestri et al.', 'GCMC+DP'],
+    ['pred_explain', 'FairDP']
 ):
     exp_paths[exp_t] = None
-    item_cats_exp[exp_t] = None
-    map_cats_exp[exp_t] = None
     if c_id != -1:
         exp_paths[exp_t] = os.path.join(script_path, 'explanations', dataset.dataset_name,
-                                        old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(batch_exp_s), str(c_id))
-
-        if config['cats_vs_all'] is not None:
-            with open(os.path.join(exp_paths[exp_t], 'map_cats.pkl'), 'rb') as f:
-                map_cats_exp[exp_t] = pickle.load(f)
-
-            item_df = pd.DataFrame({
-                'item_id': train_data.dataset.item_feat['item_id'].numpy(),
-                'class': map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
-            })
-
-            item_df['class'] = item_df['class'].map(
-                lambda x: np.unique([map_cats_exp[exp_t][cat] if cat in map_cats_exp[exp_t] else map_cats_exp[exp_t][-1] for cat in x if cat != 0])
-            )
-            n_max_cat = max(map(len, item_df['class'].tolist()))
-            item_cats = np.stack([np.pad(x, (0, n_max_cat - len(x)), mode='constant', constant_values=0) for x in item_df['class']])
-            item_cats_exp[exp_t] = torch.tensor(item_cats, dtype=int)
-        elif config['filter_categories'] is not None:
-            item_cats_exp[exp_t] = torch.load(os.path.join(exp_paths[exp_t], 'item_cats.pt'))
-
-# measure bias ratio in training set
-if config['target_scope'] == 'group':
-    train_bias_ratio, train_pref_ratio = utils.generate_bias_ratio(
-        train_data,
-        config,
-        sensitive_attrs=config['sensitive_attributes'],
-        mapped_keys=True,
-        item_cats=item_cats_exp['GCMC+NDCG']
-    )
-elif config['target_scope'] == 'individual':
-    train_bias_ratio, train_pref_ratio = utils.generate_individual_bias_ratio(
-        train_data,
-        config,
-        item_cats=item_cats_exp['GCMC+NDCG']
-    )
-else:
-    raise NotImplementedError(f"target_scope = `{config['target_scope']}` is not supported")
-
-if item_cats_exp['GCMC+NDCG'] is not None:
-    item_class = item_cats_exp['GCMC+NDCG'].numpy().tolist()
-else:
-    item_class = map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist())
-
-item_df = pd.DataFrame({
-    'item_id': train_data.dataset.item_feat['item_id'].numpy(),
-    'class': item_class
-})
-
-user_df = pd.DataFrame({
-    'user_id': train_data.dataset.user_feat['user_id'].numpy(),
-    **{sens_attr: train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sens_attrs}
-})
+                                        old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(c_id))
 
 train_df = pd.DataFrame(train_data.dataset.inter_feat.numpy())[["user_id", "item_id"]]
-joint_df = train_df.join(item_df.set_index('item_id'), on='item_id').join(user_df.set_index('user_id'), on='user_id')
 
 user_hist_matrix, _, user_hist_len = train_data.dataset.history_item_matrix()
 item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+BD": 50, "GCMC+NDCG": 20}
+args.best_exp_col = {"GCMC+DP": 50}
 
 # %%
-pref_data_topk_all, bias_disparity = extract_bias_disparity(exp_paths, train_bias_ratio, train_data, config, args.best_exp_col)
+pref_data_topk_all, bias_disparity = extract_best_metrics(exp_paths, args.best_exp_col)
 
 # %%
 all_exp_dfs, bd_all_data, n_users_data_all, topk_dist_all = extract_all_exp_bd_data(exp_paths, train_bias_ratio, train_data)

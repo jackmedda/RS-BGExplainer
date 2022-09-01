@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 609 # 1200 for NDCGApprox
+cf_learning_rate: 500000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -34,7 +34,7 @@ fair_target_lambda: 2.7
 intershare_eta: 0
 
 knapsack: True
-knap_theta: 0.3
+knap_theta: 1.1
 
 cats_vs_all:
 filter_categories: 1
