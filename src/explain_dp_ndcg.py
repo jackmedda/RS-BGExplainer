@@ -105,7 +105,7 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
     with open(os.path.join(base_exps_filepath, "config.json"), 'w') as config_json:
         json.dump(config.final_config_dict, config_json, indent=4, default=lambda x: str(x))
 
-    bge = DPBGExplainer(config, train_data.dataset, valid_data.dataset, model, user_data, dist=config['cf_dist'], **kwargs)
+    bge = DPBGExplainer(config, train_data.dataset, rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
     exp, _ = bge.explain((user_data, test_data), epochs, topk=topk)
     del bge
 
@@ -135,6 +135,11 @@ if __name__ == "__main__":
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                           args.explainer_config_file)
+
+    if config['exp_rec_data'] is not None:
+        rec_data = locals()[f"{config['exp_rec_data']}_data"].dataset
+    else:
+        rec_data = valid_data.dataset
 
     base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
 

@@ -89,6 +89,19 @@ def load_exps_file(base_exps_file):
     return exps
 
 
+def load_dp_exps_file(base_exps_file):
+    files = [f for f in os.scandir(base_exps_file) if 'user' in f.name]
+
+    group_exp = False
+    exps = []
+    for f in files:
+        with open(f.path, 'rb') as file:
+            exp = pickle.load(file)
+        exps.append(exp)
+
+    return exps
+
+
 def get_nx_adj_matrix(config, dataset):
     USER_ID = config['USER_ID_FIELD']
     ITEM_ID = config['ITEM_ID_FIELD']

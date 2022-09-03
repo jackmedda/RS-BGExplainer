@@ -32,12 +32,12 @@ def get_gpu_memory():
 
 class DPBGExplainer:
 
-    def __init__(self, config, dataset, valid_data, model, user_id, dist="damerau_levenshtein", **kwargs):
+    def __init__(self, config, dataset, rec_data, model, user_id, dist="damerau_levenshtein", **kwargs):
         super(DPBGExplainer, self).__init__()
         self.model = model
         self.model.eval()
         self.dataset = dataset
-        self.valid_data = valid_data
+        self.rec_data = rec_data
 
         self.user_id = user_id
         self.beta = config['cf_beta']
@@ -328,7 +328,7 @@ class DPBGExplainer:
             self.dist,
             fair_loss_f=DPNDCGLoss(
                 self.sensitive_attributes,
-                self.valid_data.history_item_matrix()[0],
+                self.rec_data.history_item_matrix()[0],
                 topk=topk
             ),
             target=user_feat
