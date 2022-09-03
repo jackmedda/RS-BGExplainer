@@ -225,7 +225,7 @@ class DPBGExplainer:
 
                 if batch_counter == 0:
                     break
-            iter_data.append(torch.concat(batch_data))
+            iter_data.append(torch.cat(batch_data))
 
         return iter_data
 
