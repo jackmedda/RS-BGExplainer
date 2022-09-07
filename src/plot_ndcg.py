@@ -1226,7 +1226,7 @@ create_table_metrics_over_del_edges(
     best_test_pref_data,
     best_test_result['GCMC'],
     cleaned_config_ids,
-    n_bins=10,
+    n_bins=100,
     hist_type="test",
     test_f="f_oneway"
 )

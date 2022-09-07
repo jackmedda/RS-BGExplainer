@@ -349,7 +349,7 @@ def load_diameter_info():
     :return:
     """
     _diam_info = {}
-    diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
+    diam_info_path = os.path.join(script_path, '../dataset', 'diam_info.json')
     if os.path.exists(diam_info_path):
         if os.stat(diam_info_path).st_size == 0:
             os.remove(diam_info_path)
@@ -368,7 +368,7 @@ def update_diameter_info(_loaded_diam, _diam_info, _diam):
     :param _diam:
     :return:
     """
-    diam_info_path = os.path.join(script_path, 'dataset', 'diam_info.json')
+    diam_info_path = os.path.join(script_path, '../dataset', 'diam_info.json')
 
     if _loaded_diam is None:
         _diam_info[config['dataset']] = _diam

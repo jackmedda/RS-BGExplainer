@@ -5,17 +5,17 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 5000 # 1200 for NDCGApprox
+cf_learning_rate: 15000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
-user_batch_exp: 64
+user_batch_exp: 32
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
 pred_same: False
 # loss weight for the graph dist loss
-cf_beta: 0.0
+cf_beta: 0.5
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
@@ -25,7 +25,7 @@ cf_topk: 10
 # FairBD
 # fair_beta: 0.5
 # FairNDCGApproxLoss
-fair_beta: 1.0
+fair_beta: 0.5
 dropout_prob: 0.3
 
 # hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
@@ -54,6 +54,8 @@ target_scope: group
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
+# ML-1M
+# data_path: 'src/dataset/ml-1m' # for ML-1M
 
 # consider only the nodes at the last hop
 sub_matrix_only_last_level: False
@@ -89,9 +91,3 @@ load_col:
     inter: [user_id, item_id, timestamp]
     item: [item_id, class]
     user: [user_id, gender, age]
-
-# ML-1M
-#load_col:
-#    inter: [user_id, item_id, timestamp]
-#    item: [item_id, genre]
-#    user: [user_id, gender, age]
