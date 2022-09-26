@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 15000 # 1200 for NDCGApprox
+cf_learning_rate: 100 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -22,23 +22,8 @@ cf_dist: damerau_levenshtein
 cf_topk: 10
 
 # loss weight for the fairness loss (used only if `explain_fairness` == True)
-# FairBD
-# fair_beta: 0.5
-# FairNDCGApproxLoss
 fair_beta: 0.5
 dropout_prob: 0.3
-
-# hyper-parameter that "forces" the percentage of low bias items in the topk (max 1.0)
-fair_target_lambda: 2.7
-
-intershare_eta: 0
-
-knapsack: True
-knap_theta: 1.1
-
-cats_vs_all:
-filter_categories: 1
-filter_categories_mode: random
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
 exp_rec_data: "test"
@@ -49,8 +34,7 @@ exp_rec_data: "test"
 group_explain: True
 group_explain_by: gender
 
-# The losses chooses the target to optimize bias disparity (group) or calibration (individual)
-target_scope: group
+only_adv_group: "global"
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
@@ -69,19 +53,11 @@ only_subgraph: False
 # FairBD 8: row > 1 taking all the items until the last row < 1
 # if to use fairness loss
 explain_fairness: True
-# uses FairNDCGApprox instead of FairBD
-explain_fairness_NDCGApprox: True
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attributes: [gender] # , age]
 
 # if True each new exp will have a different number of edges from the last one
 save_unique_graph_dist_loss: True
-
-# -infinite is assigned to the user history interactions in the list of scores to consider a top-k of only new items
-# This zero out the gradient for the items for which -infinite is assigned, so a subgraph with only the interactions of
-# the user cannot be "explained" by using the top-k list. This parameter does not assign -infinite if the items of the
-# user history are not in the top-k and can be used for explanation
-keep_history_if_possible: False
 
 # force return of explanations even though the top-k is not perturbed (only useful for hops analysis)
 explainer_force_return: False

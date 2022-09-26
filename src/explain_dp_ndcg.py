@@ -137,9 +137,9 @@ if __name__ == "__main__":
                                                                                           args.explainer_config_file)
 
     if config['exp_rec_data'] is not None:
-        rec_data = locals()[f"{config['exp_rec_data']}_data"].dataset
+        rec_data = locals()[f"{config['exp_rec_data']}_data"]
     else:
-        rec_data = valid_data.dataset
+        rec_data = valid_data
 
     base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
 

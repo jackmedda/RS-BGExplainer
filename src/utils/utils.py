@@ -9,6 +9,7 @@ import scipy
 import numpy as np
 import pandas as pd
 import networkx as nx
+import recbole.evaluator.collector as recb_collector
 from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
@@ -92,7 +93,6 @@ def load_exps_file(base_exps_file):
 def load_dp_exps_file(base_exps_file):
     files = [f for f in os.scandir(base_exps_file) if 'user' in f.name]
 
-    group_exp = False
     exps = []
     for f in files:
         with open(f.path, 'rb') as file:
@@ -124,6 +124,26 @@ def get_nx_biadj_matrix(dataset):
     inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
 
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
+
+
+def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
+    hist_matrix, _, _ = dataset.history_item_matrix()
+    dataobject = recb_collector.DataStruct()
+    uid_list = pref_data['user_id'].to_numpy()
+
+    pos_matrix = np.zeros((dataset.user_num, dataset.item_num), dtype=int)
+    pos_matrix[uid_list[:, None], hist_matrix[uid_list]] = 1
+    pos_matrix[:, 0] = 0
+    pos_len_list = torch.tensor(pos_matrix.sum(axis=1, keepdims=True))
+    pos_idx = torch.tensor(pos_matrix[uid_list[:, None], np.stack(pref_data[pred_col].values)])
+    pos_data = torch.cat((pos_idx, pos_len_list[uid_list]), dim=1)
+
+    dataobject.set('rec.topk', pos_data)
+
+    pos_index, pos_len = evaluator.metric_class[metric].used_info(dataobject)
+    result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
+
+    return result
 
 
 def compute_uniform_categories_prob(_item_df, n_categories, raw=False):

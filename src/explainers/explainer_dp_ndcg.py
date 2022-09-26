@@ -4,7 +4,7 @@ import sys
 import time
 import math
 import itertools
-from typing import Iterable
+from typing import Iterable, Tuple
 
 import tqdm
 import numpy as np
@@ -12,22 +12,11 @@ import torch
 import torch.nn as nn
 from recbole.data.interaction import Interaction
 from recbole.utils import set_color
-from torchviz import make_dot
 
 sys.path.append('..')
 
 import src.utils as utils
 from src.models import GCMCPerturbated
-
-import subprocess
-from memory_profiler import profile
-
-
-def get_gpu_memory():
-    command = "nvidia-smi --query-gpu=memory.free --format=csv"
-    memory_free_info = subprocess.check_output(command.split()).decode('ascii').split('\n')[:-1][1:]
-    # memory_free_values = [int(x.split()[0]) for i, x in enumerate(memory_free_info)]
-    return memory_free_info
 
 
 class DPBGExplainer:
@@ -37,15 +26,13 @@ class DPBGExplainer:
         self.model = model
         self.model.eval()
         self.dataset = dataset
-        self.rec_data = rec_data
+        self.rec_data_loader = rec_data
+        self.rec_data = rec_data.dataset
 
         self.user_id = user_id
         self.beta = config['cf_beta']
         self.device = config['device']
         self.only_subgraph = config['only_subgraph']
-        self.force_return = config['explainer_force_return']
-        self.keep_history = config['keep_history_if_possible']
-        self.explain_fairness_NDCGApprox = config['explain_fairness_NDCGApprox']
         self.unique_graph_dist_loss = config['save_unique_graph_dist_loss']
 
         self.tot_item_num = dataset.item_num
@@ -94,6 +81,33 @@ class DPBGExplainer:
 
         self.old_graph_dist = 0
 
+        self.only_adv_group = config['only_adv_group']
+
+        from recbole.evaluator import Evaluator
+        self.evaluator = Evaluator(config)
+
+        import copy
+        from recbole.utils import get_trainer
+        trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
+        test_result = trainer.evaluate(rec_data, load_best_model=False, show_progress=config['show_progress'])
+        print(test_result)
+
+        females = rec_data.user_df['gender'] == 2
+        males = ~females
+        rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
+
+        rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.user_df.interaction.items()})
+        rec_data_f.uid_list = rec_data_f.user_df['user_id']
+        self.females_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
+
+        rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.user_df.interaction.items()})
+        rec_data_m.uid_list = rec_data_m.user_df['user_id']
+        self.males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
+
+        self.adv_group = 1 if self.males_result['ndcg@10'] >= self.females_result['ndcg@10'] else 2
+        self.disadv_group = 2 if self.adv_group == 1 else 1
+        self.results = dict(zip([1, 2], [self.males_result, self.females_result]))
+
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
         Compute the predictions of the original model without perturbation
@@ -106,7 +120,7 @@ class DPBGExplainer:
         _, history_index, positive_u, positive_i = batched_data
         self.scores_args = [batched_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
 
-        self.topk_args = {'topk': topk, 'history_index': history_index if self.keep_history else None}
+        self.topk_args = {'topk': topk}
 
         if loaded_scores is not None:
             new_field2token_id = self.dataset.field2token_id[self.model.ITEM_ID_FIELD]
@@ -132,11 +146,25 @@ class DPBGExplainer:
             if self.unique_graph_dist_loss and len(best_cf_example) > 0:
                 self.old_graph_dist = best_cf_example[-1][-5]
                 new_graph_dist = new_example[-4]
-                if not (self.old_graph_dist < new_graph_dist):
+                if not (self.old_graph_dist != new_graph_dist):
                     return best_loss
 
             best_cf_example.append(new_example + [first_fair_loss])
             self.old_graph_dist = new_example[-4]
+            import pandas as pd
+            pref_data = pd.DataFrame(zip(*new_example[:3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+            orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+            cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+
+            user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+            males = user_feat['gender'] == 1
+            females = user_feat['gender'] == 2
+
+            orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
+            cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
+            print(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
+                  f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
         return best_loss
@@ -149,12 +177,11 @@ class DPBGExplainer:
         :param data:
         :return:
         """
-        user_id = batched_data
-        user_df_mask = (data.user_df[data.uid_field][..., None] == user_id).any(-1)
-        user_df = Interaction({k: v[user_df_mask] for k, v in data.user_df.interaction.items()})
-        history_item = data.uid2history_item[user_id]
+        user_df = Interaction({k: v[batched_data] for k, v in data.dataset.user_feat.interaction.items()})
 
-        if len(user_id) > 1:
+        history_item = data.uid2history_item[user_df['user_id']]
+
+        if len(batched_data) > 1:
             history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
             history_i = torch.cat(list(history_item))
         else:
@@ -252,15 +279,21 @@ class DPBGExplainer:
             desc=set_color(f"Epochs   ", 'blue'),
         )
 
-        iter_data = self.randperm2groups(batched_data)
-        while any(d.unique().shape[0] < 1 for d in iter_data):  # check if each batch has at least 2 groups
+        if self.only_adv_group != "global":
             iter_data = self.randperm2groups(batched_data)
+            while any(d.unique().shape[0] < 1 for d in iter_data):  # check if each batch has at least 2 groups
+                iter_data = self.randperm2groups(batched_data)
+        else:
+            batched_gender_data = data.dataset.user_feat['gender'][batched_data]
+            iter_data = batched_data[batched_gender_data == self.adv_group].split(self.user_batch_exp)
+
         for epoch in iter_epochs:
             iter_data = [iter_data[i] for i in np.random.permutation(len(iter_data))]
             for batch_idx, batch_user in enumerate(iter_data):
                 self.user_id = batch_user
                 batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, data)
                 self.compute_model_predictions(batched_data_epoch, topk)
+
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
                 if epoch == 0 and batch_idx == 0:
                     first_fair_loss = fair_loss
@@ -312,40 +345,26 @@ class DPBGExplainer:
         cf_scores = torch.nan_to_num(cf_scores, neginf=(torch.min(cf_scores[~torch.isinf(cf_scores)]) - 1).item())
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
 
-        # target when Silvestri et al. method is used
-        relevance_scores = torch.zeros_like(self.model_scores).float().to(self.device)
-        relevance_scores[torch.arange(relevance_scores.shape[0])[:, None], self.model_topk_idx] = 1
-
         user_feat = self.dataset.user_feat
         user_id_mask = self.user_id.unsqueeze(-1) if self.user_id.dim() == 0 else self.user_id
         user_feat = {k: feat[user_id_mask] for k, feat in user_feat.interaction.items()}
 
-        loss_total, loss_pred, loss_graph_dist, fair_loss, cf_adj, adj, nnz_sub_adj, cf_dist = self.cf_model.loss(
+        target = torch.zeros_like(cf_scores, dtype=torch.float, device=cf_scores.device)
+        target[torch.arange(target.shape[0])[:, None], self.rec_data.history_item_matrix()[0][user_feat['user_id']]] = 1
+        target[:, 0] = 0
+
+        loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, cf_adj, adj = self.cf_model.loss(
             cf_scores,
-            relevance_scores,
-            self.model_topk_idx,
-            cf_topk_pred_idx,
-            self.dist,
-            fair_loss_f=DPNDCGLoss(
+            DPNDCGLoss(
                 self.sensitive_attributes,
-                self.rec_data.history_item_matrix()[0],
-                topk=topk
+                user_feat,
+                topk=topk,
+                adv_group_data=(self.only_adv_group, self.adv_group, self.results[self.disadv_group]['ndcg@10'])
             ),
-            target=user_feat
+            target
         )
 
         loss_total.backward()
-
-        # Code that saves in a file the computational graph for debug purposes
-        # dot = make_dot(loss_total.mean(), params=dict(self.cf_model.named_parameters()), show_attrs=True, show_saved=True)
-        # dot.format = 'png'
-        # dot.render(f'dots_loss')
-
-        # Debug code that plots the gradient of perturbation matrix
-        # for name, param in self.cf_model.named_parameters():
-        #     if name == "P_symm":
-        #         print(param.grad[param.grad.nonzero()])
-        # input()
 
         nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         self.cf_optimizer.step()
@@ -355,10 +374,9 @@ class DPBGExplainer:
               'User id: {}'.format(self.user_id),
               'Epoch: {}'.format(epoch + 1),
               'loss: {:.4f}'.format(loss_total.item()),
-              'pred loss: {:.4f}'.format(loss_pred.mean().item()),
               'fair loss: {:.4f}'.format(fair_loss),
               'graph loss: {:.4f}'.format(loss_graph_dist.item()),
-              'nnz sub adj: {}'.format(nnz_sub_adj))
+              'del edges: {:.4f}'.format(int(orig_loss_graph_dist.item())))
         if self.verbose:
             print('Orig output: {}\n'.format(self.model_scores),
                   'Output: {}\n'.format(cf_scores),
@@ -370,18 +388,19 @@ class DPBGExplainer:
                   )
         print(" ")
 
-        # Compute distance between original and perturbed list. Explanation maintained only if dist > 0
         cf_stats = None
-        if cf_dist is None:
-            cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
-        if (np.array(cf_dist) > 0).any() or self.force_return:
+        if orig_loss_graph_dist.item() > 0:
+            # Compute distance between original and perturbed list. Explanation maintained only if dist > 0
+            # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
+            cf_dist = None
+
             cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
             del_edges = np.stack((adj != cf_adj).nonzero(), axis=0)
             del_edges = del_edges[:, del_edges[0, :] <= self.dataset.user_num]  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(), cf_dist,
-                        loss_total.item(), loss_pred.mean().item(), loss_graph_dist.item(), fair_loss, del_edges, nnz_sub_adj]
+                        loss_total.item(), None, loss_graph_dist.item(), fair_loss, del_edges, None, epoch + 1]
 
         return cf_stats, loss_total.item(), fair_loss
 
@@ -412,7 +431,7 @@ class DPBGExplainer:
 
         except NotImplementedError:
             inter_len = len(interaction)
-            new_inter = interaction.to(_model.device).repeat_interleave(tot_item_num)
+            new_inter = interaction.to(_model.device, **scores_kws).repeat_interleave(tot_item_num)
             batch_size = len(new_inter)
             new_inter.update(item_tensor.repeat(inter_len))
             if batch_size <= test_batch_size:
@@ -421,23 +440,15 @@ class DPBGExplainer:
                 scores = self._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
 
         scores = scores.view(-1, tot_item_num)
-        scores[:, 0] = -float("inf")
-        if history_index is not None and not self.keep_history:
-            scores[history_index] = -float("inf")
+        scores[:, 0] = -np.inf
+        if history_index is not None:
+            scores[history_index] = -np.inf
 
         return scores
 
     @staticmethod
-    def get_top_k(scores_tensor, topk=10, history_index=None):
-        while True:
-            scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
-            if history_index is None:
-                break
-            inters = np.intersect1d(topk_idx, history_index)
-            if inters.shape[0] > 0:
-                scores_tensor[inters] = -np.inf
-            else:
-                break
+    def get_top_k(scores_tensor, topk=10):
+        scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
 
         return scores_top_k, topk_idx
 
@@ -447,8 +458,9 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
 
     def __init__(self,
                  sensitive_attributes: Iterable[str],
-                 history,
+                 user_feat,
                  topk=10,
+                 adv_group_data: Tuple[str, int, float] = None,
                  size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1) -> None:
         super(DPNDCGLoss, self).__init__(size_average, reduce, reduction)
 
@@ -459,34 +471,45 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
             reduction=reduction,
             temperature=temperature
         )
-        self.history = history
         self.sensitive_attributes = sensitive_attributes
+        self.user_feat = user_feat
+        self.adv_group_data = adv_group_data
 
-    def forward(self, _input: torch.Tensor, demo_groups: torch.Tensor) -> torch.Tensor:
-        target = torch.zeros_like(_input, dtype=torch.float, device=_input.device)
-        target[torch.arange(target.shape[0])[:, None], self.history[demo_groups['user_id']]] = 1
-        target[:, 0] = 0
-
-        groups = list(itertools.product(*[demo_groups[attr].unique().numpy() for attr in self.sensitive_attributes]))
+    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        groups = list(itertools.product(*[self.user_feat[attr].unique().numpy() for attr in self.sensitive_attributes]))
         masks = []
         for grs in groups:
-            masks.append([(demo_groups[attr] == gr).numpy() for gr, attr in zip(grs, self.sensitive_attributes)])
+            masks.append([(self.user_feat[attr] == gr).numpy() for gr, attr in zip(grs, self.sensitive_attributes)])
         masks = np.stack(masks)
-        # bitwise and finds the users that belong to all groups simultaneously in the product
+        # bitwise and finds the users that belong simultaneously to the groups in the product
         masks = np.bitwise_and.reduce(masks, axis=1)
 
-        ndcg = self.ndcg_loss(_input, target)
+        ndcg_values = self.ndcg_loss(_input, target)
 
         masked_ndcg = []
         for mask in masks:
-            masked_ndcg.append(ndcg[mask].mean(dim=0) / mask.nonzero()[0].shape[0])
+            masked_ndcg.append(ndcg_values[mask].mean(dim=0))
         masked_ndcg = torch.stack(masked_ndcg)
 
         loss = None
-        for gr_i in range(len(groups)):
-            for gr_j in range(gr_i + 1, len(groups)):
-                if loss is None:
-                    loss = (masked_ndcg[gr_i] - masked_ndcg[gr_j]).abs()
-                else:
-                    loss += (masked_ndcg[gr_i] - masked_ndcg[gr_j]).abs()
-        return loss / math.comb(len(groups), 2)
+        for gr_i_idx in range(len(groups)):
+            gr_i = groups[gr_i_idx]
+            if self.adv_group_data[0] == "global":
+                # the loss works to optimize NDCG towards -1, the global NDCG is however positive
+                loss = (masked_ndcg[gr_i_idx] - (-self.adv_group_data[2])).abs()
+            else:
+                for gr_j_idx in range(gr_i_idx + 1, len(groups)):
+                    l_val = masked_ndcg[gr_i_idx]
+                    r_val = masked_ndcg[gr_j_idx]
+
+                    if self.adv_group_data[0] == "local":
+                        if self.adv_group_data[1] == gr_i:
+                            l_val = l_val.detach()
+                        else:
+                            r_val = r_val.detach()
+
+                    if loss is None:
+                        loss = (l_val - r_val).abs()
+                    else:
+                        loss += (l_val - r_val).abs()
+        return loss / max(math.comb(len(groups), 2), 1)

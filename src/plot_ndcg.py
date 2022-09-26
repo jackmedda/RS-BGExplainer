@@ -17,7 +17,6 @@ import matplotlib as mpl
 import matplotlib.ticker as mpl_tick
 import matplotlib.pyplot as plt
 import networkx as nx
-import recbole.evaluator.collector as recb_collector
 from recbole.evaluator import Evaluator
 from networkx.algorithms import bipartite
 
@@ -77,24 +76,8 @@ def clean_history_matrix(hist_m):
             hist_m[col] = hist_m[col].map(lambda x: np.array(x[1:-1].strip().split(), int))
 
 
-def compute_result(pref_data, pred_col, metric, hist_matrix):
-    dataobject = recb_collector.DataStruct()
-    pos_matrix = np.zeros((user_num, item_num), dtype=int)
-    pos_matrix[pref_data['user_id'].to_numpy()[:, None], hist_matrix[pref_data['user_id'], :]] = 1
-    pos_matrix[:, 0] = 0
-    pos_len_list = torch.tensor(pos_matrix.sum(axis=1, keepdims=True)[1:])
-    pos_idx = torch.tensor(pos_matrix[pref_data['user_id'].to_numpy()[:, None], np.stack(pref_data[pred_col].values)])
-    pos_data = torch.cat((pos_idx, pos_len_list), dim=1)
-    dataobject.set('rec.topk', pos_data)
-
-    pos_index, pos_len = evaluator.metric_class[metric].used_info(dataobject)
-    result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
-
-    return result
-
-
-def extract_best_metrics(_exp_paths, best_exp_col, hist_matrix=None):
-    hist_matrix = test_hist_matrix if hist_matrix is None else hist_matrix
+def extract_best_metrics(_exp_paths, best_exp_col, data=None):
+    data = test_data.dataset if data is None else data
 
     result_all = {}
     pref_data_all = {}
@@ -144,13 +127,13 @@ def extract_best_metrics(_exp_paths, best_exp_col, hist_matrix=None):
         if not pref_data.empty:
             result_all[e_type] = {}
             for metric in evaluator.metrics:
-                result_all[e_type][metric] = compute_result(pref_data, 'cf_topk_pred', metric, hist_matrix)
+                result_all[e_type][metric] = utils.compute_metric(evaluator, data, pref_data, 'cf_topk_pred', metric)
 
                 if 'GCMC' not in result_all:
                     result_all['GCMC'] = {}
 
                 if metric not in result_all['GCMC']:
-                    result_all['GCMC'][metric] = compute_result(pref_data, 'topk_pred', metric, hist_matrix)
+                    result_all['GCMC'][metric] = utils.compute_metric(evaluator, data, pref_data, 'topk_pred', metric)
         else:
             print("Pref Data is empty!")
 
@@ -278,11 +261,11 @@ def plot_bias_disparity_boxplot(bd, pref_topk_all, sens_attrs, config_ids):
 
 
 # %%
-def extract_all_exp_metrics_data(_exp_paths, hist_matrix=None):
+def extract_all_exp_metrics_data(_exp_paths, data=None):
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
-    hist_matrix = test_hist_matrix if hist_matrix is None else hist_matrix
+    data = test_data.dataset if data is None else data
 
     cols = [1, 2, 6, 3, "set", 8]
     col_names = ['user_id', 'topk_pred', 'cf_topk_pred', 'n_del_edges', 'topk_dist', 'topk_set_dist', 'del_edges']
@@ -296,7 +279,7 @@ def extract_all_exp_metrics_data(_exp_paths, hist_matrix=None):
             continue
         exps_data = utils.load_dp_exps_file(e_path)
 
-        data = []
+        exp_data = []
         for exp_entry in exps_data:
             for _exp in exp_entry:
                 exp_row_data = [_exp[0]]
@@ -304,7 +287,10 @@ def extract_all_exp_metrics_data(_exp_paths, hist_matrix=None):
                     if col in [1, 2]:
                         exp_row_data.append(_exp[col])
                     elif col in [6]:
-                        exp_row_data.append([int(_exp[col])] * len(exp_row_data[0]))
+                        if _exp[col] == int(_exp[col]):
+                            exp_row_data.append([int(_exp[col])] * len(exp_row_data[0]))
+                        else:
+                            exp_row_data.append([int(_exp[8].shape[1])] * len(exp_row_data[0]))
                     elif col in [3]:
                         if len(_exp[col]) == len(exp_row_data[0]):
                             exp_row_data.append(_exp[col])
@@ -319,9 +305,9 @@ def extract_all_exp_metrics_data(_exp_paths, hist_matrix=None):
                     else:
                         exp_row_data.append([_exp[col]] * len(exp_row_data[0]))
 
-                data.extend(list(zip(*exp_row_data)))
+                exp_data.extend(list(zip(*exp_row_data)))
 
-        data_df = pd.DataFrame(data, columns=col_names)
+        data_df = pd.DataFrame(exp_data, columns=col_names)
         exp_dfs[e_type] = data_df
 
         if data_df.empty:
@@ -334,7 +320,7 @@ def extract_all_exp_metrics_data(_exp_paths, hist_matrix=None):
         for n_del, gr_df in tqdm.tqdm(data_df.groupby('n_del_edges'), desc="Extracting metrics from each explanation"):
             result_data[e_type][n_del] = {}
             for metric in evaluator.metrics:
-                result_data[e_type][n_del][metric] = compute_result(gr_df, 'cf_topk_pred', metric, hist_matrix)
+                result_data[e_type][n_del][metric] = utils.compute_metric(evaluator, data, gr_df, 'cf_topk_pred', metric)
 
             t_dist = gr_df['topk_dist'].to_numpy()
             topk_dist[e_type].extend(list(
@@ -808,6 +794,65 @@ def create_table_bias_disparity(bd, config_ids):
         df_attr.to_markdown(os.path.join(tables_path, f"bias_disparity_table_{attr}.md"), tablefmt="github")
 
 
+# %%
+def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_ids, n_bins=10, hist_type="test", test_f="f_oneway"):
+    sens_attributes = config['sensitive_attributes']
+    sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
+
+    order = ['GCMC', 'GCMC+DP']
+
+    P_005 = '*'
+    P_001 = '^'
+
+    for metric in metrics_names:
+        for attr in sens_attributes:
+            sens_map = sensitive_maps[attr]
+            plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), attr)
+            if not os.path.exists(plots_path):
+                os.makedirs(plots_path)
+
+            # e_type with highest number of explanations
+            max_del_edges_e_type = max([(k, len(x)) for k, x in _result_all_data.items()], key=lambda v: v[1])[0]
+            del_edges = sorted(list(_result_all_data[max_del_edges_e_type]))
+
+            bin_size = max(del_edges) // n_bins
+            bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
+                       range(max(del_edges) // bin_size + 1)}
+
+            del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
+
+            d_grs = np.arange(1, len(sens_map))
+
+            exp_data, stats_data, final_bins = compute_exp_stats_data(
+                _result_all_data, _pref_dfs, orig_result, order, attr, d_grs, del_edges_map, metric, test_f=test_f
+            )
+
+            # plot_vals = []
+            # for row, stat in zip(exp_data, stats_data):
+            #     plot_vals.append([])
+            #     for j in range(len(final_bins)):
+            #         if row:
+            #             plot_vals[-1].append(f"{row[j]:.4f}"
+            #                                  f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
+            #         else:
+            #             plot_vals[-1].append("-")
+
+            final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
+                          for bin in final_bins]
+
+            df_attr = pd.DataFrame(zip(
+                exp_data.flatten(),
+                np.repeat(order, len(final_bins)),
+                np.tile(final_bins, len(order))
+            ), columns=['DP', 'model', '% Del Edges'])
+
+            sns.lineplot(x='% Del Edges', y='DP', hue='model', data=df_attr)
+
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_path, f"{hist_type}_lineplot_over_edges_{attr}_{metric}.png"))
+            plt.close()
+
+
 def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr, d_grs, del_edges_map, metric, test_f="f_oneway"):
     orig_data = []
     orig_stats_data = []
@@ -821,13 +866,15 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
             result_data = _result_all_data[e_type]
 
             e_df = _pref_dfs[e_type]
-            e_d_grs_df = e_df.join(user_df.set_index("user_id"), on="user_id")
-            masks = {d_gr: e_d_grs_df[attr] == d_gr for d_gr in d_grs}
+            e_df_grby = e_df.groupby('n_del_edges')
 
             ch_bins = []
             temp_exp_data = []
             temp_stats_data = []
             for n_del, bin_del in del_edges_map.items():
+                e_d_grs_df = e_df_grby.get_group(n_del).join(user_df.set_index("user_id"), on="user_id")
+                masks = {d_gr: e_d_grs_df[attr] == d_gr for d_gr in d_grs}
+
                 if len(ch_bins) == 0:
                     ch_bins.append(bin_del)
                 elif bin_del not in ch_bins:  # nanmean over rows is executed only if new bin is met
@@ -851,9 +898,10 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
                         temp_stats_data.append(1)
 
                     new_d_grs_exp_data = []
-                    for (g1, g2) in itertools.combinations(d_grs_exp_data, 2):
+                    comb_exp_data = list(itertools.combinations(d_grs_exp_data, 2))
+                    for (g1, g2) in comb_exp_data:
                         new_d_grs_exp_data.append(abs(g1 - g2))
-                    temp_exp_data.append(np.nansum(new_d_grs_exp_data))
+                    temp_exp_data.append(np.nansum(new_d_grs_exp_data) / len(comb_exp_data))
                 else:
                     temp_exp_data.append(np.nan)
 
@@ -872,9 +920,10 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
                 except ValueError as e:
                     orig_stats_data = [1] * len(final_bins)
 
-                for (g1, g2) in itertools.combinations(temp_orig_data, 2):
+                comb_orig_data = list(itertools.combinations(temp_orig_data, 2))
+                for (g1, g2) in comb_orig_data:
                     orig_data.append(abs(g1 - g2))
-                orig_data = [sum(orig_data)] * len(final_bins)
+                orig_data = [sum(orig_data) / len(comb_orig_data)] * len(final_bins)
 
     exp_data.insert(0, orig_data)
     stats_data.insert(0, orig_stats_data)
@@ -924,6 +973,9 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
                                              f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
                     else:
                         plot_vals[-1].append("-")
+
+            final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
+                          for bin in final_bins]
 
             df_attr = pd.DataFrame(plot_vals, columns=final_bins, index=order).T
 
@@ -1135,12 +1187,7 @@ config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_
                                                                                       args.explainer_config_file)
 
 user_num, item_num = dataset.user_num, dataset.item_num
-test_hist_matrix, _, test_hist_len = test_data.dataset.history_item_matrix()
-test_hist_matrix, test_hist_len = test_hist_matrix.numpy(), test_hist_len.numpy()
 evaluator = Evaluator(config)
-
-val_hist_matrix, _, val_hist_len = valid_data.dataset.history_item_matrix()
-val_hist_matrix, val_hist_len = val_hist_matrix.numpy(), val_hist_len.numpy()
 
 metrics_names = evaluator.metrics
 
@@ -1187,15 +1234,15 @@ args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else arg
 args.best_exp_col = {"GCMC+DP": 20}
 
 # %%
-best_test_pref_data, best_test_result = extract_best_metrics(exp_paths, args.best_exp_col, hist_matrix=test_hist_matrix)
-best_val_pref_data, best_val_result = extract_best_metrics(exp_paths, args.best_exp_col, hist_matrix=val_hist_matrix)
+best_test_pref_data, best_test_result = extract_best_metrics(exp_paths, args.best_exp_col, data=test_data.dataset)
+best_val_pref_data, best_val_result = extract_best_metrics(exp_paths, args.best_exp_col, data=valid_data.dataset)
 
 # %%
 all_exp_test_dfs, test_result_all_data, test_n_users_data_all, test_topk_dist_all = extract_all_exp_metrics_data(
-    exp_paths, hist_matrix=test_hist_matrix
+    exp_paths, data=test_data.dataset
 )
 all_exp_val_dfs, val_result_all_data, val_n_users_data_all, val_topk_dist_all = extract_all_exp_metrics_data(
-    exp_paths, hist_matrix=val_hist_matrix
+    exp_paths, data=valid_data.dataset
 )
 
 cleaned_config_ids = list(map(str, args.load_config_ids))
@@ -1223,7 +1270,7 @@ cleaned_config_ids = list(map(str, args.load_config_ids))
 # %%
 create_table_metrics_over_del_edges(
     test_result_all_data,
-    best_test_pref_data,
+    all_exp_test_dfs,
     best_test_result['GCMC'],
     cleaned_config_ids,
     n_bins=100,
@@ -1232,7 +1279,7 @@ create_table_metrics_over_del_edges(
 )
 create_table_metrics_over_del_edges(
     val_result_all_data,
-    best_val_pref_data,
+    all_exp_test_dfs,
     best_val_result['GCMC'],
     cleaned_config_ids,
     n_bins=10,
