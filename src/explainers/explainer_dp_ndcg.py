@@ -3,6 +3,7 @@
 import sys
 import time
 import math
+import copy
 import itertools
 from typing import Iterable, Tuple
 
@@ -10,8 +11,9 @@ import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
+from recbole.evaluator import Evaluator
+from recbole.utils import get_trainer, set_color
 from recbole.data.interaction import Interaction
-from recbole.utils import set_color
 
 sys.path.append('..')
 
@@ -83,16 +85,15 @@ class DPBGExplainer:
 
         self.only_adv_group = config['only_adv_group']
 
-        from recbole.evaluator import Evaluator
         self.evaluator = Evaluator(config)
 
-        import copy
-        from recbole.utils import get_trainer
         trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
         test_result = trainer.evaluate(rec_data, load_best_model=False, show_progress=config['show_progress'])
         print(test_result)
 
-        females = rec_data.user_df['gender'] == 2
+        gender_map = dataset.field2id_token['gender']
+        female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+        females = rec_data.user_df['gender'] == female_idx
         males = ~females
         rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
 
@@ -104,9 +105,11 @@ class DPBGExplainer:
         rec_data_m.uid_list = rec_data_m.user_df['user_id']
         self.males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
 
-        self.adv_group = 1 if self.males_result['ndcg@10'] >= self.females_result['ndcg@10'] else 2
-        self.disadv_group = 2 if self.adv_group == 1 else 1
-        self.results = dict(zip([1, 2], [self.males_result, self.females_result]))
+        check_func = "__ge__" if not config['delete_adv_group'] else "__lt__"
+
+        self.adv_group = male_idx if getattr(self.males_result['ndcg@10'], check_func)(self.females_result['ndcg@10']) else female_idx
+        self.disadv_group = female_idx if self.adv_group == male_idx else male_idx
+        self.results = dict(zip([male_idx, female_idx], [self.males_result, self.females_result]))
 
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
@@ -366,6 +369,11 @@ class DPBGExplainer:
 
         loss_total.backward()
 
+        # for name, param in self.cf_model.named_parameters():
+        #     if name == "P_symm":
+        #         print(param.grad[param.grad.nonzero()])
+        # import pdb; pdb.set_trace()
+
         nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         self.cf_optimizer.step()
 
@@ -396,7 +404,7 @@ class DPBGExplainer:
 
             cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
             del_edges = np.stack((adj != cf_adj).nonzero(), axis=0)
-            del_edges = del_edges[:, del_edges[0, :] <= self.dataset.user_num]  # remove duplicated edges
+            del_edges = del_edges[:, del_edges[0, :] < self.dataset.user_num]  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(), cf_dist,

@@ -100,6 +100,8 @@ class GCMCPerturbated(GeneralRecommender):
         self.not_pred = config['not_pred']
         self.pred_same = config['pred_same']
 
+        self.edge_additions = config['edge_additions']
+
         # adj matrices for each relation are stored in self.support
         self.Graph, self.sub_Graph = self.get_adj_matrix(
             user_id,
@@ -110,9 +112,22 @@ class GCMCPerturbated(GeneralRecommender):
         )
         self.support = [self.Graph]
 
-        self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2) # + self.num_all
+        self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2)  # + self.num_all
+        if self.edge_additions:
+            self.P_idxs = ((self.Graph + 1) % 2).nonzero()
+            # only lower part of Graph
+            self.P_idxs = self.P_idxs[(self.P_idxs[:, 1] < self.n_users) & (self.P_idxs[:, 0] >= self.n_users)]
+            self.P_idxs = self.P_idxs[self.P_idxs[:, 0] != self.P_idxs[:, 1]].T  # removes the diagonal
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 2)
 
-        self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
+            self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
+            self.mask_sub_adj[self.P_idxs[0], self.P_idxs[1]] = True
+        else:
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
+            self.P_idxs = None
+
+            self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
+            self.mask_sub_adj[tuple(self.sub_Graph)] = True
 
         self.reset_parameters()
 
@@ -133,13 +148,14 @@ class GCMCPerturbated(GeneralRecommender):
             num_user=self.n_users,
             num_item=self.n_items,
             support=self.support,
-            sub_adj=self.sub_Graph,
             input_dim=self.input_dim,
             gcn_output_dim=self.gcn_output_dim,
             dense_output_dim=self.dense_output_dim,
             drop_prob=self.dropout_prob,
             device=self.device,
             perturb_adj=self.P_symm,
+            edge_additions=self.edge_additions,
+            mask_sub_adj=self.mask_sub_adj,
             only_subgraph=self.only_subgraph,
             sparse_feature=self.sparse_feature,
         ).to(self.device)
@@ -154,9 +170,9 @@ class GCMCPerturbated(GeneralRecommender):
         self.loss_function = utils.NDCGApproxLoss()
 
     def reset_parameters(self, eps=1e-4):
-        # Think more about how to initialize this
-        # torch.sub(self.P_vec, eps)
-        torch.sub(self.P_symm, eps)
+        with torch.no_grad():
+            if not self.edge_additions:
+                self.P_symm.sub_(eps)
 
     def get_adj_matrix(self, user_id, n_hops, neighbors_hops=False, only_last_level=False, not_user_sub_matrix=False):
         A = sp.dok_matrix((self.num_all, self.num_all), dtype=np.float32)
@@ -267,13 +283,14 @@ class GcEncoder(nn.Module):
         num_user,
         num_item,
         support,
-        sub_adj,
         input_dim,
         gcn_output_dim,
         dense_output_dim,
         drop_prob,
         device,
         perturb_adj,
+        edge_additions,
+        mask_sub_adj,
         only_subgraph,
         sparse_feature=True,
         act_dense=lambda x: x,
@@ -307,12 +324,13 @@ class GcEncoder(nn.Module):
         self.num_all = self.num_users + self.num_items
         # self.P_vec = perturb_adj
         self.P_symm = perturb_adj
+        self.edge_additions = edge_additions
         self.P_hat_symm, self.P = None, None
 
         # self.mask_sub_adj = torch.sparse.LongTensor(inds, data, torch.Size((self.num_all, self.num_all))).bool().to(self.device)
         # self.mask_sub_adj = sub_adj
-        self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
-        self.mask_sub_adj[tuple(sub_adj)] = True
+        self.mask_sub_adj = mask_sub_adj
+
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
         self.only_subgraph = only_subgraph
 
@@ -385,12 +403,15 @@ class GcEncoder(nn.Module):
 
         if pred:
             # P_hat_symm = self.P_symm
-            P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all)  # .to(self.device)
+            P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all)
             P = (torch.sigmoid(P_hat_symm) >= 0.5).float()
-            self.P_loss = P * graph_A
+            if self.edge_additions:
+                self.P_loss = torch.where(self.mask_sub_adj, P, graph_A)
+            else:
+                self.P_loss = P * graph_A
             # P = self.P
         else:
-            P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all) # .to(self.device)
+            P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all)
             # self.P_hat_symm = self.P_symm
 
             P = torch.sigmoid(P_hat_symm)
@@ -401,7 +422,10 @@ class GcEncoder(nn.Module):
         #     torch.Size((num_all, num_all))
         # ).to_dense().bool()
         if not self.only_subgraph:
-            A_tilde = torch.where(self.mask_sub_adj, P * graph_A, graph_A)
+            if self.edge_additions:
+                A_tilde = torch.where(self.mask_sub_adj, P, graph_A)
+            else:
+                A_tilde = torch.where(self.mask_sub_adj, P * graph_A, graph_A)
             # A_tilde[tuple(self.mask_sub_adj)] = (P * graph_A)[tuple(self.mask_sub_adj)]
             # A_tilde = torch.sparse.FloatTensor(
             #     self.mask_sub_adj,

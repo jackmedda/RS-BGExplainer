@@ -255,9 +255,10 @@ def get_neighbourhood(node_idx,
     return edge_subset
 
 
-def create_symm_matrix_from_vec(vector, n_rows):
+def create_symm_matrix_from_vec(vector, n_rows, idx=None):
     symm_matrix = torch.zeros(n_rows, n_rows).to(vector.device)
-    idx = torch.tril_indices(n_rows, n_rows, -1)
+    if idx is None:
+        idx = torch.tril_indices(n_rows, n_rows, -1)
     symm_matrix[idx[0], idx[1]] = vector
     symm_matrix = symm_matrix + symm_matrix.t()
 

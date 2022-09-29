@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 100 # 1200 for NDCGApprox
+cf_learning_rate: 4000 # 1200 for NDCGApprox
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -25,6 +25,8 @@ cf_topk: 10
 fair_beta: 0.5
 dropout_prob: 0.3
 
+edge_additions: True
+
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
 exp_rec_data: "test"
 
@@ -34,7 +36,8 @@ exp_rec_data: "test"
 group_explain: True
 group_explain_by: gender
 
-only_adv_group: "global"
+only_adv_group: "local"
+delete_adv_group: True
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
@@ -48,9 +51,6 @@ not_user_sub_matrix: False
 # does not perform perturbation, uses only the subgraph of the user to `explain` (used for analysis)
 only_subgraph: False
 
-# FairBD 6: row > 1
-# FairBD 7: row < 1 and sorted_target.max() - sorted_target * sorted_input
-# FairBD 8: row > 1 taking all the items until the last row < 1
 # if to use fairness loss
 explain_fairness: True
 # sensitive attributes to be used in the fairness losses and for following analysis

@@ -26,9 +26,12 @@ class Describer(object):
 
     _plot_methods_prefix = "plot_"
 
-    def __init__(self, base_exps_file, train_data, out_base_path='', best_exp=None):
+    def __init__(self, base_exps_file, train_data, out_base_path='', load_dp=False, best_exp=None):
         script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
-        exps = utils.load_exps_file(base_exps_file)
+        if load_dp:
+            exps = utils.load_dp_exps_file(base_exps_file)
+        else:
+            exps = utils.load_exps_file(base_exps_file)
 
         with open(os.path.join(args.base_exps_file, "config.pkl"), 'rb') as config_file:
             self.config = pickle.load(config_file)
@@ -84,7 +87,10 @@ class Describer(object):
         self.item_hist_matrix, self.item_hist_len = item_hist_matrix.numpy(), item_hist_len.numpy()
 
         paths_metadata = base_exps_file.split(os.sep)
-        paths_metadata = paths_metadata[(paths_metadata.index('explanations') + 1):]
+        paths_metadata = paths_metadata[(list(filter(
+            lambda x, y: y if 'explanations' in x else False,
+            zip(paths_metadata, range(len(paths_metadata)))
+        ))[0][1] + 1):]
         self.out_base_path = out_base_path or os.path.join(script_path,
                                                            os.pardir,
                                                            os.pardir,
@@ -518,6 +524,7 @@ if __name__ == "__main__":
     parser.add_argument('--plot_types', nargs='+', default="all")
     parser.add_argument('--out_base_path', default="")
     parser.add_argument('--best_exp', default="loss_total")
+    parser.add_argument('--load_dp', action="store_true")
 
     args = parser.parse_args()
 
@@ -532,6 +539,7 @@ if __name__ == "__main__":
         args.base_exps_file,
         train_data,
         out_base_path=args.out_base_path,
-        best_exp=args.best_exp
+        best_exp=args.best_exp,
+        load_dp=args.load_dp
     )
     describer.plot(args.plot_types)
