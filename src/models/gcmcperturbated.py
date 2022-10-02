@@ -115,10 +115,12 @@ class GCMCPerturbated(GeneralRecommender):
         self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2)  # + self.num_all
         if self.edge_additions:
             self.P_idxs = ((self.Graph + 1) % 2).nonzero()
-            # only lower part of Graph
-            self.P_idxs = self.P_idxs[(self.P_idxs[:, 1] < self.n_users) & (self.P_idxs[:, 0] >= self.n_users)]
+            self.P_idxs = self.P_idxs[
+                (self.P_idxs[:, 1] < self.n_users) & (self.P_idxs[:, 0] >= self.n_users) |
+                (self.P_idxs[:, 0] < self.n_users) & (self.P_idxs[:, 1] >= self.n_users)
+            ]
             self.P_idxs = self.P_idxs[self.P_idxs[:, 0] != self.P_idxs[:, 1]].T  # removes the diagonal
-            self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 2)
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 5)  # to get sigmoid closer to 0
 
             self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
             self.mask_sub_adj[self.P_idxs[0], self.P_idxs[1]] = True
@@ -129,7 +131,7 @@ class GCMCPerturbated(GeneralRecommender):
             self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
             self.mask_sub_adj[tuple(self.sub_Graph)] = True
 
-        self.reset_parameters()
+        # self.reset_parameters()
 
         # accumulation operation
         self.accum = config['accum']

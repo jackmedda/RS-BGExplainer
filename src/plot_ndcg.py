@@ -1,6 +1,6 @@
 # %%
 import os
-import pickle
+import json
 import argparse
 import inspect
 import itertools
@@ -13,9 +13,10 @@ import scipy.stats
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib as mpl
 import matplotlib.ticker as mpl_tick
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 import networkx as nx
 from recbole.evaluator import Evaluator
 from adjustText import adjust_text
@@ -153,13 +154,13 @@ def extract_all_exp_metrics_data(_exp_paths, data=None):
                 exp_data.extend(list(zip(*exp_row_data)))
 
         data_df = pd.DataFrame(exp_data, columns=col_names)
-        data_df['n_del_edges'] = data_df['del_edges'].map(lambda x: x.shape[0])
+        data_df['n_del_edges'] = data_df['del_edges'].map(lambda x: x.shape[1])
         exp_dfs[e_type] = data_df
 
         if data_df.empty:
             print(f"User explanations are empty for {e_type}")
             continue
-
+        # [358, 365, 141,  13, 208, 658,  25, 348, 157]
         result_data[e_type] = {}
         n_users_data[e_type] = {}
         topk_dist[e_type] = []
@@ -204,7 +205,7 @@ def result_data_per_epoch_per_group(exp_dfs, data=None):
                     males_df = epoch_df[males_mask]
                     females_df = epoch_df[females_mask]
 
-                    result_per_epoch[e_type][epoch][1], result_per_epoch[e_type][epoch][2] = {}, {}
+                    result_per_epoch[e_type][epoch][male_idx], result_per_epoch[e_type][epoch][female_idx] = {}, {}
                     for metric in evaluator.metrics:
                         result_per_epoch[e_type][epoch][male_idx][metric] = utils.compute_metric(evaluator, data, males_df, 'cf_topk_pred', metric)[:, -1].mean()
                         result_per_epoch[e_type][epoch][female_idx][metric] = utils.compute_metric(evaluator, data, females_df, 'cf_topk_pred', metric)[:, -1].mean()
@@ -226,12 +227,18 @@ def off_margin_ticks(ax_marg_x1, ax_marg_x2):
 
 
 # %%
-def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, annot_offset=0.005):
+def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndcg, data_info="test", annot_offset=0.005):
     columns = ["Epoch", "Group", "metric", "value"]
+    edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
+    title = "Edge Additions " if edge_additions else "Edge Deletions "
+    title += "of Males " if group_edge_del == male_idx else "of Females "
+    title += "Optimized on " + ("Test Data" if exp_rec_data == "test" else "Valid Data")
 
+    df_test_result = None
+    orig_males_ndcg, orig_females_ndcg = orig_ndcg
     for e_type in res_epoch_group:
         for attr in sens_attrs:
-            plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(cleaned_config_ids), attr)
+            plots_path = os.path.join(get_plots_path(), 'comparison', epochs,'_'.join(cleaned_config_ids), attr)
             if not os.path.exists(plots_path):
                 os.makedirs(plots_path)
 
@@ -247,18 +254,33 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, annot_of
             df = pd.DataFrame(df_data, columns=columns)
             df["Group"] = df["Group"].map(group_map.__getitem__)
 
+            if data_info == "val":
+                df_test_result_data = []
+                for epoch in test_result_per_epoch_per_group[e_type]:
+                    for gr, gr_res in test_result_per_epoch_per_group[e_type][epoch].items():
+                        for metric in gr_res:
+                            df_test_result_data.append([epoch, gr, metric, gr_res[metric]])
+
+                df_test_result = pd.DataFrame(df_test_result_data, columns=columns)
+                df_test_result["Group"] = df_test_result["Group"].map(group_map.__getitem__)
+
             df_del_data = pd.DataFrame(del_edge_data, columns=["Epoch", "Group", "del_edges"])
             df_del_data["Group"] = df_del_data["Group"].map(group_map.__getitem__)
-            df_del_data["# Del Edges"] = df_del_data["del_edges"].map(lambda x: x.shape[1])
-            df_del_data["# Del Edges Lab"] = (df_del_data["# Del Edges"] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
-            df_del_data.sort_values("# Del Edges", inplace=True)
+            df_del_data[edges_ylabel] = df_del_data["del_edges"].map(lambda x: x.shape[1])
+            df_del_data[edges_ylabel + "Lab"] = (df_del_data[edges_ylabel] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
+            df_del_data.sort_values(edges_ylabel, inplace=True)
 
+            plot_test_df = None
             for metric in evaluator.metrics:
                 metr_str = metric.upper()
 
                 fig = plt.figure(figsize=(10, 10))
                 plot_df = df[df["metric"] == metric].copy()
                 plot_df.rename(columns={"value": metr_str}, inplace=True)
+
+                if data_info == "val":
+                    plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
+                    plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
                 male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
                 female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
@@ -282,15 +304,30 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, annot_of
                 df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
 
                 lines = sns.lineplot(x="Epoch", y=metr_str, data=plot_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+                if data_info == "val":
+                    sns.lineplot(x="Epoch", y=metr_str, data=plot_test_df, hue="Group", palette=colors, ls=':', hue_order=["M", "F"], ax=ax, legend=False)
+
+                    title_proxy = Rectangle((0, 0), 0, 0, color='w')
+                    ls_legend_handles = [
+                        Line2D([0], [0], ls='-', color='k'),
+                        Line2D([0], [0], ls=':', color='k')
+                    ]
+                    handles, labels = ax.get_legend_handles_labels()
+                    ax.legend([title_proxy] + handles + [title_proxy] + ls_legend_handles, ["Group"] + labels + ["Split Set", "Validation", "Test"])
+
                 sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, color="blue", ax=ax_metric_diff)
                 ax_metric_diff.fill_between(df_diff["Epoch"], df_diff[f"{metr_str} Diff"], color="blue", alpha=0.3)
-                sns.lineplot(x="Epoch", y="# Del Edges", hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
+                sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
 
                 df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
                 max_epoch = df_del_data["Epoch"].max()
+                if df_del_data_epoch_group.loc[(max_epoch, "F"), edges_ylabel] <= df_del_data_epoch_group.loc[(max_epoch, "M"), edges_ylabel]:
+                    lower_del_edges_group = "F"
+                else:
+                    lower_del_edges_group = "M"
                 ax_del_edges.annotate(
-                    df_del_data_epoch_group.loc[(max_epoch, "F"), "# Del Edges Lab"],
-                    (max_epoch, df_del_data_epoch_group.loc[(max_epoch, "F"), "# Del Edges"])
+                    df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel + "Lab"],
+                    (max_epoch, df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel])
                 )
 
                 ax_del_edges.yaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
@@ -335,8 +372,12 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, annot_of
                     add_objects=lines.lines[:2]
                 )
 
+                fig.suptitle(title)
+
+                # utils.legend_without_duplicate_labels(ax)
+
                 plt.tight_layout()
-                fig.savefig(os.path.join(plots_path, f'lineplot_per_epoch_per_group_{e_type}_{metric}.png'))
+                fig.savefig(os.path.join(plots_path, f'{data_info}_lineplot_per_epoch_per_group_{e_type}_{metric}.png'))
                 plt.close()
 
 
@@ -769,6 +810,13 @@ for c_id, exp_t, old_exp_t in zip(
         exp_paths[exp_t] = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name,
                                         old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(c_id))
 
+with open(os.path.join(exp_paths['GCMC+DP'], 'config.json'), 'r') as f:
+    exp_config = json.load(f)
+
+edge_additions = exp_config['edge_additions']
+exp_rec_data = exp_config['exp_rec_data']
+delete_adv_group = exp_config.get('delete_adv_group', None)
+
 user_df = pd.DataFrame({
     'user_id': train_data.dataset.user_feat['user_id'].numpy(),
     **{sens_attr: train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sens_attrs}
@@ -795,16 +843,17 @@ all_exp_val_dfs, val_result_all_data, val_n_users_data_all, val_topk_dist_all = 
     exp_paths, data=valid_data.dataset
 )
 
-orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs["GCMC+DP"], 'topk_pred', 'ndcg')
+test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs["GCMC+DP"], 'topk_pred', 'ndcg')
+valid_orig_total_ndcg = utils.compute_metric(evaluator, valid_data.dataset, all_exp_val_dfs["GCMC+DP"], 'topk_pred', 'ndcg')
 
-orig_males_ndcg = utils.compute_metric(
+test_orig_males_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
     all_exp_test_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
-orig_females_ndcg = utils.compute_metric(
+test_orig_females_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
     all_exp_test_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
@@ -812,10 +861,48 @@ orig_females_ndcg = utils.compute_metric(
     'ndcg'
 )[:, -1].mean()
 
-result_per_epoch_per_group, del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
+valid_orig_males_ndcg = utils.compute_metric(
+    evaluator,
+    valid_data.dataset,
+    all_exp_val_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    'topk_pred',
+    'ndcg'
+)[:, -1].mean()
+valid_orig_females_ndcg = utils.compute_metric(
+    evaluator,
+    valid_data.dataset,
+    all_exp_val_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    'topk_pred',
+    'ndcg'
+)[:, -1].mean()
+
+if test_orig_males_ndcg >= test_orig_females_ndcg:
+    if delete_adv_group is not None:
+        group_edge_del = male_idx if delete_adv_group else female_idx
+    else:
+        group_edge_del = male_idx
+else:
+    if delete_adv_group is not None:
+        group_edge_del = female_idx if delete_adv_group else male_idx
+    else:
+        group_edge_del = female_idx
+
+test_result_per_epoch_per_group, test_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
+val_result_per_epoch_per_group, val_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_val_dfs, data=valid_data.dataset)
 
 # %%
-plot_lineplot_per_epoch_per_group(result_per_epoch_per_group, del_edges_per_epoch)
+plot_lineplot_per_epoch_per_group(
+    test_result_per_epoch_per_group,
+    test_del_edges_per_epoch,
+    (test_orig_males_ndcg, test_orig_females_ndcg),
+    data_info="test"
+)
+plot_lineplot_per_epoch_per_group(
+    val_result_per_epoch_per_group,
+    val_del_edges_per_epoch,
+    (valid_orig_males_ndcg, valid_orig_females_ndcg),
+    data_info="val"
+)
 
 # %%
 create_table_metrics_over_del_edges(

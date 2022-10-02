@@ -514,6 +514,24 @@ def legend_without_duplicate_labels(ax):
     return unique
 
 
+def unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None, return_unique_counts=False):
+    uid_field = uid_field or 'user_id'
+    iid_field = iid_field or 'item_id'
+
+    _inter = torch.stack((inter[uid_field], inter[iid_field]))
+    if isinstance(other, dict):
+        _other = torch.stack((other[uid_field], other[iid_field]))
+    else:
+        _other = torch.as_tensor(other)
+    unique, counts = torch.cat((_inter, _other), dim=1).unique(dim=1, return_counts=True)
+    new_inter = unique[:, counts == 1]
+
+    if not return_unique_counts:
+        return dict(zip([uid_field, iid_field], new_inter))
+    else:
+        return dict(zip([uid_field, iid_field], new_inter)), unique, counts
+
+
 def damerau_levenshtein_distance(s1, s2):
     """
     Copyright (c) 2015, James Turk

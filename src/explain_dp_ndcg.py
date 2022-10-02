@@ -151,7 +151,7 @@ if __name__ == "__main__":
         explain(
             config,
             model,
-            test_data,
+            rec_data,
             base_exps_filepath,
             **kwargs
         )

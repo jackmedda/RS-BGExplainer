@@ -5,6 +5,7 @@ import time
 import math
 import copy
 import itertools
+from logging import getLogger
 from typing import Iterable, Tuple
 
 import tqdm
@@ -78,6 +79,7 @@ class DPBGExplainer:
         self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
 
         self.verbose = kwargs.get("verbose", False)
+        self.logger = getLogger()
 
         self.user_batch_exp = config['user_batch_exp']
 
@@ -88,8 +90,6 @@ class DPBGExplainer:
         self.evaluator = Evaluator(config)
 
         trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
-        test_result = trainer.evaluate(rec_data, load_best_model=False, show_progress=config['show_progress'])
-        print(test_result)
 
         gender_map = dataset.field2id_token['gender']
         female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
@@ -99,13 +99,17 @@ class DPBGExplainer:
 
         rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.user_df.interaction.items()})
         rec_data_f.uid_list = rec_data_f.user_df['user_id']
+
+        # [102 162  53 113  61 103 312 158 210 248]
         self.females_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
+        self.logger.info(self.females_result)
 
         rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.user_df.interaction.items()})
         rec_data_m.uid_list = rec_data_m.user_df['user_id']
         self.males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
+        self.logger.info(self.males_result)
 
-        check_func = "__ge__" if not config['delete_adv_group'] else "__lt__"
+        check_func = "__ge__" if config['delete_adv_group'] else "__lt__"
 
         self.adv_group = male_idx if getattr(self.males_result['ndcg@10'], check_func)(self.females_result['ndcg@10']) else female_idx
         self.disadv_group = female_idx if self.adv_group == male_idx else male_idx
@@ -165,8 +169,8 @@ class DPBGExplainer:
 
             orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
             cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
-            print(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
-                  f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+            self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
+                             f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
 
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
@@ -271,7 +275,7 @@ class DPBGExplainer:
         """
         best_cf_example = []
         best_loss = np.inf
-        first_fair_loss = None
+        orig_ndcg_loss = np.abs(self.males_result['ndcg@10'] - self.females_result['ndcg@10'])
 
         batched_data, data = batched_data
 
@@ -292,14 +296,14 @@ class DPBGExplainer:
 
         for epoch in iter_epochs:
             iter_data = [iter_data[i] for i in np.random.permutation(len(iter_data))]
+            epoch_fair_loss = []
             for batch_idx, batch_user in enumerate(iter_data):
                 self.user_id = batch_user
                 batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, data)
                 self.compute_model_predictions(batched_data_epoch, topk)
 
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
-                if epoch == 0 and batch_idx == 0:
-                    first_fair_loss = fair_loss
+                epoch_fair_loss.append(fair_loss)
 
             if new_example is not None:
                 all_batch_data = DPBGExplainer.prepare_batched_data(batched_data, data)
@@ -315,9 +319,11 @@ class DPBGExplainer:
 
                 new_example = [batched_data.detach().numpy(), model_topk, cf_topk_pred_idx, cf_dist, *new_example[4:]]
 
-                best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, first_fair_loss)
+                new_example[7] = np.mean(epoch_fair_loss)
 
-            print("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
+                best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss)
+
+            self.logger.info("{} CF examples for user = {}".format(len(best_cf_example), self.user_id))
 
         return best_cf_example, self.model_scores.detach().cpu().numpy()
 
@@ -362,7 +368,7 @@ class DPBGExplainer:
                 self.sensitive_attributes,
                 user_feat,
                 topk=topk,
-                adv_group_data=(self.only_adv_group, self.adv_group, self.results[self.disadv_group]['ndcg@10'])
+                adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]['ndcg@10'])
             ),
             target
         )
@@ -378,23 +384,23 @@ class DPBGExplainer:
         self.cf_optimizer.step()
 
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
-        print(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}",
-              'User id: {}'.format(self.user_id),
-              'Epoch: {}'.format(epoch + 1),
-              'loss: {:.4f}'.format(loss_total.item()),
-              'fair loss: {:.4f}'.format(fair_loss),
-              'graph loss: {:.4f}'.format(loss_graph_dist.item()),
-              'del edges: {:.4f}'.format(int(orig_loss_graph_dist.item())))
+        self.logger.info(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}, " +
+                         'User id: {}, '.format(str(self.user_id)) +
+                         'Epoch: {}, '.format(epoch + 1) +
+                         'loss: {:.4f}, '.format(loss_total.item()) +
+                         'fair loss: {:.4f}, '.format(fair_loss) +
+                         'graph loss: {:.4f}, '.format(loss_graph_dist.item()) +
+                         'del edges: {:.4f}, '.format(int(orig_loss_graph_dist.item())))
         if self.verbose:
-            print('Orig output: {}\n'.format(self.model_scores),
-                  'Output: {}\n'.format(cf_scores),
-                  'Output nondiff: {}\n'.format(cf_scores_pred),
-                  '{:20}: {},\n {:20}: {},\n {:20}: {}\n'.format(
-                      'orig pred', self.model_topk_idx,
-                      'new pred', cf_topk_idx,
-                      'new pred nondiff', cf_topk_pred_idx)
-                  )
-        print(" ")
+            self.logger.info('Orig output: {}\n'.format(self.model_scores) +
+                             'Output: {}\n'.format(cf_scores) +
+                             'Output nondiff: {}\n'.format(cf_scores_pred) +
+                             '{:20}: {},\n {:20}: {},\n {:20}: {}\n'.format(
+                                 'orig pred', self.model_topk_idx,
+                                 'new pred', cf_topk_idx,
+                                 'new pred nondiff', cf_topk_pred_idx)
+                             )
+        self.logger.info(" ")
 
         cf_stats = None
         if orig_loss_graph_dist.item() > 0:
@@ -520,4 +526,5 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
                         loss = (l_val - r_val).abs()
                     else:
                         loss += (l_val - r_val).abs()
+
         return loss / max(math.comb(len(groups), 2), 1)
