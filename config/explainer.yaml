@@ -5,7 +5,9 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 10000 # 1200 for NDCGApprox
+cf_learning_rate: 3000 # 1200 for NDCGApprox
+
+momentum: 0.0
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
@@ -28,7 +30,7 @@ dropout_prob: 0.3
 edge_additions: True
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
-exp_rec_data: "valid"
+exp_rec_data: "train"
 
 # device: cpu
 
@@ -76,3 +78,9 @@ eval_args:
     order: RO  # not relevant
     group_by: '-'
     mode: 'full'
+
+# Early stopping parameters
+earlys_patience: 7
+earlys_ignore: 0
+earlys_method: 'consistency'
+earlys_fn: 'lt'

@@ -6,7 +6,7 @@ train_batch_size: 4096
 eval_batch_size: 2048
 neg_sampling:
     uniform: 1
-eval_step: 1
+eval_step: 10
 metrics: ['Recall', 'NDCG']
 topk: 10
 valid_metric: NDCG@10
@@ -21,7 +21,7 @@ eval_args:
     group_by: '-'
     mode: 'full'
 
-data_path: 'dataset' # for ML-1M
+data_path: 'dataset'
 
 checkpoint_dir': 'data/models'
 save_dataset': True

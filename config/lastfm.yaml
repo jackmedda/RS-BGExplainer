@@ -22,9 +22,7 @@ eval_args:
     mode: 'full'
 
 data_path: 'dataset'
-#split_args:
-#    strategy: 'by_ratio',
-#    ratios: [0.7, 0.1, 0.2],
+
 checkpoint_dir': 'data/models'
 save_dataset': True
 save_dataloaders': True

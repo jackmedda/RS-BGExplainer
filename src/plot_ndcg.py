@@ -1,6 +1,6 @@
 # %%
 import os
-import json
+import pickle
 import argparse
 import inspect
 import itertools
@@ -86,7 +86,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, data=None):
             else:
                 _exp = exp_entry[0]
 
-            pref_data.extend(list(zip(_exp[0], _exp[1], _exp[2])))
+            pref_data.extend(list(zip(_exp[0], _exp[1], _exp[3])))
 
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
         pref_data_all[e_type] = pref_data
@@ -96,25 +96,37 @@ def extract_best_metrics(_exp_paths, best_exp_col, data=None):
             for metric in evaluator.metrics:
                 result_all[e_type][metric] = utils.compute_metric(evaluator, data, pref_data, 'cf_topk_pred', metric)
 
-                if 'GCMC' not in result_all:
-                    result_all['GCMC'] = {}
+                if model_name not in result_all:
+                    result_all[model_name] = {}
 
-                if metric not in result_all['GCMC']:
-                    result_all['GCMC'][metric] = utils.compute_metric(evaluator, data, pref_data, 'topk_pred', metric)
+                if metric not in result_all[model_name]:
+                    result_all[model_name][metric] = utils.compute_metric(evaluator, data, pref_data, 'topk_pred', metric)
         else:
             print("Pref Data is empty!")
 
     return pref_data_all, result_all
 
 
-def extract_all_exp_metrics_data(_exp_paths, data=None):
+def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
     data = test_data.dataset if data is None else data
 
-    cols = [1, 2, 6, 3, "set", 8, 10]
-    col_names = ['user_id', 'topk_pred', 'cf_topk_pred', 'dist_loss', 'topk_dist', 'topk_set_dist', 'del_edges', 'epoch']
+    if not rec:
+        cols = [2, 4, 6, 8, 10, 11]
+    else:
+        cols = [1, 3, 5, 8, 10, 11]
+
+    col_names = [
+        'user_id',
+        'topk_pred',
+        'cf_topk_pred',
+        'topk_dist',
+        'dist_loss',
+        'del_edges',
+        'epoch'
+    ]
 
     exp_dfs = {}
     result_data = {}
@@ -130,21 +142,8 @@ def extract_all_exp_metrics_data(_exp_paths, data=None):
             for _exp in exp_entry:
                 exp_row_data = [_exp[0]]
                 for col in cols:
-                    if col in [1, 2]:
+                    if col in [1, 2, 3, 4, 5, 6]:
                         exp_row_data.append(_exp[col])
-                    elif col in [6]:
-                        if _exp[col] == int(_exp[col]):
-                            exp_row_data.append([int(_exp[col])] * len(exp_row_data[0]))
-                        else:
-                            exp_row_data.append([int(_exp[8].shape[1])] * len(exp_row_data[0]))
-                    elif col in [3]:
-                        if len(_exp[col]) == len(exp_row_data[0]):
-                            exp_row_data.append(_exp[col])
-                        else:
-                            exp_row_data.append(
-                                [utils.damerau_levenshtein_distance(_pred, _topk_idx)
-                                 for _pred, _topk_idx in zip(_exp[1], _exp[2])]
-                            )
                     elif col == "set":
                         comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(_exp[1], _exp[2])])
                         exp_row_data.append(len(_exp[1][0]) - comm_items)
@@ -160,7 +159,7 @@ def extract_all_exp_metrics_data(_exp_paths, data=None):
         if data_df.empty:
             print(f"User explanations are empty for {e_type}")
             continue
-        # [358, 365, 141,  13, 208, 658,  25, 348, 157]
+
         result_data[e_type] = {}
         n_users_data[e_type] = {}
         topk_dist[e_type] = []
@@ -171,7 +170,7 @@ def extract_all_exp_metrics_data(_exp_paths, data=None):
 
             t_dist = gr_df['topk_dist'].to_numpy()
             topk_dist[e_type].extend(list(
-                zip([n_del] * len(t_dist), t_dist / len(t_dist), gr_df['topk_set_dist'].to_numpy() / len(t_dist))
+                zip([n_del] * len(t_dist), t_dist / len(t_dist), gr_df['topk_dist'].to_numpy() / len(t_dist))
             ))
 
             gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
@@ -232,13 +231,13 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
     edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
     title = "Edge Additions " if edge_additions else "Edge Deletions "
     title += "of Males " if group_edge_del == male_idx else "of Females "
-    title += "Optimized on " + ("Test Data" if exp_rec_data == "test" else "Valid Data")
+    title += "Optimized on " + f"{exp_rec_data.title()} Data"
 
     df_test_result = None
     orig_males_ndcg, orig_females_ndcg = orig_ndcg
     for e_type in res_epoch_group:
         for attr in sens_attrs:
-            plots_path = os.path.join(get_plots_path(), 'comparison', epochs,'_'.join(cleaned_config_ids), attr)
+            plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(cleaned_config_ids), attr)
             if not os.path.exists(plots_path):
                 os.makedirs(plots_path)
 
@@ -254,7 +253,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
             df = pd.DataFrame(df_data, columns=columns)
             df["Group"] = df["Group"].map(group_map.__getitem__)
 
-            if data_info == "val":
+            if data_info != "test":
                 df_test_result_data = []
                 for epoch in test_result_per_epoch_per_group[e_type]:
                     for gr, gr_res in test_result_per_epoch_per_group[e_type][epoch].items():
@@ -278,7 +277,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
                 plot_df = df[df["metric"] == metric].copy()
                 plot_df.rename(columns={"value": metr_str}, inplace=True)
 
-                if data_info == "val":
+                if data_info != "test":
                     plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
                     plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
@@ -304,19 +303,24 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
                 df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
 
                 lines = sns.lineplot(x="Epoch", y=metr_str, data=plot_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
-                if data_info == "val":
+                if data_info != "test":
                     sns.lineplot(x="Epoch", y=metr_str, data=plot_test_df, hue="Group", palette=colors, ls=':', hue_order=["M", "F"], ax=ax, legend=False)
 
                     title_proxy = Rectangle((0, 0), 0, 0, color='w')
                     ls_legend_handles = [
                         Line2D([0], [0], ls='-', color='k'),
-                        Line2D([0], [0], ls=':', color='k')
+                        Line2D([0], [0], ls=':', color='k'),
+                        Line2D([0], [0], ls='--', color='k')
                     ]
                     handles, labels = ax.get_legend_handles_labels()
-                    ax.legend([title_proxy] + handles + [title_proxy] + ls_legend_handles, ["Group"] + labels + ["Split Set", "Validation", "Test"])
+                    ax.legend(
+                        [title_proxy] + handles + [title_proxy] + ls_legend_handles,
+                        ["Group"] + labels + ["Source Eval Data", exp_rec_data.title(), "Test", f"{exp_rec_data.title()} Original"]
+                    )
 
                 sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, color="blue", ax=ax_metric_diff)
                 ax_metric_diff.fill_between(df_diff["Epoch"], df_diff[f"{metr_str} Diff"], color="blue", alpha=0.3)
+                ax_metric_diff.grid(axis='y', ls=':')
                 sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
 
                 df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
@@ -386,7 +390,7 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
-    order = ['GCMC', 'GCMC+DP']
+    order = [model_name, model_name + 'DP']
 
     P_005 = '*'
     P_001 = '^'
@@ -394,7 +398,7 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
     for metric in metrics_names:
         for attr in sens_attributes:
             sens_map = sensitive_maps[attr]
-            plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), attr)
+            plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), attr)
             if not os.path.exists(plots_path):
                 os.makedirs(plots_path)
 
@@ -523,7 +527,7 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
-    order = ['GCMC', 'GCMC+DP']
+    order = [model_name, model_name + 'DP']
 
     P_005 = '*'
     P_001 = '^'
@@ -531,7 +535,7 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
     for metric in metrics_names:
         for attr in sens_attributes:
             sens_map = sensitive_maps[attr]
-            tables_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), attr)
+            tables_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), attr)
             if not os.path.exists(tables_path):
                 os.makedirs(tables_path)
 
@@ -586,7 +590,7 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
         topk_dist_df = pd.DataFrame(_topk_dist, columns=['# Del Edges', 'Edit Dist', 'Set Dist'])
 
         for attr, bd_attr_data in bd_attrs.items():
-            plots_path = os.path.join(get_plots_path(), 'comparison', '_'.join(config_ids), attr)
+            plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), attr)
             if not os.path.exists(plots_path):
                 os.makedirs(plots_path)
 
@@ -755,9 +759,9 @@ def draw_graph3(networkx_graph, notebook=True, output_filename='graph.html', sho
 # %%
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_file', required=True)
-parser.add_argument('--explainer_config_file', default=os.path.join("config", "gcmc_explainer.yaml"))
+parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
 parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1],
-                    help="follows the order ['Silvestri et al.', 'GCMC+DP'], set -1 to skip")
+                    help="follows the order ['Silvestri et al.', model_name + 'DP'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
 args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3".split())
@@ -774,6 +778,8 @@ print(args)
 
 config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
                                                                                       args.explainer_config_file)
+
+model_name = model.__class__.__name__
 
 gender_map = dataset.field2id_token['gender']
 female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
@@ -802,7 +808,7 @@ sens_attrs, epochs, batch_exp = config['sensitive_attributes'], config['cf_epoch
 exp_paths = {}
 for c_id, exp_t, old_exp_t in zip(
     args.load_config_ids,
-    ['Silvestri et al.', 'GCMC+DP'],
+    ['Silvestri et al.', f'{model_name}+DP'],
     ['pred_explain', 'FairDP']
 ):
     exp_paths[exp_t] = None
@@ -810,12 +816,13 @@ for c_id, exp_t, old_exp_t in zip(
         exp_paths[exp_t] = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name,
                                         old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(c_id))
 
-with open(os.path.join(exp_paths['GCMC+DP'], 'config.json'), 'r') as f:
-    exp_config = json.load(f)
+with open(os.path.join(exp_paths[f'{model_name}+DP'], 'config.pkl'), 'rb') as f:
+    exp_config = pickle.load(f)
 
 edge_additions = exp_config['edge_additions']
 exp_rec_data = exp_config['exp_rec_data']
-delete_adv_group = exp_config.get('delete_adv_group', None)
+delete_adv_group = exp_config['delete_adv_group']
+rec_data = locals()[f"{exp_rec_data}_data"]
 
 user_df = pd.DataFrame({
     'user_id': train_data.dataset.user_feat['user_id'].numpy(),
@@ -829,49 +836,49 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {"GCMC+DP": 20}
+args.best_exp_col = {model_name + 'DP': 1}
 
 # %%
 best_test_pref_data, best_test_result = extract_best_metrics(exp_paths, args.best_exp_col, data=test_data.dataset)
-best_val_pref_data, best_val_result = extract_best_metrics(exp_paths, args.best_exp_col, data=valid_data.dataset)
+best_rec_pref_data, best_rec_result = extract_best_metrics(exp_paths, args.best_exp_col, data=rec_data.dataset)
 
 # %%
 all_exp_test_dfs, test_result_all_data, test_n_users_data_all, test_topk_dist_all = extract_all_exp_metrics_data(
-    exp_paths, data=test_data.dataset
+    exp_paths, data=test_data.dataset, rec=False
 )
-all_exp_val_dfs, val_result_all_data, val_n_users_data_all, val_topk_dist_all = extract_all_exp_metrics_data(
-    exp_paths, data=valid_data.dataset
+all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = extract_all_exp_metrics_data(
+    exp_paths, data=rec_data.dataset, rec=True
 )
 
-test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs["GCMC+DP"], 'topk_pred', 'ndcg')
-valid_orig_total_ndcg = utils.compute_metric(evaluator, valid_data.dataset, all_exp_val_dfs["GCMC+DP"], 'topk_pred', 'ndcg')
+test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs[model_name + 'DP'], 'topk_pred', 'ndcg')
+rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, all_exp_rec_dfs[model_name + 'DP'], 'topk_pred', 'ndcg')
 
 test_orig_males_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 test_orig_females_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 
-valid_orig_males_ndcg = utils.compute_metric(
+rec_orig_males_ndcg = utils.compute_metric(
     evaluator,
-    valid_data.dataset,
-    all_exp_val_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    rec_data.dataset,
+    all_exp_rec_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
-valid_orig_females_ndcg = utils.compute_metric(
+rec_orig_females_ndcg = utils.compute_metric(
     evaluator,
-    valid_data.dataset,
-    all_exp_val_dfs["GCMC+DP"].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    rec_data.dataset,
+    all_exp_rec_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
@@ -888,7 +895,7 @@ else:
         group_edge_del = female_idx
 
 test_result_per_epoch_per_group, test_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
-val_result_per_epoch_per_group, val_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_val_dfs, data=valid_data.dataset)
+rec_result_per_epoch_per_group, rec_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_rec_dfs, data=rec_data.dataset)
 
 # %%
 plot_lineplot_per_epoch_per_group(
@@ -898,29 +905,29 @@ plot_lineplot_per_epoch_per_group(
     data_info="test"
 )
 plot_lineplot_per_epoch_per_group(
-    val_result_per_epoch_per_group,
-    val_del_edges_per_epoch,
-    (valid_orig_males_ndcg, valid_orig_females_ndcg),
-    data_info="val"
+    rec_result_per_epoch_per_group,
+    rec_del_edges_per_epoch,
+    (rec_orig_males_ndcg, rec_orig_females_ndcg),
+    data_info=exp_rec_data
 )
 
 # %%
 create_table_metrics_over_del_edges(
     test_result_all_data,
     all_exp_test_dfs,
-    best_test_result['GCMC'],
+    best_test_result[model_name],
     cleaned_config_ids,
     n_bins=100,
     hist_type="test",
     test_f="f_oneway"
 )
 create_table_metrics_over_del_edges(
-    val_result_all_data,
-    all_exp_test_dfs,
-    best_val_result['GCMC'],
+    rec_result_all_data,
+    all_exp_rec_dfs,
+    best_rec_result[model_name],
     cleaned_config_ids,
     n_bins=10,
-    hist_type="val",
+    hist_type=exp_rec_data,
     test_f="f_oneway"
 )
 

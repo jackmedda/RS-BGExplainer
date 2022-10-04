@@ -399,58 +399,36 @@ class GcEncoder(nn.Module):
     # @profile
     def perturbate_adj_matrix(self, i, pred=False):
         graph_A = self.support[i]
-        # self.P_loss = graph_A
-        # return graph_A.to_sparse()
         num_all = self.num_all
 
         if pred:
-            # P_hat_symm = self.P_symm
             P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all)
             P = (torch.sigmoid(P_hat_symm) >= 0.5).float()
             if self.edge_additions:
                 self.P_loss = torch.where(self.mask_sub_adj, P, graph_A)
             else:
                 self.P_loss = P * graph_A
-            # P = self.P
         else:
             P_hat_symm = utils.create_symm_matrix_from_vec(self.P_symm, self.num_all)
-            # self.P_hat_symm = self.P_symm
 
             P = torch.sigmoid(P_hat_symm)
 
-        # mask = torch.sparse.LongTensor(
-        #     self.mask_sub_adj,
-        #     torch.ones(self.mask_sub_adj.shape[1], device=self.device),
-        #     torch.Size((num_all, num_all))
-        # ).to_dense().bool()
         if not self.only_subgraph:
             if self.edge_additions:
                 A_tilde = torch.where(self.mask_sub_adj, P, graph_A)
             else:
                 A_tilde = torch.where(self.mask_sub_adj, P * graph_A, graph_A)
-            # A_tilde[tuple(self.mask_sub_adj)] = (P * graph_A)[tuple(self.mask_sub_adj)]
-            # A_tilde = torch.sparse.FloatTensor(
-            #     self.mask_sub_adj,
-            #     (P * graph_A)[tuple(self.mask_sub_adj)],
-            #     torch.Size((num_all, num_all))
-            # )
         else:
             A_tilde = self.mask_sub_adj.float()
-            # A_tilde[tuple(self.mask_sub_adj)] = graph_A[tuple(self.mask_sub_adj)]
 
-        # Don't need gradient of this if pred = False
-        # D_tilde = utils.get_degree_matrix(A_tilde) if pred else utils.get_degree_matrix(A_tilde).detach()
+        # Don't need gradient of this if pred is False
         D_tilde = A_tilde.sum(dim=1) if pred else A_tilde.sum(dim=1).detach()
         D_tilde_exp = (D_tilde + 1e-7).pow(-0.5)
-        # D_tilde_exp = (D_tilde).pow(-0.5)
-        # D_tilde_exp[D_tilde_exp == float('inf')] = 0
 
         D_tilde_exp = torch.sparse.FloatTensor(self.D_indices, D_tilde_exp, torch.Size((num_all, num_all)))
 
-        # D_tilde_exp[D_tilde_exp == float('inf')] = 0
         # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
         return torch.mm(torch.sparse.mm(D_tilde_exp, A_tilde), D_tilde_exp.to_dense()).to_sparse()
-        # return (D_tilde_exp * A_tilde * D_tilde_exp).to_sparse()
 
     def forward(self, user_X, item_X, pred=False):
         # ----------------------------------------GCN layer----------------------------------------

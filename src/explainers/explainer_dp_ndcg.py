@@ -1,5 +1,6 @@
 # Based on https://github.com/RexYing/gnn-model-explainer/blob/master/explainer/explain.py
 
+import os
 import sys
 import time
 import math
@@ -9,9 +10,13 @@ from logging import getLogger
 from typing import Iterable, Tuple
 
 import tqdm
-import numpy as np
 import torch
 import torch.nn as nn
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from early_stopping import EarlyStopping
 from recbole.evaluator import Evaluator
 from recbole.utils import get_trainer, set_color
 from recbole.data.interaction import Interaction
@@ -19,7 +24,7 @@ from recbole.data.interaction import Interaction
 sys.path.append('..')
 
 import src.utils as utils
-from src.models import GCMCPerturbated
+import src.models as exp_models
 
 
 class DPBGExplainer:
@@ -43,7 +48,7 @@ class DPBGExplainer:
         self.test_batch_size = self.tot_item_num
 
         # Instantiate CF model class, load weights from original model
-        self.cf_model = GCMCPerturbated(config, dataset, self.user_id)
+        self.cf_model = getattr(exp_models, f"{model.__class__.__name__}Perturbated")(config, dataset, self.user_id).to(model.device)
 
         self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
 
@@ -51,10 +56,6 @@ class DPBGExplainer:
         for name, param in self.cf_model.named_parameters():
             if name != "P_symm":
                 param.requires_grad = False
-        # for name, param in self.model.named_parameters():
-        #     print("orig model requires_grad: ", name, param.requires_grad)
-        # for name, param in self.cf_model.named_parameters():
-        #     print("cf model requires_grad: ", name, param.requires_grad)
 
         lr = config['cf_learning_rate']
         momentum = config["momentum"] or 0.0
@@ -93,18 +94,18 @@ class DPBGExplainer:
 
         gender_map = dataset.field2id_token['gender']
         female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
-        females = rec_data.user_df['gender'] == female_idx
-        males = ~females
+
+        females = rec_data.dataset.user_feat['gender'] == female_idx
+        males = rec_data.dataset.user_feat['gender'] == male_idx
         rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
 
-        rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.user_df.interaction.items()})
+        rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.dataset.user_feat.interaction.items()})
         rec_data_f.uid_list = rec_data_f.user_df['user_id']
 
-        # [102 162  53 113  61 103 312 158 210 248]
         self.females_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
         self.logger.info(self.females_result)
 
-        rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.user_df.interaction.items()})
+        rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.dataset.user_feat.interaction.items()})
         rec_data_m.uid_list = rec_data_m.user_df['user_id']
         self.males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
         self.logger.info(self.males_result)
@@ -114,6 +115,13 @@ class DPBGExplainer:
         self.adv_group = male_idx if getattr(self.males_result['ndcg@10'], check_func)(self.females_result['ndcg@10']) else female_idx
         self.disadv_group = female_idx if self.adv_group == male_idx else male_idx
         self.results = dict(zip([male_idx, female_idx], [self.males_result, self.females_result]))
+
+        self.earlys = EarlyStopping(
+            config['earlys_patience'],
+            config['earlys_ignore'],
+            method=config['earlys_method'],
+            fn=config['earlys_fn']
+        )
 
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
@@ -158,14 +166,17 @@ class DPBGExplainer:
 
             best_cf_example.append(new_example + [first_fair_loss])
             self.old_graph_dist = new_example[-4]
-            import pandas as pd
+
             pref_data = pd.DataFrame(zip(*new_example[:3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
             orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
             cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
 
             user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-            males = user_feat['gender'] == 1
-            females = user_feat['gender'] == 2
+            gender_map = self.dataset.field2id_token['gender']
+            female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+
+            males = user_feat['gender'] == male_idx
+            females = user_feat['gender'] == female_idx
 
             orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
             cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
@@ -186,7 +197,10 @@ class DPBGExplainer:
         """
         user_df = Interaction({k: v[batched_data] for k, v in data.dataset.user_feat.interaction.items()})
 
-        history_item = data.uid2history_item[user_df['user_id']]
+        if hasattr(data, "uid2history_item"):
+            history_item = data.uid2history_item[user_df['user_id']]
+        else:
+            history_item = []
 
         if len(batched_data) > 1:
             history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
@@ -263,7 +277,7 @@ class DPBGExplainer:
 
         return iter_data
 
-    def explain(self, batched_data, epochs, topk=10):
+    def explain(self, batched_data, explain_data, test_data, epochs, topk=10):
         """
         The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
         :param batched_data:
@@ -277,8 +291,6 @@ class DPBGExplainer:
         best_loss = np.inf
         orig_ndcg_loss = np.abs(self.males_result['ndcg@10'] - self.females_result['ndcg@10'])
 
-        batched_data, data = batched_data
-
         iter_epochs = tqdm.tqdm(
             range(epochs),
             total=epochs,
@@ -291,35 +303,83 @@ class DPBGExplainer:
             while any(d.unique().shape[0] < 1 for d in iter_data):  # check if each batch has at least 2 groups
                 iter_data = self.randperm2groups(batched_data)
         else:
-            batched_gender_data = data.dataset.user_feat['gender'][batched_data]
+            batched_gender_data = explain_data.dataset.user_feat['gender'][batched_data]
             iter_data = batched_data[batched_gender_data == self.adv_group].split(self.user_batch_exp)
 
+        cwd_files = [f for f in os.listdir() if f.startswith('loss_trend_epoch')]
+        if len(cwd_files) > 0 and os.path.isfile(cwd_files[0]):
+            os.remove(cwd_files[0])
+
+        fair_losses = []
+        new_example = None
         for epoch in iter_epochs:
             iter_data = [iter_data[i] for i in np.random.permutation(len(iter_data))]
             epoch_fair_loss = []
             for batch_idx, batch_user in enumerate(iter_data):
                 self.user_id = batch_user
-                batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, data)
+                batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, explain_data)
                 self.compute_model_predictions(batched_data_epoch, topk)
 
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
                 epoch_fair_loss.append(fair_loss)
 
+            epoch_fair_loss = np.mean(epoch_fair_loss)
+            fair_losses.append(epoch_fair_loss)
+            if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
+                os.remove(f'loss_trend_epoch{epoch}.png')
+            sns.lineplot(
+                x='epoch',
+                y='fair loss',
+                data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
+            )
+            plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
+            plt.close()
+
             if new_example is not None:
-                all_batch_data = DPBGExplainer.prepare_batched_data(batched_data, data)
-                self.compute_model_predictions(all_batch_data, topk)
-                model_topk = self.model_topk_idx.detach().cpu().numpy()
+                new_example[6] = epoch_fair_loss
+
+                # Recommendations generated passing test set (items in train and validation are considered watched)
+                test_batch_data = DPBGExplainer.prepare_batched_data(batched_data, test_data)
+                self.compute_model_predictions(test_batch_data, topk)
+                test_model_topk = self.model_topk_idx.detach().cpu().numpy()
 
                 self.cf_model.eval()
                 with torch.no_grad():
-                    cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
-                    _, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, **self.topk_args)
-                cf_topk_pred_idx = cf_topk_pred_idx.detach().cpu().numpy()
-                cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, model_topk)]
+                    test_cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
+                    _, test_cf_topk_pred_idx = self.get_top_k(test_cf_scores_pred, **self.topk_args)
+                test_cf_topk_pred_idx = test_cf_topk_pred_idx.detach().cpu().numpy()
+                test_cf_dist = [
+                    self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(test_cf_topk_pred_idx, test_model_topk)
+                ]
 
-                new_example = [batched_data.detach().numpy(), model_topk, cf_topk_pred_idx, cf_dist, *new_example[4:]]
+                rec_batch_data = DPBGExplainer.prepare_batched_data(batched_data, self.rec_data_loader)
+                self.compute_model_predictions(rec_batch_data, topk)
+                rec_model_topk = self.model_topk_idx.detach().cpu().numpy()
 
-                new_example[7] = np.mean(epoch_fair_loss)
+                self.cf_model.eval()
+                with torch.no_grad():
+                    rec_cf_scores_pred = self.get_scores(self.cf_model, *self.scores_args, pred=True)
+                    _, rec_cf_topk_pred_idx = self.get_top_k(rec_cf_scores_pred, **self.topk_args)
+                rec_cf_topk_pred_idx = rec_cf_topk_pred_idx.detach().cpu().numpy()
+                rec_cf_dist = [
+                    self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(rec_cf_topk_pred_idx, rec_model_topk)
+                ]
+
+                new_example = [
+                    batched_data.detach().numpy(),
+                    rec_model_topk,
+                    test_model_topk,
+                    rec_cf_topk_pred_idx,
+                    test_cf_topk_pred_idx,
+                    rec_cf_dist,
+                    test_cf_dist,
+                    *new_example[4:]
+                ]
+
+                if self.earlys.check(epoch_fair_loss):
+                    self.logger.info(self.earlys)
+                    self.logger.info(f"Early Stopping: best epoch {epoch + 1 - len(self.earlys.history) + self.earlys.best_loss}")
+                    break
 
                 best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss)
 
@@ -385,7 +445,7 @@ class DPBGExplainer:
 
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
         self.logger.info(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}, " +
-                         'User id: {}, '.format(str(self.user_id)) +
+                         # 'User id: {}, '.format(str(self.user_id)) +
                          'Epoch: {}, '.format(epoch + 1) +
                          'loss: {:.4f}, '.format(loss_total.item()) +
                          'fair loss: {:.4f}, '.format(fair_loss) +
@@ -413,8 +473,8 @@ class DPBGExplainer:
             del_edges = del_edges[:, del_edges[0, :] < self.dataset.user_num]  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
-                        self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(), cf_dist,
-                        loss_total.item(), None, loss_graph_dist.item(), fair_loss, del_edges, None, epoch + 1]
+                        self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
+                        cf_dist, loss_total.item(), loss_graph_dist.item(), fair_loss, del_edges, epoch + 1]
 
         return cf_stats, loss_total.item(), fair_loss
 

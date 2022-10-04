@@ -1,15 +1,20 @@
 import os
 import re
+import shutil
 import argparse
 import inspect
 import pickle
-import json
 
 import torch
 import pandas as pd
 
+from recbole.data.dataloader import FullSortEvalDataLoader
+
 import src.utils as utils
 from src.explainers.explainer_dp_ndcg import DPBGExplainer
+
+
+script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
 def load_already_done_exps_user_id(base_exps_file):
@@ -23,15 +28,18 @@ def load_already_done_exps_user_id(base_exps_file):
     return [int(_id) for f in files for _id in f.split('_')[1].split('.')[0].split('#')]
 
 
-def get_base_exps_filepath(config, config_id=-1):
+def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file=""):
     """
     return the filepath where explanations are saved
     :param config:
     :param config_id:
+    :param model_name:
+    :param model_file:
     :return:
     """
     epochs = config['cf_epochs']
-    base_exps_file = os.path.join(script_path, 'dp_ndcg_explanations', config['dataset'])
+    model_name = model_name or config['model']
+    base_exps_file = os.path.join(script_path, 'dp_ndcg_explanations', config['dataset'], model_name)
     if config['explain_fairness']:
         fair_metadata = "_".join(config["sensitive_attributes"])
         fair_loss = 'FairDP'
@@ -48,6 +56,12 @@ def get_base_exps_filepath(config, config_id=-1):
                     with open(config_path, 'rb') as f:
                         _c = pickle.load(f)
                     if config.final_config_dict == _c.final_config_dict:
+                        if model_file != "" and 'perturbed' in model_file:
+                            check_perturb = input("The explanations of the perturbed graph could overwrite the "
+                                                  "explanations from which the perturbed graph was generated. Type "
+                                                  "y/yes to confirm this outcome. Other inputs will assign a new id: ")
+                            if check_perturb.lower() != "y" and check_perturb.lower() != "yes":
+                                continue
                         break
                 i += 1
 
@@ -81,32 +95,38 @@ def save_exps_df(base_exps_file, exps):
     )
 
 
-def explain(config, model, test_data, base_exps_file, **kwargs):
+def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file, **kwargs):
     """
     Function that explains, that is generates perturbed graphs.
     :param config:
     :param model:
-    :param test_data:
+    :param _train_data:
+    :param _rec_data:
+    :param _test_data:
     :param base_exps_file:
     :param kwargs:
     :return:
     """
     epochs = config['cf_epochs']
     topk = config['cf_topk']
+    explainer_config_file = kwargs.get("explainer_config_file", None)
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
 
-    user_data = test_data.user_df[config['USER_ID_FIELD']][torch.randperm(test_data.user_df[config['USER_ID_FIELD']].shape[0])]
+    user_data = _rec_data.user_df[_rec_data.uid_field][torch.randperm(_rec_data.user_df.length)]
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
 
-    with open(os.path.join(base_exps_filepath, "config.json"), 'w') as config_json:
-        json.dump(config.final_config_dict, config_json, indent=4, default=lambda x: str(x))
+    if explainer_config_file is not None:
+        try:
+            shutil.copy(explainer_config_file, os.path.join(base_exps_file, "config.yaml"))
+        except shutil.SameFileError as e:
+            print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
-    bge = DPBGExplainer(config, train_data.dataset, rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
-    exp, _ = bge.explain((user_data, test_data), epochs, topk=topk)
+    bge = DPBGExplainer(config, _train_dataset, _rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
+    exp, _ = bge.explain(user_data, _rec_data, _test_data, epochs, topk=topk)
     del bge
 
     exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
@@ -115,43 +135,33 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
         pickle.dump(exp, f)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_file', required=True)
-    parser.add_argument('--explainer_config_file', default=os.path.join("config", "gcmc_explainer.yaml"))
-    parser.add_argument('--load', action='store_true')
-    parser.add_argument('--load_config_id', default=-1)
-    parser.add_argument('--verbose', action='store_true')
-
-    args = parser.parse_args()
-
-    script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
-
-    if args.model_file is None:
-        raise FileNotFoundError("need to specify a saved file with `--model_file`")
-
-    print(args)
-
+def execute_explanation(model_file,
+                        explainer_config_file=os.path.join("config", "explainer.yaml"),
+                        load=False,
+                        config_id=-1,
+                        verbose=False):
     # load trained model, config, dataset
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(args.model_file,
-                                                                                          args.explainer_config_file)
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
+                                                                                          explainer_config_file)
 
     if config['exp_rec_data'] is not None:
         rec_data = locals()[f"{config['exp_rec_data']}_data"]
+        if config['exp_rec_data'] == 'train':
+            rec_data = FullSortEvalDataLoader(config, train_data.dataset, train_data.sampler)
     else:
         rec_data = valid_data
 
-    base_exps_filepath = get_base_exps_filepath(config, config_id=args.load_config_id)
+    base_exps_filepath = get_base_exps_filepath(config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file)
 
-    if not args.load:
-        kwargs = dict(
-            verbose=args.verbose
-        )
+    if not load:
+        kwargs = dict(verbose=verbose, explainer_config_file=explainer_config_file)
 
         explain(
             config,
             model,
+            train_data.dataset,
             rec_data,
+            test_data,
             base_exps_filepath,
             **kwargs
         )
@@ -161,3 +171,22 @@ if __name__ == "__main__":
 
     # exps_data = utils.load_exps_file(base_exps_filepath)
     # save_exps_df(base_exps_filepath, exps_data)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_file', required=True)
+    parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
+    parser.add_argument('--load', action='store_true')
+    parser.add_argument('--config_id', default=-1)
+    parser.add_argument('--verbose', action='store_true')
+
+    args = parser.parse_args()
+
+    print(args)
+
+    execute_explanation(args.model_file,
+                        explainer_config_file=args.explainer_config_file,
+                        load=args.load,
+                        config_id=args.config_id,
+                        verbose=args.verbose)
