@@ -27,7 +27,7 @@ cf_topk: 10
 fair_beta: 0.5
 dropout_prob: 0.3
 
-edge_additions: True
+edge_additions: False
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
 exp_rec_data: "train"
@@ -42,7 +42,7 @@ group_explain_by: gender
 # "global": the optimization uses the NDCG of the disadvantaged group computed globally on the original model
 only_adv_group: "local"
 # Choose if the edges of the advantaged group should be deleted or the opposite
-delete_adv_group: False
+delete_adv_group: True
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K

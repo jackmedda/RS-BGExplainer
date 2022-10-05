@@ -813,7 +813,7 @@ for c_id, exp_t, old_exp_t in zip(
 ):
     exp_paths[exp_t] = None
     if c_id != -1:
-        exp_paths[exp_t] = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name,
+        exp_paths[exp_t] = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name, model_name,
                                         old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(c_id))
 
 with open(os.path.join(exp_paths[f'{model_name}+DP'], 'config.pkl'), 'rb') as f:

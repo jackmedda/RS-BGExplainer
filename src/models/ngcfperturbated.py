@@ -61,12 +61,6 @@ class NGCFPerturbated(GeneralRecommender):
         self.GNNlayers = torch.nn.ModuleList()
         for idx, (input_size, output_size) in enumerate(zip(self.hidden_size_list[:-1], self.hidden_size_list[1:])):
             self.GNNlayers.append(BiGNNLayer(input_size, output_size))
-        self.mf_loss = BPRLoss()
-        self.reg_loss = EmbLoss()
-
-        # storage variables for full sort evaluation acceleration
-        self.restore_user_e = None
-        self.restore_item_e = None
 
         # generate intermediate data
         # self.norm_adj_matrix = self.get_norm_adj_mat().to(self.device)
@@ -104,12 +98,12 @@ class NGCFPerturbated(GeneralRecommender):
             ]
             self.P_idxs = self.P_idxs[self.P_idxs[:, 0] != self.P_idxs[:, 1]].T  # removes the diagonal
             # to get sigmoid closer to 0
-            self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 5).to(self.device)
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 5)
 
             self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
             self.mask_sub_adj[self.P_idxs[0], self.P_idxs[1]] = True
         else:
-            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size))).to(self.device)
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.P_vec_size)))
             self.P_idxs = None
 
             self.mask_sub_adj = torch.zeros((self.num_all, self.num_all), dtype=torch.bool).to(self.device)
@@ -117,6 +111,13 @@ class NGCFPerturbated(GeneralRecommender):
 
         self.P_loss = None
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
+
+        self.mf_loss = BPRLoss()
+        self.reg_loss = EmbLoss()
+
+        # storage variables for full sort evaluation acceleration
+        self.restore_user_e = None
+        self.restore_item_e = None
 
         # parameters initialization
         self.apply(xavier_normal_initialization)
@@ -286,8 +287,11 @@ class NGCFPerturbated(GeneralRecommender):
 
     def full_sort_predict(self, interaction, pred=False):
         user = interaction[self.USER_ID]
-        if self.restore_user_e is None or self.restore_item_e is None:
-            self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+        # if self.restore_user_e is None or self.restore_item_e is None:
+        #     self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+
+        self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+
         # get user embedding from storage variable
         u_embeddings = self.restore_user_e[user]
 

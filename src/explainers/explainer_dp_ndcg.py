@@ -435,10 +435,10 @@ class DPBGExplainer:
 
         loss_total.backward()
 
+        # import pdb; pdb.set_trace()
         # for name, param in self.cf_model.named_parameters():
         #     if name == "P_symm":
-        #         print(param.grad[param.grad.nonzero()])
-        # import pdb; pdb.set_trace()
+        #         print(param.grad[param.grad])
 
         nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         self.cf_optimizer.step()

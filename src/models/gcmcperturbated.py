@@ -324,13 +324,11 @@ class GcEncoder(nn.Module):
         self.support = support
         self.num_support = len(support)
         self.num_all = self.num_users + self.num_items
-        # self.P_vec = perturb_adj
+
         self.P_symm = perturb_adj
         self.edge_additions = edge_additions
         self.P_hat_symm, self.P = None, None
 
-        # self.mask_sub_adj = torch.sparse.LongTensor(inds, data, torch.Size((self.num_all, self.num_all))).bool().to(self.device)
-        # self.mask_sub_adj = sub_adj
         self.mask_sub_adj = mask_sub_adj
 
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
