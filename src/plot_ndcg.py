@@ -31,7 +31,8 @@ def get_plots_path():
         script_path,
         os.pardir,
         f'dp_plots',
-        config['dataset'],
+        dataset.dataset_name,
+        model_name,
         '_'.join(map(str, args.best_exp_col)) if isinstance(args.best_exp_col, list) else \
             ('_'.join(map(str, list(args.best_exp_col.items()))) if isinstance(args.best_exp_col, dict) else args.best_exp_col),
     )
@@ -48,6 +49,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, data=None):
 
     result_all = {}
     pref_data_all = {}
+
     for e_type, e_path in _exp_paths.items():
         if e_path is None:
             continue
@@ -217,16 +219,20 @@ def result_data_per_epoch_per_group(exp_dfs, data=None):
 
 
 # %%
-def off_margin_ticks(ax_marg_x1, ax_marg_x2):
+def off_margin_ticks(*axs):
     # Turn off tick visibility for the measure axis on the marginal plots
-    plt.setp(ax_marg_x1.get_xticklabels(), visible=False)
-    plt.setp(ax_marg_x2.get_xticklabels(), visible=False)
-    plt.setp(ax_marg_x1.get_xticklabels(minor=True), visible=False)
-    plt.setp(ax_marg_x2.get_xticklabels(minor=True), visible=False)
+    for ax in axs:
+        plt.setp(ax.get_xticklabels(), visible=False)
+        plt.setp(ax.get_xticklabels(minor=True), visible=False)
 
 
 # %%
-def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndcg, data_info="test", annot_offset=0.005):
+def plot_lineplot_per_epoch_per_group(res_epoch_group,
+                                      del_edges_epoch,
+                                      orig_ndcg,
+                                      test_orig_ndcg=None,
+                                      data_info="test",
+                                      annot_offset=0.005):
     columns = ["Epoch", "Group", "metric", "value"]
     edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
     title = "Edge Additions " if edge_additions else "Edge Deletions "
@@ -235,6 +241,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
 
     df_test_result = None
     orig_males_ndcg, orig_females_ndcg = orig_ndcg
+    test_orig_ls = (0, (3, 5, 1, 5, 1, 5))
     for e_type in res_epoch_group:
         for attr in sens_attrs:
             plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(cleaned_config_ids), attr)
@@ -287,22 +294,44 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
                 x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[intersects].to_numpy()
 
                 colors = sns.color_palette("colorblind", n_colors=2)
-                gs = plt.GridSpec(6, 6)
+                gs = plt.GridSpec(8, 6)
 
-                ax = fig.add_subplot(gs[2:, :])
-                ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax)
-                ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax)
+                if data_info != "test":
+                    ax = fig.add_subplot(gs[3:, :])
+                    ax_rec_metric_diff = fig.add_subplot(gs[1, :], sharex=ax)
+                    ax_test_metric_diff = fig.add_subplot(gs[2, :], sharex=ax)
+                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax)
 
-                off_margin_ticks(ax_metric_diff, ax_del_edges)
+                    off_margin_ticks(ax_rec_metric_diff, ax_test_metric_diff, ax_del_edges)
+                else:
+                    ax = fig.add_subplot(gs[2:, :])
+                    ax_rec_metric_diff = fig.add_subplot(gs[1, :], sharex=ax)
+                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax)
+                    ax_test_metric_diff = None
+
+                    off_margin_ticks(ax_rec_metric_diff, ax_del_edges)
 
                 df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch", "Group"]].copy()
                 df_diff[metr_str] = np.abs(
                     plot_df.loc[plot_df["Group"] == "M", metr_str].values -
                     plot_df.loc[plot_df["Group"] == "F", metr_str].values
                 )
-                df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
+                df_diff.rename(columns={metr_str: f"{exp_rec_data.title()} {metr_str} Diff"}, inplace=True)
+
+                if data_info != "test":
+                    df_test_diff = plot_test_df.loc[plot_test_df["Group"] == "M", ["Epoch", "Group"]].copy()
+                    df_test_diff[metr_str] = np.abs(
+                        plot_test_df.loc[plot_test_df["Group"] == "M", metr_str].values -
+                        plot_test_df.loc[plot_test_df["Group"] == "F", metr_str].values
+                    )
+                    df_test_diff.rename(columns={metr_str: f"Test {metr_str} Diff"}, inplace=True)
 
                 lines = sns.lineplot(x="Epoch", y=metr_str, data=plot_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+
+                sns.lineplot(x="Epoch", y=f"{exp_rec_data.title()} {metr_str} Diff", data=df_diff, color="blue", ax=ax_rec_metric_diff)
+                ax_rec_metric_diff.fill_between(df_diff["Epoch"], df_diff[f"{exp_rec_data.title()} {metr_str} Diff"], color="blue", alpha=0.3)
+                ax_rec_metric_diff.grid(axis='y', ls=':')
+
                 if data_info != "test":
                     sns.lineplot(x="Epoch", y=metr_str, data=plot_test_df, hue="Group", palette=colors, ls=':', hue_order=["M", "F"], ax=ax, legend=False)
 
@@ -312,15 +341,26 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
                         Line2D([0], [0], ls=':', color='k'),
                         Line2D([0], [0], ls='--', color='k')
                     ]
+                    ls_legend_labels = [
+                        exp_rec_data.title(),
+                        "Test",
+                        f"{exp_rec_data.title()} Original"
+                    ]
+
+                    if test_orig_ndcg is not None:
+                        ls_legend_handles.append(Line2D([0], [0], ls=test_orig_ls, color='k'))
+                        ls_legend_labels.append("Test Original")
+
                     handles, labels = ax.get_legend_handles_labels()
                     ax.legend(
                         [title_proxy] + handles + [title_proxy] + ls_legend_handles,
-                        ["Group"] + labels + ["Source Eval Data", exp_rec_data.title(), "Test", f"{exp_rec_data.title()} Original"]
+                        ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
                     )
 
-                sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, color="blue", ax=ax_metric_diff)
-                ax_metric_diff.fill_between(df_diff["Epoch"], df_diff[f"{metr_str} Diff"], color="blue", alpha=0.3)
-                ax_metric_diff.grid(axis='y', ls=':')
+                    sns.lineplot(x="Epoch", y=f"Test {metr_str} Diff", data=df_test_diff, color="blue", ax=ax_test_metric_diff)
+                    ax_test_metric_diff.fill_between(df_test_diff["Epoch"], df_test_diff[f"Test {metr_str} Diff"], color="blue", alpha=0.3)
+                    ax_test_metric_diff.grid(axis='y', ls=':')
+
                 sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
 
                 df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
@@ -352,15 +392,21 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group, del_edges_epoch, orig_ndc
                     ax.plot(x_lim, [orig_males_ndcg, orig_males_ndcg], c=colors[0], ls='--')
                     ax.plot(x_lim, [orig_females_ndcg, orig_females_ndcg], c=colors[1], ls='--')
 
-                    global_idx_inters = (
-                            plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
-                    ).abs().sort_values().index[0]
-                    inters_val, y_global_idx_inters = plot_df.loc[global_idx_inters, [metr_str, "Epoch"]]
-                    ax.annotate(
-                        f"{orig_females_ndcg:.4f} ({abs(orig_females_ndcg - inters_val):.4f})",
-                        (y_global_idx_inters + y_global_idx_inters * annot_offset, orig_females_ndcg + orig_females_ndcg * annot_offset)
-                    )
-                    ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
+                    if test_orig_ndcg is not None:
+                        _test_orig_males_ndcg, _test_orig_females_ndcg = test_orig_ndcg
+                        x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
+                        ax.plot(x_lim, [_test_orig_males_ndcg, _test_orig_males_ndcg], c=colors[0], ls=test_orig_ls)
+                        ax.plot(x_lim, [_test_orig_females_ndcg, _test_orig_females_ndcg], c=colors[1], ls=test_orig_ls)
+
+                    # global_idx_inters = (
+                    #         plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
+                    # ).abs().sort_values().index[0]
+                    # inters_val, y_global_idx_inters = plot_df.loc[global_idx_inters, [metr_str, "Epoch"]]
+                    # ax.annotate(
+                    #     f"{orig_females_ndcg:.4f} ({abs(orig_females_ndcg - inters_val):.4f})",
+                    #     (y_global_idx_inters + y_global_idx_inters * annot_offset, orig_females_ndcg + orig_females_ndcg * annot_offset)
+                    # )
+                    # ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
 
                 ax.minorticks_on()
                 ax.grid(True, which="both", ls=':')
@@ -390,7 +436,7 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
-    order = [model_name, model_name + 'DP']
+    order = [model_name, f'{model_name}+DP']
 
     P_005 = '*'
     P_001 = '^'
@@ -527,7 +573,7 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
     sens_attributes = config['sensitive_attributes']
     sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
 
-    order = [model_name, model_name + 'DP']
+    order = [model_name, f'{model_name}+DP']
 
     P_005 = '*'
     P_001 = '^'
@@ -761,7 +807,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_file', required=True)
 parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
 parser.add_argument('--load_config_ids', nargs="+", type=int, default=[1, 1],
-                    help="follows the order ['Silvestri et al.', model_name + 'DP'], set -1 to skip")
+                    help="follows the order ['Silvestri et al.', model_name + '+DP'], set -1 to skip")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
 args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_ids -1 3".split())
@@ -836,7 +882,7 @@ item_hist_matrix, _, item_hist_len = train_data.dataset.history_user_matrix()
 
 # %%
 args.best_exp_col = args.best_exp_col[0] if len(args.best_exp_col) == 1 else args.best_exp_col
-args.best_exp_col = {model_name + 'DP': 1}
+args.best_exp_col = {f'{model_name}+DP': 1}
 
 # %%
 best_test_pref_data, best_test_result = extract_best_metrics(exp_paths, args.best_exp_col, data=test_data.dataset)
@@ -850,20 +896,20 @@ all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = 
     exp_paths, data=rec_data.dataset, rec=True
 )
 
-test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs[model_name + 'DP'], 'topk_pred', 'ndcg')
-rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, all_exp_rec_dfs[model_name + 'DP'], 'topk_pred', 'ndcg')
+test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs[f'{model_name}+DP'], 'topk_pred', 'ndcg')
+rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, all_exp_rec_dfs[f'{model_name}+DP'], 'topk_pred', 'ndcg')
 
 test_orig_males_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 test_orig_females_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
@@ -871,19 +917,19 @@ test_orig_females_ndcg = utils.compute_metric(
 rec_orig_males_ndcg = utils.compute_metric(
     evaluator,
     rec_data.dataset,
-    all_exp_rec_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 rec_orig_females_ndcg = utils.compute_metric(
     evaluator,
     rec_data.dataset,
-    all_exp_rec_dfs[model_name + 'DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 
-if test_orig_males_ndcg >= test_orig_females_ndcg:
+if rec_orig_males_ndcg >= rec_orig_females_ndcg:
     if delete_adv_group is not None:
         group_edge_del = male_idx if delete_adv_group else female_idx
     else:
@@ -908,6 +954,7 @@ plot_lineplot_per_epoch_per_group(
     rec_result_per_epoch_per_group,
     rec_del_edges_per_epoch,
     (rec_orig_males_ndcg, rec_orig_females_ndcg),
+    test_orig_ndcg=(test_orig_males_ndcg, test_orig_females_ndcg),
     data_info=exp_rec_data
 )
 
