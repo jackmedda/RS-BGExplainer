@@ -29,7 +29,7 @@ EXPS_COLUMNS = [
 ]
 
 
-def load_data_and_model(model_file, explainer_config_file):
+def load_data_and_model(model_file, explainer_config_file=None):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -45,9 +45,10 @@ def load_data_and_model(model_file, explainer_config_file):
     checkpoint = torch.load(model_file)
     config = checkpoint['config']
 
-    with open(explainer_config_file, 'r', encoding='utf-8') as f:
-        explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
-    config.final_config_dict.update(explain_config_dict)
+    if explainer_config_file is not None:
+        with open(explainer_config_file, 'r', encoding='utf-8') as f:
+            explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
+        config.final_config_dict.update(explain_config_dict)
 
     init_seed(config['seed'], config['reproducibility'])
     init_logger(config)
@@ -56,7 +57,8 @@ def load_data_and_model(model_file, explainer_config_file):
 
     dataset = create_dataset(config)
 
-    config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
+    if 'group_explain' in config:
+        config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
 
     logger.info(dataset)
     train_data, valid_data, test_data = data_preparation(config, dataset)

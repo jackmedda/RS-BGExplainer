@@ -116,9 +116,9 @@ def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
     data = test_data.dataset if data is None else data
 
     if not rec:
-        cols = [2, 4, 6, 8, 10, 11]
+        cols = [2, 4, 6, 8, 9, 10, 11]
     else:
-        cols = [1, 3, 5, 8, 10, 11]
+        cols = [1, 3, 5, 8, 9, 10, 11]
 
     col_names = [
         'user_id',
@@ -126,6 +126,7 @@ def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
         'cf_topk_pred',
         'topk_dist',
         'dist_loss',
+        'fair_loss',
         'del_edges',
         'epoch'
     ]
@@ -191,9 +192,11 @@ def result_data_per_epoch_per_group(exp_dfs, data=None):
 
     result_per_epoch = {}
     del_edges_per_epoch = {}
+    fair_loss_per_epoch = {}
     for e_type, e_df in exp_dfs.items():
         result_per_epoch[e_type] = {}
         del_edges_per_epoch[e_type] = {}
+        fair_loss_per_epoch[e_type] = {}
         for epoch, epoch_df in e_df.groupby("epoch"):
             result_per_epoch[e_type][epoch] = {}
             del_edges_per_epoch[e_type][epoch] = {}
@@ -215,7 +218,9 @@ def result_data_per_epoch_per_group(exp_dfs, data=None):
                     del_edges_per_epoch[e_type][epoch][male_idx] = del_edges[:, (epoch_df.loc[males_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
                     del_edges_per_epoch[e_type][epoch][female_idx] = del_edges[:, (epoch_df.loc[females_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
 
-    return result_per_epoch, del_edges_per_epoch
+                    fair_loss_per_epoch[e_type][epoch] = epoch_df.iloc[0]['fair_loss']
+
+    return result_per_epoch, del_edges_per_epoch, fair_loss_per_epoch
 
 
 # %%
@@ -229,10 +234,10 @@ def off_margin_ticks(*axs):
 # %%
 def plot_lineplot_per_epoch_per_group(res_epoch_group,
                                       del_edges_epoch,
+                                      fair_loss_per_epoch,
                                       orig_ndcg,
                                       test_orig_ndcg=None,
-                                      data_info="test",
-                                      annot_offset=0.005):
+                                      data_info="test"):
     columns = ["Epoch", "Group", "metric", "value"]
     edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
     title = "Edge Additions " if edge_additions else "Edge Deletions "
@@ -241,7 +246,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
     df_test_result = None
     orig_males_ndcg, orig_females_ndcg = orig_ndcg
-    test_orig_ls = (0, (3, 5, 1, 5, 1, 5))
     for e_type in res_epoch_group:
         for attr in sens_attrs:
             plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(cleaned_config_ids), attr)
@@ -276,7 +280,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             df_del_data[edges_ylabel + "Lab"] = (df_del_data[edges_ylabel] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
             df_del_data.sort_values(edges_ylabel, inplace=True)
 
-            plot_test_df = None
+            rec_str = exp_rec_data.title() if data_info != 'test' else "Test"
             for metric in evaluator.metrics:
                 metr_str = metric.upper()
 
@@ -284,39 +288,61 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                 plot_df = df[df["metric"] == metric].copy()
                 plot_df.rename(columns={"value": metr_str}, inplace=True)
 
+                rec_male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+                rec_female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+                rec_intersects = np.argwhere(np.diff(np.sign(rec_male_val - rec_female_val))).flatten()
+                rec_x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
+
                 if data_info != "test":
                     plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
                     plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
-                male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-                female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
-                intersects = np.argwhere(np.diff(np.sign(male_val - female_val))).flatten()
-                x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[intersects].to_numpy()
+                    test_male_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+                    test_female_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+                    test_intersects = np.argwhere(np.diff(np.sign(test_male_val - test_female_val))).flatten()
+                    test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
+                else:
+                    plot_test_df, test_male_val, test_female_val, test_intersects, test_x_intersects = [None] * 5
 
                 colors = sns.color_palette("colorblind", n_colors=2)
-                gs = plt.GridSpec(8, 6)
 
                 if data_info != "test":
-                    ax = fig.add_subplot(gs[3:, :])
-                    ax_rec_metric_diff = fig.add_subplot(gs[1, :], sharex=ax)
-                    ax_test_metric_diff = fig.add_subplot(gs[2, :], sharex=ax)
-                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax)
+                    gs = plt.GridSpec(8, 6)
 
-                    off_margin_ticks(ax_rec_metric_diff, ax_test_metric_diff, ax_del_edges)
+                    ax_rec = fig.add_subplot(gs[2:5, :])
+                    ax_test = fig.add_subplot(gs[5:, :], sharex=ax_rec)
+                    ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
+                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
+
+                    off_margin_ticks(ax_rec, ax_metric_diff, ax_del_edges)
                 else:
-                    ax = fig.add_subplot(gs[2:, :])
-                    ax_rec_metric_diff = fig.add_subplot(gs[1, :], sharex=ax)
-                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax)
-                    ax_test_metric_diff = None
+                    gs = plt.GridSpec(6, 6)
 
-                    off_margin_ticks(ax_rec_metric_diff, ax_del_edges)
+                    ax_rec = fig.add_subplot(gs[2:, :])
+                    ax_test = None
+                    ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
+                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
 
-                df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch", "Group"]].copy()
+                    off_margin_ticks(ax_metric_diff, ax_del_edges)
+
+                df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch"]].copy()
                 df_diff[metr_str] = np.abs(
                     plot_df.loc[plot_df["Group"] == "M", metr_str].values -
                     plot_df.loc[plot_df["Group"] == "F", metr_str].values
                 )
-                df_diff.rename(columns={metr_str: f"{exp_rec_data.title()} {metr_str} Diff"}, inplace=True)
+                df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
+                df_diff["Source Eval Data"] = rec_str
+
+                if metric == "ndcg":
+                    df_fair_loss_data = []
+                    for epoch in fair_loss_per_epoch[e_type]:
+                        df_fair_loss_data.append([epoch, fair_loss_per_epoch[e_type][epoch]])
+
+                    df_fair_loss_df = pd.DataFrame(df_fair_loss_data, columns=["Epoch", f"{metr_str} Diff"])
+
+                    df_fair_loss_df["Source Eval Data"] = "ApproxNDCG Loss"
+
+                    df_diff = pd.concat([df_diff, df_fair_loss_df]).reset_index()
 
                 if data_info != "test":
                     df_test_diff = plot_test_df.loc[plot_test_df["Group"] == "M", ["Epoch", "Group"]].copy()
@@ -324,42 +350,43 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                         plot_test_df.loc[plot_test_df["Group"] == "M", metr_str].values -
                         plot_test_df.loc[plot_test_df["Group"] == "F", metr_str].values
                     )
-                    df_test_diff.rename(columns={metr_str: f"Test {metr_str} Diff"}, inplace=True)
+                    df_test_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
 
-                lines = sns.lineplot(x="Epoch", y=metr_str, data=plot_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+                    df_test_diff["Source Eval Data"] = "Test"
+                    df_diff = pd.concat([df_diff, df_test_diff]).reset_index()
 
-                sns.lineplot(x="Epoch", y=f"{exp_rec_data.title()} {metr_str} Diff", data=df_diff, color="blue", ax=ax_rec_metric_diff)
-                ax_rec_metric_diff.fill_between(df_diff["Epoch"], df_diff[f"{exp_rec_data.title()} {metr_str} Diff"], color="blue", alpha=0.3)
-                ax_rec_metric_diff.grid(axis='y', ls=':')
+                lines = []
+                for ax, data_df, data_type in zip([ax_rec, ax_test], [plot_df, plot_test_df], [rec_str, "Test"]):
+                    if ax is not None:
+                        ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+                        lines.append(ax_lines)
 
-                if data_info != "test":
-                    sns.lineplot(x="Epoch", y=metr_str, data=plot_test_df, hue="Group", palette=colors, ls=':', hue_order=["M", "F"], ax=ax, legend=False)
+                        title_proxy = Rectangle((0, 0), 0, 0, color='w')
+                        ls_legend_handles = [
+                            Line2D([0], [0], ls='-', color='k'),
+                            Line2D([0], [0], ls='--', color='k')
+                        ]
 
-                    title_proxy = Rectangle((0, 0), 0, 0, color='w')
-                    ls_legend_handles = [
-                        Line2D([0], [0], ls='-', color='k'),
-                        Line2D([0], [0], ls=':', color='k'),
-                        Line2D([0], [0], ls='--', color='k')
-                    ]
-                    ls_legend_labels = [
-                        exp_rec_data.title(),
-                        "Test",
-                        f"{exp_rec_data.title()} Original"
-                    ]
+                        ls_legend_labels = [
+                            data_type,
+                            f"{data_type} Original"
+                        ]
 
-                    if test_orig_ndcg is not None:
-                        ls_legend_handles.append(Line2D([0], [0], ls=test_orig_ls, color='k'))
-                        ls_legend_labels.append("Test Original")
+                        handles, labels = ax.get_legend_handles_labels()
+                        ax.legend(
+                            [title_proxy] + handles + [title_proxy] + ls_legend_handles,
+                            ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
+                        )
 
-                    handles, labels = ax.get_legend_handles_labels()
-                    ax.legend(
-                        [title_proxy] + handles + [title_proxy] + ls_legend_handles,
-                        ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
-                    )
+                diff_groups = df_diff.groupby("Source Eval Data")
+                # diff_colors = sns.color_palette("colorblind")[::-1][:diff_groups.ngroups]
+                diff_colors = sns.color_palette("colorblind6", n_colors=diff_groups.ngroups)
 
-                    sns.lineplot(x="Epoch", y=f"Test {metr_str} Diff", data=df_test_diff, color="blue", ax=ax_test_metric_diff)
-                    ax_test_metric_diff.fill_between(df_test_diff["Epoch"], df_test_diff[f"Test {metr_str} Diff"], color="blue", alpha=0.3)
-                    ax_test_metric_diff.grid(axis='y', ls=':')
+                sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, palette=diff_colors, hue="Source Eval Data", ax=ax_metric_diff)
+                # for i, (eval_type, eval_diff_df) in enumerate(diff_groups):
+                #     zorder = 1 if eval_type == "ApproxNDCG Loss" else 2
+                #     ax_metric_diff.fill_between(eval_diff_df["Epoch"], eval_diff_df[f"{metr_str} Diff"], color=diff_colors[i], alpha=0.3, zorder=zorder)
+                ax_metric_diff.grid(axis='y', ls=':')
 
                 sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
 
@@ -376,27 +403,34 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
                 ax_del_edges.yaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
 
-                y_scatter = []
                 texts = []
-                for i, (x_cross, cross) in enumerate(zip(x_intersects, intersects)):
-                    mean_metric = (male_val[cross] + female_val[cross]) / 2
-                    diff_metric = abs(male_val[cross] - female_val[cross])
-                    texts.append(ax.text(x_cross, mean_metric, f"{mean_metric:.4f} ({diff_metric:.4f})"))
-                    y_scatter.append(mean_metric)
+                for ax, male_val, female_val, intersects, x_intersects in zip([ax_rec, ax_test],
+                                                                              [rec_male_val, test_male_val],
+                                                                              [rec_female_val, test_female_val],
+                                                                              [rec_intersects, test_intersects],
+                                                                              [rec_x_intersects, test_x_intersects]):
+                    if ax is not None:
+                        y_scatter = []
+                        texts.append([])
+                        for i, (x_cross, cross) in enumerate(zip(x_intersects, intersects)):
+                            mean_metric = (male_val[cross] + female_val[cross]) / 2
+                            diff_metric = abs(male_val[cross] - female_val[cross])
+                            texts[-1].append(ax.text(x_cross, mean_metric, f"{mean_metric:.4f} ({diff_metric:.4f})"))
+                            y_scatter.append(mean_metric)
 
-                if len(intersects) > 0:
-                    ax.scatter(x_intersects, y_scatter, marker="X", c="k")
+                        if len(intersects) > 0:
+                            ax.scatter(x_intersects, y_scatter, marker="X", c="k")
 
                 if metric == "ndcg":
                     x_lim = [plot_df["Epoch"].min(), plot_df["Epoch"].max()]
-                    ax.plot(x_lim, [orig_males_ndcg, orig_males_ndcg], c=colors[0], ls='--')
-                    ax.plot(x_lim, [orig_females_ndcg, orig_females_ndcg], c=colors[1], ls='--')
+                    ax_rec.plot(x_lim, [orig_males_ndcg, orig_males_ndcg], c=colors[0], ls='--')
+                    ax_rec.plot(x_lim, [orig_females_ndcg, orig_females_ndcg], c=colors[1], ls='--')
 
                     if test_orig_ndcg is not None:
                         _test_orig_males_ndcg, _test_orig_females_ndcg = test_orig_ndcg
                         x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
-                        ax.plot(x_lim, [_test_orig_males_ndcg, _test_orig_males_ndcg], c=colors[0], ls=test_orig_ls)
-                        ax.plot(x_lim, [_test_orig_females_ndcg, _test_orig_females_ndcg], c=colors[1], ls=test_orig_ls)
+                        ax_test.plot(x_lim, [_test_orig_males_ndcg, _test_orig_males_ndcg], c=colors[0], ls='--')
+                        ax_test.plot(x_lim, [_test_orig_females_ndcg, _test_orig_females_ndcg], c=colors[1], ls='--')
 
                     # global_idx_inters = (
                     #         plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
@@ -408,19 +442,20 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                     # )
                     # ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
 
-                ax.minorticks_on()
-                ax.grid(True, which="both", ls=':')
+                for ax, ax_texts, ax_lines in zip([ax_rec, ax_test], texts, lines):
+                    ax.minorticks_on()
+                    ax.grid(True, which="both", ls=':')
 
-                adjust_text(
-                    texts,
-                    only_move={'points': 'xy', 'text': 'xy'},
-                    arrowprops=dict(arrowstyle="->", color='k', lw=0.5),
-                    ax=ax,
-                    expand_text=(1.1, 1.2),
-                    expand_points=(1.1, 2.5),
-                    expand_objects=(0.3, 0.2),
-                    add_objects=lines.lines[:2]
-                )
+                    adjust_text(
+                        ax_texts,
+                        only_move={'points': 'xy', 'text': 'xy'},
+                        arrowprops=dict(arrowstyle="->", color='k', lw=0.5),
+                        ax=ax,
+                        expand_text=(1.1, 1.2),
+                        expand_points=(1.1, 2.5),
+                        expand_objects=(0.3, 0.2),
+                        add_objects=ax_lines.lines[:2]
+                    )
 
                 fig.suptitle(title)
 
@@ -940,19 +975,21 @@ else:
     else:
         group_edge_del = female_idx
 
-test_result_per_epoch_per_group, test_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
-rec_result_per_epoch_per_group, rec_del_edges_per_epoch = result_data_per_epoch_per_group(all_exp_rec_dfs, data=rec_data.dataset)
+test_result_per_epoch_per_group, test_del_edges_per_epoch, test_fair_loss_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
+rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = result_data_per_epoch_per_group(all_exp_rec_dfs, data=rec_data.dataset)
 
 # %%
 plot_lineplot_per_epoch_per_group(
     test_result_per_epoch_per_group,
     test_del_edges_per_epoch,
+    test_fair_loss_per_epoch,
     (test_orig_males_ndcg, test_orig_females_ndcg),
     data_info="test"
 )
 plot_lineplot_per_epoch_per_group(
     rec_result_per_epoch_per_group,
     rec_del_edges_per_epoch,
+    rec_fair_loss_per_epoch,
     (rec_orig_males_ndcg, rec_orig_females_ndcg),
     test_orig_ndcg=(test_orig_males_ndcg, test_orig_females_ndcg),
     data_info=exp_rec_data

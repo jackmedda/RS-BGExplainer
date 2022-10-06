@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 3000 # 1200 for NDCGApprox
+cf_learning_rate: 12000 # 1200 for NDCGApprox
 
 momentum: 0.0
 # epochs to generate explanations
@@ -27,10 +27,10 @@ cf_topk: 10
 fair_beta: 0.5
 dropout_prob: 0.3
 
-edge_additions: False
+edge_additions: True
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
-exp_rec_data: "train"
+exp_rec_data: "valid"
 
 # device: cpu
 
@@ -42,7 +42,7 @@ group_explain_by: gender
 # "global": the optimization uses the NDCG of the disadvantaged group computed globally on the original model
 only_adv_group: "local"
 # Choose if the edges of the advantaged group should be deleted or the opposite
-delete_adv_group: True
+delete_adv_group: False
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
@@ -80,7 +80,10 @@ eval_args:
     mode: 'full'
 
 # Early stopping parameters
-earlys_patience: 7
+earlys_patience: 5
 earlys_ignore: 0
 earlys_method: 'consistency'
 earlys_fn: 'lt'
+earlys_delta: 0.0001
+
+earlys_pvalue:

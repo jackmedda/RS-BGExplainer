@@ -1,5 +1,5 @@
 import os
-import json
+import yaml
 import copy
 import shutil
 import pickle
@@ -15,10 +15,11 @@ from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 from src.explain_dp_ndcg import execute_explanation
+from src.plot_orig_perturb import prepare_data
 from src.utils import utils
 
 
-def training(_model, _dataset, _config, saved=True, _json_config=None):
+def training(_model, _dataset, _config, saved=True, _yaml_config=None):
     logger = logging.getLogger()
     # dataset splitting
     train_data, valid_data, test_data = data_preparation(_config, _dataset)
@@ -39,7 +40,7 @@ def training(_model, _dataset, _config, saved=True, _json_config=None):
 
     if args.use_perturbed_graph:
         sens_attr, c_id = args.load_config_attr_id
-        perturb_str = f"perturbed_({sens_attr}_epochs_{_json_config['cf_epochs']}_cid_{c_id})_"
+        perturb_str = f"perturbed_({sens_attr}_epochs_{_yaml_config['cf_epochs']}_cid_{c_id}_best_exp_{args.best_exp})_"
         trainer.saved_model_file = os.path.join(
             os.path.dirname(trainer.saved_model_file),
             perturb_str + os.path.basename(trainer.saved_model_file)
@@ -62,33 +63,6 @@ def training(_model, _dataset, _config, saved=True, _json_config=None):
         'best_valid_result': best_valid_result,
         'test_result': test_result
     }
-
-
-def evaluate_original_and_perturbed(model_file, rec_data, explainer_config_file):
-    logger = logging.getLogger()
-
-    config, model, dataset, _, _, _ = utils.load_data_and_model(model_file, explainer_config_file)
-
-    trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
-
-    gender_map = dataset.field2id_token['gender']
-    female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
-    females = rec_data.user_df['gender'] == female_idx
-    males = ~females
-    rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
-
-    rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.user_df.interaction.items()})
-    rec_data_f.uid_list = rec_data_f.user_df['user_id']
-
-    females_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
-    logger.info(females_result)
-
-    rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.user_df.interaction.items()})
-    rec_data_m.uid_list = rec_data_m.user_df['user_id']
-    males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
-    logger.info(males_result)
-
-    return {'M': males_result, 'F': females_result}
 
 
 def main(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True):
@@ -114,12 +88,9 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     dataset = create_dataset(config)
     logger.info(dataset)
 
-    evaluate_perturbed_data, rec_data = None, None
     if args.run == 'evaluate_perturbed':
-        _, _, _, _, _, rec_data = utils.load_data_and_model(args.original_model_file, args.explainer_config_file)
-        logger.info("EVALUATE ORIGINAL MODEL")
-        evaluate_perturbed_data = dict.fromkeys(['Original', 'Perturbed'])
-        evaluate_perturbed_data['Original'] = runner(args.original_model_file, rec_data, args.explainer_config_file)
+        orig_config, orig_model, orig_dataset, orig_train_data, _, orig_test_data = \
+            utils.load_data_and_model(args.original_model_file, args.explainer_config_file)
 
     if args.use_perturbed_graph:
         if 'LRS' not in config['eval_args']['split']:
@@ -133,20 +104,29 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
             script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
 
             sens_attr, c_id = args.load_config_attr_id
-            exp_path = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name,
+            exp_path = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name, model,
                                     'FairDP', sens_attr, f"epochs_{config['epochs']}", c_id)
             with open(os.path.join(exp_path, 'all_users.pkl'), 'rb') as exp_file:
                 exps = pickle.load(exp_file)
             logger.info(f"Original Fair Loss: {exps[0][-1]}")
 
-            with open(os.path.join(exp_path, 'config.json'), 'r') as json_config_file:
-                json_config = json.load(json_config_file)
+            with open(os.path.join(exp_path, 'config.yaml'), 'r') as yaml_config_file:
+                yaml_config = yaml.load(yaml_config_file.read(), Loader=config.yaml_loader)
 
-            if json_config['exp_rec_data'] != 'valid':
+            if yaml_config['exp_rec_data'] != 'valid':
                 logger.warning('Performing Graph Augmentation on Explanations NOT produced on Validation Data.')
 
-            fairest_exp = exps[np.argmin([exp[10] for exp in exps])]
-            edges = fairest_exp[11]
+            best_exp = None
+            if args.best_exp[0] == "fairest":
+                best_exp = exps[np.argmin([exp[9] for exp in exps])]
+            elif args.best_exp[0] == "fairest_before_exp":
+                best_exp = exps[np.argmin([exp[9] for exp in exps[:int(args.best_exp[1])]])]
+            elif args.best_exp[0] == "fixed_exp":
+                try:
+                    best_exp = [e for e in exps if e[11] == int(args.best_exp[1])][0]
+                except IndexError as e:
+                    logger.info(f"No explanation exists for epoch {args.best_exp[1]}")
+            edges = best_exp[10]
 
             check_new_edges = False  # if True must check if new edges are contained in test and/or validation
             for spl in splits:
@@ -209,17 +189,23 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
             logger.info(dataset)
 
             if args.run == 'train':
-                runner(model, dataset, config, saved=saved, _json_config=json_config)
+                runner(model, dataset, config, saved=saved, _yaml_config=yaml_config)
             elif args.run == 'explain':
                 runner(*explain_args)
             elif args.run == 'evaluate_perturbed':
                 logger.info("EVALUATE PERTURBED MODEL")
-                evaluate_perturbed_data['Perturbed'] = runner(args.model_file, rec_data, args.explainer_config_file)
-
-                for k in evaluate_perturbed_data:
-                    logger.info(f"{k} Result")
-                    for gr in evaluate_perturbed_data[k]:
-                        logger.info(f"{gr}: {evaluate_perturbed_data[k][gr]}")
+                _, pert_model, pert_dataset, _, _, _ = utils.load_data_and_model(args.model_file, args.explainer_config_file)
+                runner(
+                    orig_config,
+                    orig_model,
+                    pert_model,
+                    orig_dataset,
+                    pert_dataset,
+                    orig_train_data,
+                    orig_test_data,
+                    topk=args.topk,
+                    perturbed_model_file=os.path.splitext(os.path.basename(args.model_file))[0]
+                )
         finally:
             # Restore train validation test splits
             for spl in splits:
@@ -267,6 +253,8 @@ if __name__ == "__main__":
     train_group.add_argument('--config_dict', default=None)
     train_group.add_argument('--saved', action='store_true')
     train_group.add_argument('--use_perturbed_graph', action='store_true')
+    train_group.add_argument('--best_exp', nargs='+', help="one of ['fairest', 'fairest_before_exp', 'fixed_exp'] with"
+                                                           " the chosen exp number for the last two types")
     train_group.add_argument('--load_config_attr_id', type=str, nargs=2, default=None)  # ex. ("gender", "2")
     explain_group.add_argument('--model_file')
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
@@ -274,6 +262,7 @@ if __name__ == "__main__":
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
     evaluate_perturbed_group.add_argument('--original_model_file')
+    evaluate_perturbed_group.add_argument('--topk', default=10)
 
     args = parser.parse_args()
     print(args)
@@ -285,7 +274,7 @@ if __name__ == "__main__":
     elif args.run == 'explain':
         runner = execute_explanation
     elif args.run == 'evaluate_perturbed':
-        runner = evaluate_original_and_perturbed
+        runner = prepare_data
     else:
         raise NotImplementedError(f"The run `{args.run}` is not supported.")
 

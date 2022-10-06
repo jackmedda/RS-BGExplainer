@@ -15,6 +15,7 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import scipy.stats as stats
 import matplotlib.pyplot as plt
 from early_stopping import EarlyStopping
 from recbole.evaluator import Evaluator
@@ -120,8 +121,11 @@ class DPBGExplainer:
             config['earlys_patience'],
             config['earlys_ignore'],
             method=config['earlys_method'],
-            fn=config['earlys_fn']
+            fn=config['earlys_fn'],
+            delta=config['earlys_delta']
         )
+
+        self.earlys_pvalue = config['earlys_pvalue']
 
     def compute_model_predictions(self, batched_data, topk, loaded_scores=None, old_field2token_id=None):
         """
@@ -167,7 +171,7 @@ class DPBGExplainer:
             best_cf_example.append(new_example + [first_fair_loss])
             self.old_graph_dist = new_example[-4]
 
-            pref_data = pd.DataFrame(zip(*new_example[:3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+            pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
             orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
             cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
 
@@ -188,17 +192,21 @@ class DPBGExplainer:
         return best_loss
 
     @staticmethod
-    def prepare_batched_data(batched_data, data):
+    def prepare_batched_data(batched_data, data, item_data=None):
         """
         Prepare the batched data according to the "recbole" pipeline
         :param batched_data:
         :param data:
+        :param item_data:
         :return:
         """
-        user_df = Interaction({k: v[batched_data] for k, v in data.dataset.user_feat.interaction.items()})
+        data_df = Interaction({k: v[batched_data] for k, v in data.dataset.user_feat.interaction.items()})
+
+        if item_data is not None:
+            data_df.update(Interaction({data.dataset.iid_field: item_data}))
 
         if hasattr(data, "uid2history_item"):
-            history_item = data.uid2history_item[user_df['user_id']]
+            history_item = data.uid2history_item[data_df['user_id']]
         else:
             history_item = []
 
@@ -209,7 +217,7 @@ class DPBGExplainer:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
 
-        return user_df, (history_u, history_i), None, None
+        return data_df, (history_u, history_i), None, None
 
     def get_iter_data(self, user_data):
         user_data = user_data.split(self.user_batch_exp)
@@ -277,7 +285,7 @@ class DPBGExplainer:
 
         return iter_data
 
-    def explain(self, batched_data, explain_data, test_data, epochs, topk=10):
+    def explain(self, batched_data, test_data, epochs, topk=10):
         """
         The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
         :param batched_data:
@@ -303,7 +311,7 @@ class DPBGExplainer:
             while any(d.unique().shape[0] < 1 for d in iter_data):  # check if each batch has at least 2 groups
                 iter_data = self.randperm2groups(batched_data)
         else:
-            batched_gender_data = explain_data.dataset.user_feat['gender'][batched_data]
+            batched_gender_data = self.rec_data_loader.dataset.user_feat['gender'][batched_data]
             iter_data = batched_data[batched_gender_data == self.adv_group].split(self.user_batch_exp)
 
         cwd_files = [f for f in os.listdir() if f.startswith('loss_trend_epoch')]
@@ -317,7 +325,7 @@ class DPBGExplainer:
             epoch_fair_loss = []
             for batch_idx, batch_user in enumerate(iter_data):
                 self.user_id = batch_user
-                batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, explain_data)
+                batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, self.rec_data_loader)
                 self.compute_model_predictions(batched_data_epoch, topk)
 
                 new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
@@ -376,10 +384,29 @@ class DPBGExplainer:
                     *new_example[4:]
                 ]
 
+                pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
+                cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+
+                user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+                gender_map = self.dataset.field2id_token['gender']
+                female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+
+                males = user_feat['gender'] == male_idx
+                females = user_feat['gender'] == female_idx
+
+                cf_f, cf_m = cf_res[females, -1], cf_res[males, -1]
+
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
                     self.logger.info(f"Early Stopping: best epoch {epoch + 1 - len(self.earlys.history) + self.earlys.best_loss}")
-                    break
+                    if self.earlys_pvalue is None:
+                        break
+
+                if self.earlys_pvalue is not None:
+                    stat = stats.f_oneway(cf_f, cf_m)
+                    if stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore:
+                        self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
+                        break
 
                 best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss)
 
@@ -495,13 +522,13 @@ class DPBGExplainer:
             result_list.append(result)
         return torch.cat(result_list, dim=0)
 
-    def get_scores(self, _model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
+    @staticmethod
+    def get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
         interaction, history_index, _, _ = batched_data
-        # assert len(interaction.interaction[_model.USER_ID]) == 1
+        inter_data = interaction.to(_model.device)
         try:
-            # Note: interaction without item ids
             scores_kws = {'pred': pred} if pred is not None else {}
-            scores = _model.full_sort_predict(interaction.to(_model.device), **scores_kws)
+            scores = _model.full_sort_predict(inter_data, **scores_kws)
 
         except NotImplementedError:
             inter_len = len(interaction)
@@ -511,10 +538,12 @@ class DPBGExplainer:
             if batch_size <= test_batch_size:
                 scores = _model.predict(new_inter)
             else:
-                scores = self._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
+                scores = DPBGExplainer._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
 
         scores = scores.view(-1, tot_item_num)
         scores[:, 0] = -np.inf
+        if _model.ITEM_ID in interaction:
+            scores = scores[:, inter_data[_model.ITEM_ID]]
         if history_index is not None:
             scores[history_index] = -np.inf
 

@@ -126,7 +126,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
             print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
     bge = DPBGExplainer(config, _train_dataset, _rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
-    exp, _ = bge.explain(user_data, _rec_data, _test_data, epochs, topk=topk)
+    exp, _ = bge.explain(user_data, _test_data, epochs, topk=topk)
     del bge
 
     exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
@@ -145,9 +145,12 @@ def execute_explanation(model_file,
                                                                                           explainer_config_file)
 
     if config['exp_rec_data'] is not None:
-        rec_data = locals()[f"{config['exp_rec_data']}_data"]
-        if config['exp_rec_data'] == 'train':
-            rec_data = FullSortEvalDataLoader(config, train_data.dataset, train_data.sampler)
+        if config['exp_rec_data'] != 'train+valid':
+            rec_data = locals()[f"{config['exp_rec_data']}_data"]
+            if config['exp_rec_data'] == 'train':
+                rec_data = FullSortEvalDataLoader(config, train_data.dataset, train_data.sampler)
+        else:
+            rec_data = valid_data
     else:
         rec_data = valid_data
 
