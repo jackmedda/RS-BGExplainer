@@ -35,8 +35,6 @@ sys.path.append('..')
 
 import src.utils as utils
 
-from memory_profiler import profile
-
 
 class GCMCPerturbated(GeneralRecommender):
     r"""GCMC is a model that incorporate graph autoencoders for recommendation.

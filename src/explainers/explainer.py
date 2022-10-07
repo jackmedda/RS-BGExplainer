@@ -20,7 +20,6 @@ import src.utils as utils
 from src.models import GCMCPerturbated
 
 import subprocess
-from memory_profiler import profile
 
 
 def get_gpu_memory():
