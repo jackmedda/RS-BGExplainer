@@ -7,7 +7,6 @@ pandas==1.4.3
 pyvis==0.2.1
 PyYAML==6.0
 recbole==1.0.1
-scipy==1.8.1
 seaborn==0.11.2
 tabulate==0.8.10
 torch==1.12.0
