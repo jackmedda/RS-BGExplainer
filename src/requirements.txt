@@ -10,7 +10,7 @@ recbole==1.0.1
 scipy==1.8.1
 seaborn==0.11.2
 tabulate==0.8.10
-torch @ file://torch-1.12.+cu116-cp39-cp39-win_amd64.whl
+torch==1.12.0
 torch-geometric==2.0.4
 torch-scatter==2.0.9
 torch-sparse==0.6.14
