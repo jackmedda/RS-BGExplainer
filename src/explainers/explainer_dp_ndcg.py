@@ -333,15 +333,17 @@ class DPBGExplainer:
 
             epoch_fair_loss = np.mean(epoch_fair_loss)
             fair_losses.append(epoch_fair_loss)
-            if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
-                os.remove(f'loss_trend_epoch{epoch}.png')
-            sns.lineplot(
-                x='epoch',
-                y='fair loss',
-                data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
-            )
-            plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
-            plt.close()
+
+            if self.verbose:
+                if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
+                    os.remove(f'loss_trend_epoch{epoch}.png')
+                sns.lineplot(
+                    x='epoch',
+                    y='fair loss',
+                    data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
+                )
+                plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
+                plt.close()
 
             if new_example is not None:
                 new_example[6] = epoch_fair_loss
