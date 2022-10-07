@@ -17,7 +17,6 @@ import pandas as pd
 import seaborn as sns
 import scipy.stats as stats
 import matplotlib.pyplot as plt
-from early_stopping import EarlyStopping
 from recbole.evaluator import Evaluator
 from recbole.utils import get_trainer, set_color
 from recbole.data.interaction import Interaction
@@ -26,6 +25,7 @@ sys.path.append('..')
 
 import src.utils as utils
 import src.models as exp_models
+from src.utils.early_stopping import EarlyStopping
 
 
 class DPBGExplainer:
