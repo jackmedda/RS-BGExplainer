@@ -530,7 +530,7 @@ class DPBGExplainer:
         inter_data = interaction.to(_model.device)
         try:
             scores_kws = {'pred': pred} if pred is not None else {}
-            scores = _model(inter_data, **scores_kws)
+            scores = _model.full_sort_predict(inter_data, **scores_kws)
 
         except NotImplementedError:
             inter_len = len(interaction)
