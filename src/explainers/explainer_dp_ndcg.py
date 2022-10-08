@@ -526,16 +526,16 @@ class DPBGExplainer:
 
     @staticmethod
     def get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
-        device = _model.module.device if isinstance(_model, nn.DataParallel) else _model.device
+        _model = _model.module if isinstance(_model, nn.DataParallel) else _model
         interaction, history_index, _, _ = batched_data
-        inter_data = interaction.to(device)
+        inter_data = interaction.to(_model.device)
         try:
             scores_kws = {'pred': pred} if pred is not None else {}
             scores = _model.full_sort_predict(inter_data, **scores_kws)
 
         except NotImplementedError:
             inter_len = len(interaction)
-            new_inter = interaction.to(device, **scores_kws).repeat_interleave(tot_item_num)
+            new_inter = interaction.to(_model.device, **scores_kws).repeat_interleave(tot_item_num)
             batch_size = len(new_inter)
             new_inter.update(item_tensor.repeat(inter_len))
             if batch_size <= test_batch_size:
