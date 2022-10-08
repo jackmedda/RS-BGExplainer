@@ -49,7 +49,7 @@ class DPBGExplainer:
         self.test_batch_size = self.tot_item_num
 
         # Instantiate CF model class, load weights from original model
-        self.cf_model = nn.DataParallel(getattr(exp_models, f"{model.__class__.__name__}Perturbated")(config, dataset, self.user_id)).to(model.device)
+        self.cf_model = getattr(exp_models, f"{model.__class__.__name__}Perturbated")(config, dataset, self.user_id).to(model.device)
 
         self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
 
@@ -526,16 +526,15 @@ class DPBGExplainer:
 
     @staticmethod
     def get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
-        device = _model.module.device if isinstance(_model, nn.DataParallel) else _model.device
         interaction, history_index, _, _ = batched_data
-        inter_data = interaction.to(device)
+        inter_data = interaction.to(_model.device)
         try:
             scores_kws = {'pred': pred} if pred is not None else {}
             scores = _model(inter_data, **scores_kws)
 
         except NotImplementedError:
             inter_len = len(interaction)
-            new_inter = interaction.to(device, **scores_kws).repeat_interleave(tot_item_num)
+            new_inter = interaction.to(_model.device, **scores_kws).repeat_interleave(tot_item_num)
             batch_size = len(new_inter)
             new_inter.update(item_tensor.repeat(inter_len))
             if batch_size <= test_batch_size:
