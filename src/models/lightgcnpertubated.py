@@ -187,7 +187,11 @@ class LightGCNPerturbated(GeneralRecommender):
         # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
         return torch.mm(torch.sparse.mm(D_tilde_exp, A_tilde), D_tilde_exp.to_dense()).to_sparse()
 
-    def forward(self, pred=False):
+    def forward(self, interaction, pred=False):
+        user = interaction[self.USER_ID]
+        # if self.restore_user_e is None or self.restore_item_e is None:
+        #     self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+
         all_embeddings = self.get_ego_embeddings()
         embeddings_list = [all_embeddings]
 
@@ -199,7 +203,16 @@ class LightGCNPerturbated(GeneralRecommender):
         lightgcn_all_embeddings = torch.mean(lightgcn_all_embeddings, dim=1)
 
         user_all_embeddings, item_all_embeddings = torch.split(lightgcn_all_embeddings, [self.n_users, self.n_items])
-        return user_all_embeddings, item_all_embeddings
+
+        self.restore_user_e, self.restore_item_e = user_all_embeddings, item_all_embeddings
+
+        # get user embedding from storage variable
+        u_embeddings = self.restore_user_e[user]
+
+        # dot with all item embedding to accelerate
+        scores = torch.matmul(u_embeddings, self.restore_item_e.transpose(0, 1))
+
+        return scores.view(-1)
 
     # def calculate_loss(self, interaction):
     #     # clear the storage variable when training
@@ -268,17 +281,17 @@ class LightGCNPerturbated(GeneralRecommender):
         scores = torch.mul(u_embeddings, i_embeddings).sum(dim=1)
         return scores
 
-    def full_sort_predict(self, interaction, pred=False):
-        user = interaction[self.USER_ID]
-        # if self.restore_user_e is None or self.restore_item_e is None:
-        #     self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
-
-        self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
-
-        # get user embedding from storage variable
-        u_embeddings = self.restore_user_e[user]
-
-        # dot with all item embedding to accelerate
-        scores = torch.matmul(u_embeddings, self.restore_item_e.transpose(0, 1))
-
-        return scores.view(-1)
+    # def full_sort_predict(self, interaction, pred=False):
+    #     user = interaction[self.USER_ID]
+    #     # if self.restore_user_e is None or self.restore_item_e is None:
+    #     #     self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+    #
+    #     self.restore_user_e, self.restore_item_e = self.forward(pred=pred)
+    #
+    #     # get user embedding from storage variable
+    #     u_embeddings = self.restore_user_e[user]
+    #
+    #     # dot with all item embedding to accelerate
+    #     scores = torch.matmul(u_embeddings, self.restore_item_e.transpose(0, 1))
+    #
+    #     return scores.view(-1)
