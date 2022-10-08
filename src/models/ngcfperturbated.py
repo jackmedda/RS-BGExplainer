@@ -91,12 +91,9 @@ class NGCFPerturbated(GeneralRecommender):
 
         self.P_vec_size = int((self.num_all * self.num_all - self.num_all) / 2)  # + self.num_all
         if self.edge_additions:
-            self.P_idxs = ((self.Graph + 1) % 2).nonzero()
-            self.P_idxs = self.P_idxs[
-                (self.P_idxs[:, 1] < self.n_users) & (self.P_idxs[:, 0] >= self.n_users) |
-                (self.P_idxs[:, 0] < self.n_users) & (self.P_idxs[:, 1] >= self.n_users)
-            ]
-            self.P_idxs = self.P_idxs[self.P_idxs[:, 0] != self.P_idxs[:, 1]].T  # removes the diagonal
+            self.P_idxs = np.stack((self.interaction_matrix == 0).nonzero())
+            self.P_idxs[1] += self.n_users
+            self.P_idxs = torch.tensor(self.P_idxs, dtype=int, device=self.device)
             # to get sigmoid closer to 0
             self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.P_vec_size)) - 5)
 
