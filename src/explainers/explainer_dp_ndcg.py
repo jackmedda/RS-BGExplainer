@@ -171,21 +171,21 @@ class DPBGExplainer:
             best_cf_example.append(new_example + [first_fair_loss])
             self.old_graph_dist = new_example[-4]
 
-            pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
-            orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
-            cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
-
-            user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-            gender_map = self.dataset.field2id_token['gender']
-            female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
-
-            males = user_feat['gender'] == male_idx
-            females = user_feat['gender'] == female_idx
-
-            orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
-            cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
-            self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
-                             f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+            # pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+            # orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+            # cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+            #
+            # user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+            # gender_map = self.dataset.field2id_token['gender']
+            # female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+            #
+            # males = user_feat['gender'] == male_idx
+            # females = user_feat['gender'] == female_idx
+            #
+            # orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
+            # cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
+            # self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
+            #                  f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
 
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
