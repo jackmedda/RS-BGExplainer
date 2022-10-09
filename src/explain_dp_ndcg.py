@@ -42,7 +42,7 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
     model_name = model_name or config['model']
     base_exps_file = os.path.join(script_path, 'dp_ndcg_explanations', config['dataset'], model_name)
     if config['explain_fairness']:
-        fair_metadata = config["sensitive_attributes"]
+        fair_metadata = config["sensitive_attribute"]
         fair_loss = 'FairDP'
         base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
     else:
