@@ -59,7 +59,7 @@ only_subgraph: False
 # if to use fairness loss
 explain_fairness: True
 # sensitive attributes to be used in the fairness losses and for following analysis
-sensitive_attributes: [gender] # , age]
+sensitive_attribute: gender # age
 
 # if True each new exp will have a different number of edges from the last one
 save_unique_graph_dist_loss: True

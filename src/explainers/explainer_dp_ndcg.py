@@ -75,7 +75,7 @@ class DPBGExplainer:
         elif dist == "damerau_levenshtein":
             self.dist = utils.damerau_levenshtein_distance
 
-        self.sensitive_attributes = config['sensitive_attributes']
+        self.sensitive_attribute = config['sensitive_attribute']
 
         self.scores_args, self.topk_args = None, None
         self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
@@ -93,29 +93,29 @@ class DPBGExplainer:
 
         trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
 
-        gender_map = dataset.field2id_token['gender']
-        female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+        attr_map = dataset.field2id_token[self.sensitive_attribute]
+        f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 
-        females = rec_data.dataset.user_feat['gender'] == female_idx
-        males = rec_data.dataset.user_feat['gender'] == male_idx
+        females = rec_data.dataset.user_feat[self.sensitive_attribute] == f_idx
+        males = rec_data.dataset.user_feat[self.sensitive_attribute] == m_idx
         rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
 
         rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.dataset.user_feat.interaction.items()})
         rec_data_f.uid_list = rec_data_f.user_df['user_id']
 
-        self.females_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
-        self.logger.info(self.females_result)
+        self.f_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
+        self.logger.info(self.f_result)
 
         rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.dataset.user_feat.interaction.items()})
         rec_data_m.uid_list = rec_data_m.user_df['user_id']
-        self.males_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
-        self.logger.info(self.males_result)
+        self.m_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
+        self.logger.info(self.m_result)
 
         check_func = "__ge__" if config['delete_adv_group'] else "__lt__"
 
-        self.adv_group = male_idx if getattr(self.males_result['ndcg@10'], check_func)(self.females_result['ndcg@10']) else female_idx
-        self.disadv_group = female_idx if self.adv_group == male_idx else male_idx
-        self.results = dict(zip([male_idx, female_idx], [self.males_result, self.females_result]))
+        self.adv_group = m_idx if getattr(self.m_result['ndcg@10'], check_func)(self.f_result['ndcg@10']) else f_idx
+        self.disadv_group = f_idx if self.adv_group == m_idx else m_idx
+        self.results = dict(zip([m_idx, f_idx], [self.m_result, self.f_result]))
 
         self.earlys = EarlyStopping(
             config['earlys_patience'],
@@ -176,14 +176,14 @@ class DPBGExplainer:
             # cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
             #
             # user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-            # gender_map = self.dataset.field2id_token['gender']
-            # female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+            # attr_map = self.dataset.field2id_token[self.sensitive_attribute]
+            # f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
             #
-            # males = user_feat['gender'] == male_idx
-            # females = user_feat['gender'] == female_idx
+            # m_users = user_feat[self.sensitive_attribute] == m_idx
+            # f_users = user_feat[self.sensitive_attribute] == f_idx
             #
-            # orig_f, orig_m = np.mean(orig_res[females, -1]), np.mean(orig_res[males, -1])
-            # cf_f, cf_m = np.mean(cf_res[females, -1]), np.mean(cf_res[males, -1])
+            # orig_f, orig_m = np.mean(orig_res[f_users, -1]), np.mean(orig_res[m_users, -1])
+            # cf_f, cf_m = np.mean(cf_res[f_users, -1]), np.mean(cf_res[m_users, -1])
             # self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
             #                  f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
 
@@ -243,17 +243,14 @@ class DPBGExplainer:
         n_samples = batched_data.shape[0]
         n_batch = math.ceil(n_samples / self.user_batch_exp)
 
-        groups = list(itertools.product(
-            *[self.dataset.user_feat[attr][self.dataset.user_feat[attr] != 0].unique().numpy()
-              for attr in self.sensitive_attributes]
-        ))
+        attr = self.sensitive_attribute
+
+        groups = self.dataset.user_feat[attr][self.dataset.user_feat[attr] != 0].unique().numpy()
 
         masks = []
-        for grs in groups:
-            masks.append([(self.dataset.user_feat[attr][self.dataset.user_feat[attr] != 0] == gr).numpy()
-                          for gr, attr in zip(grs, self.sensitive_attributes)])
+        for gr in groups:
+            masks.append([(self.dataset.user_feat[attr][self.dataset.user_feat[attr] != 0] == gr).numpy()])
         masks = np.stack(masks)
-        masks = np.bitwise_and.reduce(masks, axis=1)
 
         distrib = []
         for mask in masks:
@@ -308,11 +305,13 @@ class DPBGExplainer:
 
         if self.only_adv_group != "global":
             iter_data = self.randperm2groups(batched_data)
-            while any(d.unique().shape[0] < 1 for d in iter_data):  # check if each batch has at least 2 groups
+            # check if each batch has at least 2 groups
+            while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
                 iter_data = self.randperm2groups(batched_data)
+            import pdb; pdb.set_trace()
         else:
-            batched_gender_data = self.rec_data_loader.dataset.user_feat['gender'][batched_data]
-            iter_data = batched_data[batched_gender_data == self.adv_group].split(self.user_batch_exp)
+            batched_attr_data = self.rec_data_loader.dataset.user_feat[self.sensitive_attribute][batched_data]
+            iter_data = batched_data[batched_attr_data == self.adv_group].split(self.user_batch_exp)
 
         cwd_files = [f for f in os.listdir() if f.startswith('loss_trend_epoch')]
         if len(cwd_files) > 0 and os.path.isfile(cwd_files[0]):
@@ -386,18 +385,6 @@ class DPBGExplainer:
                     *new_example[4:]
                 ]
 
-                pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
-                cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
-
-                user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-                gender_map = self.dataset.field2id_token['gender']
-                female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
-
-                males = user_feat['gender'] == male_idx
-                females = user_feat['gender'] == female_idx
-
-                cf_f, cf_m = cf_res[females, -1], cf_res[males, -1]
-
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
                     self.logger.info(f"Early Stopping: best epoch {epoch + 1 - len(self.earlys.history) + self.earlys.best_loss}")
@@ -405,6 +392,19 @@ class DPBGExplainer:
                         break
 
                 if self.earlys_pvalue is not None:
+                    pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
+                    cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+
+                    user_feat = Interaction(
+                        {k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+                    attr_map = self.dataset.field2id_token[self.sensitive_attribute]
+                    f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
+
+                    m_users = user_feat[self.sensitive_attribute] == m_idx
+                    f_users = user_feat[self.sensitive_attribute] == f_idx
+
+                    cf_f, cf_m = cf_res[f_users, -1], cf_res[m_users, -1]
+
                     stat = stats.f_oneway(cf_f, cf_m)
                     if stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore:
                         self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
@@ -455,7 +455,7 @@ class DPBGExplainer:
         loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, adj_sub_cf_adj = self.cf_model.loss(
             cf_scores,
             DPNDCGLoss(
-                self.sensitive_attributes,
+                self.sensitive_attribute,
                 user_feat,
                 topk=topk,
                 adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]['ndcg@10']),
@@ -565,7 +565,7 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
     __constants__ = ['reduction']
 
     def __init__(self,
-                 sensitive_attributes: Iterable[str],
+                 sensitive_attribute: str,
                  user_feat,
                  topk=10,
                  adv_group_data: Tuple[str, int, float] = None,
@@ -580,19 +580,17 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
             reduction=reduction,
             temperature=temperature
         )
-        self.sensitive_attributes = sensitive_attributes
+        self.sensitive_attribute = sensitive_attribute
         self.user_feat = user_feat
         self.adv_group_data = adv_group_data
         self.optimized_loss_memory_usage = optimized_loss_memory_usage
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        groups = list(itertools.product(*[self.user_feat[attr].unique().numpy() for attr in self.sensitive_attributes]))
+        groups = self.user_feat[self.sensitive_attribute].unique().numpy()
         masks = []
-        for grs in groups:
-            masks.append([(self.user_feat[attr] == gr).numpy() for gr, attr in zip(grs, self.sensitive_attributes)])
+        for gr in groups:
+            masks.append((self.user_feat[self.sensitive_attribute] == gr).numpy())
         masks = np.stack(masks)
-        # bitwise and finds the users that belong simultaneously to the groups in the product
-        masks = np.bitwise_and.reduce(masks, axis=1)
 
         if not self.optimized_loss_memory_usage:
             ndcg_values = self.ndcg_loss(_input, target)

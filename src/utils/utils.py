@@ -413,13 +413,13 @@ def compute_steck_distribution(_hist_matrix, _item_df, n_categories=None):
 
 def generate_steck_pref_ratio(_train_data,
                               config,
-                              sensitive_attrs=None,
+                              sensitive_attr=None,
                               mapped_keys=False,
                               item_cats=None):
-    sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
+    sensitive_attr = 'gender' if sensitive_attr is None else sensitive_attr
     user_df = pd.DataFrame({
         'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
-        **{sens_attr: _train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sensitive_attrs}
+        sensitive_attr: _train_data.dataset.user_feat[sensitive_attr].numpy()
     })
 
     item_cats = item_cats if item_cats is not None else _train_data.dataset.item_feat['class']
@@ -429,7 +429,7 @@ def generate_steck_pref_ratio(_train_data,
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
-    sensitive_maps = [_train_data.dataset.field2id_token[sens_attr] for sens_attr in sensitive_attrs]
+    sensitive_map = _train_data.dataset.field2id_token[sensitive_attr]
     item_categories_map = _train_data.dataset.field2id_token['class']
 
     history_matrix, _, history_len = _train_data.dataset.history_item_matrix()
@@ -437,8 +437,8 @@ def generate_steck_pref_ratio(_train_data,
 
     p_gu = compute_steck_distribution(history_matrix, item_df, n_categories=len(item_categories_map))
 
-    pref_ratio = dict.fromkeys(sensitive_attrs)
-    for attr, group_map in zip(sensitive_attrs, sensitive_maps):
+    pref_ratio = dict.fromkeys([sensitive_attr])
+    for attr, group_map in zip([sensitive_attr], [sensitive_map]):
         group_keys = [group_map[x] for x in range(len(group_map))] if mapped_keys else range(len(group_map))
         pref_ratio[attr] = dict.fromkeys(group_keys)
         for demo_group, demo_df in user_df.groupby(attr):
@@ -457,16 +457,16 @@ def generate_steck_pref_ratio(_train_data,
 
 def generate_bias_ratio(_train_data,
                         config,
-                        sensitive_attrs=None,
+                        sensitive_attr=None,
                         history_matrix: pd.DataFrame = None,
                         pred_col='cf_topk_pred',
                         mapped_keys=False,
                         user_subset=None,
                         item_cats=None):
-    sensitive_attrs = ['gender', 'age'] if sensitive_attrs is None else sensitive_attrs
+    sensitive_attr = 'gender' if sensitive_attr is None else sensitive_attr
     user_df = pd.DataFrame({
         'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
-        **{sens_attr: _train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sensitive_attrs}
+        sensitive_attr: _train_data.dataset.user_feat[sensitive_attr].numpy()
     })
 
     item_cats = item_cats if item_cats is not None else _train_data.dataset.item_feat['class']
@@ -476,7 +476,7 @@ def generate_bias_ratio(_train_data,
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
-    sensitive_maps = [_train_data.dataset.field2id_token[sens_attr] for sens_attr in sensitive_attrs]
+    sensitive_map = _train_data.dataset.field2id_token[sensitive_attr]
     item_categories_map = _train_data.dataset.field2id_token['class']
 
     if history_matrix is None:
@@ -502,8 +502,8 @@ def generate_bias_ratio(_train_data,
     pref_matrix = compute_user_preference(history_matrix, item_df, n_categories=len(item_categories_map))
     uniform_categories_prob = compute_uniform_categories_prob(item_df, len(item_categories_map))
 
-    bias_ratio, pref_ratio = dict.fromkeys(sensitive_attrs), dict.fromkeys(sensitive_attrs)
-    for attr, group_map in zip(sensitive_attrs, sensitive_maps):
+    bias_ratio, pref_ratio = dict.fromkeys([sensitive_attr]), dict.fromkeys([sensitive_attr])
+    for attr, group_map in zip([sensitive_attr], [sensitive_map]):
         group_keys = [group_map[x] for x in range(len(group_map))] if mapped_keys else range(len(group_map))
         bias_ratio[attr], pref_ratio[attr] = dict.fromkeys(group_keys), dict.fromkeys(group_keys)
         for demo_group, demo_df in user_df.groupby(attr):

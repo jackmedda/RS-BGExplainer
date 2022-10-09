@@ -110,8 +110,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, data=None):
 
 
 def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
-    sens_attributes = config['sensitive_attributes']
-    sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
+    sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     data = test_data.dataset if data is None else data
 
@@ -177,10 +176,9 @@ def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
             ))
 
             gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
-            n_users_data[e_type][n_del] = {attr: gr_df_attr[attr].value_counts().to_dict() for attr in sens_attributes}
-            for attr in sens_attributes:
-                n_users_del = n_users_data[e_type][n_del][attr]
-                n_users_data[e_type][n_del][attr] = {sensitive_maps[attr][dg]: n_users_del[dg] for dg in n_users_del}
+            n_users_data[e_type][n_del] = gr_df_attr[sens_attr].value_counts().to_dict()
+            n_users_del = n_users_data[e_type][n_del][sens_attr]
+            n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
 
     return exp_dfs, result_data, n_users_data, topk_dist
 
@@ -200,25 +198,23 @@ def result_data_per_epoch_per_group(exp_dfs, data=None):
         for epoch, epoch_df in e_df.groupby("epoch"):
             result_per_epoch[e_type][epoch] = {}
             del_edges_per_epoch[e_type][epoch] = {}
-            for attr in sens_attrs:
-                if attr == "gender":
-                    uid = epoch_df['user_id']
+            uid = epoch_df['user_id']
 
-                    males_mask = (u_df.loc[uid, attr] == male_idx).values
-                    females_mask = ~males_mask
-                    males_df = epoch_df[males_mask]
-                    females_df = epoch_df[females_mask]
+            m_mask = (u_df.loc[uid, sens_attr] == m_idx).values
+            f_mask = ~m_mask
+            m_df = epoch_df[m_mask]
+            f_df = epoch_df[f_mask]
 
-                    result_per_epoch[e_type][epoch][male_idx], result_per_epoch[e_type][epoch][female_idx] = {}, {}
-                    for metric in evaluator.metrics:
-                        result_per_epoch[e_type][epoch][male_idx][metric] = utils.compute_metric(evaluator, data, males_df, 'cf_topk_pred', metric)[:, -1].mean()
-                        result_per_epoch[e_type][epoch][female_idx][metric] = utils.compute_metric(evaluator, data, females_df, 'cf_topk_pred', metric)[:, -1].mean()
+            result_per_epoch[e_type][epoch][m_idx], result_per_epoch[e_type][epoch][f_idx] = {}, {}
+            for metric in evaluator.metrics:
+                result_per_epoch[e_type][epoch][m_idx][metric] = utils.compute_metric(evaluator, data, m_df, 'cf_topk_pred', metric)[:, -1].mean()
+                result_per_epoch[e_type][epoch][f_idx][metric] = utils.compute_metric(evaluator, data, f_df, 'cf_topk_pred', metric)[:, -1].mean()
 
-                    del_edges = epoch_df.iloc[0]['del_edges']
-                    del_edges_per_epoch[e_type][epoch][male_idx] = del_edges[:, (epoch_df.loc[males_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
-                    del_edges_per_epoch[e_type][epoch][female_idx] = del_edges[:, (epoch_df.loc[females_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
+            del_edges = epoch_df.iloc[0]['del_edges']
+            del_edges_per_epoch[e_type][epoch][m_idx] = del_edges[:, (epoch_df.loc[m_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
+            del_edges_per_epoch[e_type][epoch][f_idx] = del_edges[:, (epoch_df.loc[f_mask].user_id.values[:, None] == del_edges[0]).nonzero()[1]]
 
-                    fair_loss_per_epoch[e_type][epoch] = epoch_df.iloc[0]['fair_loss']
+            fair_loss_per_epoch[e_type][epoch] = epoch_df.iloc[0]['fair_loss']
 
     return result_per_epoch, del_edges_per_epoch, fair_loss_per_epoch
 
@@ -241,235 +237,236 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
     columns = ["Epoch", "Group", "metric", "value"]
     edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
     title = "Edge Additions " if edge_additions else "Edge Deletions "
-    title += "of Males " if group_edge_del == male_idx else "of Females "
+    if sens_attr == "gender":
+        title += "of Males " if group_edge_del == m_idx else "of Females "
+    else:
+        title += "of Younger " if group_edge_del == m_idx else "of Older "
     title += "Optimized on " + f"{exp_rec_data.title()} Data"
 
     df_test_result = None
-    orig_males_ndcg, orig_females_ndcg = orig_ndcg
+    orig_m_ndcg, orig_f_ndcg = orig_ndcg
     for e_type in res_epoch_group:
-        for attr in sens_attrs:
-            plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(cleaned_config_ids), attr)
-            if not os.path.exists(plots_path):
-                os.makedirs(plots_path)
+        plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(cleaned_config_ids), sens_attr)
+        if not os.path.exists(plots_path):
+            os.makedirs(plots_path)
 
-            group_map = train_data.dataset.field2id_token[attr]
-            df_data = []
-            del_edge_data = []
-            for epoch in res_epoch_group[e_type]:
-                for gr, gr_res in res_epoch_group[e_type][epoch].items():
+        group_map = train_data.dataset.field2id_token[sens_attr]
+        df_data = []
+        del_edge_data = []
+        for epoch in res_epoch_group[e_type]:
+            for gr, gr_res in res_epoch_group[e_type][epoch].items():
+                for metric in gr_res:
+                    df_data.append([epoch, gr, metric, gr_res[metric]])
+                del_edge_data.append([epoch, gr, del_edges_epoch[e_type][epoch][gr]])
+
+        df = pd.DataFrame(df_data, columns=columns)
+        df["Group"] = df["Group"].map(group_map.__getitem__)
+
+        if data_info != "test":
+            df_test_result_data = []
+            for epoch in test_result_per_epoch_per_group[e_type]:
+                for gr, gr_res in test_result_per_epoch_per_group[e_type][epoch].items():
                     for metric in gr_res:
-                        df_data.append([epoch, gr, metric, gr_res[metric]])
-                    del_edge_data.append([epoch, gr, del_edges_epoch[e_type][epoch][gr]])
+                        df_test_result_data.append([epoch, gr, metric, gr_res[metric]])
 
-            df = pd.DataFrame(df_data, columns=columns)
-            df["Group"] = df["Group"].map(group_map.__getitem__)
+            df_test_result = pd.DataFrame(df_test_result_data, columns=columns)
+            df_test_result["Group"] = df_test_result["Group"].map(group_map.__getitem__)
+
+        df_del_data = pd.DataFrame(del_edge_data, columns=["Epoch", "Group", "del_edges"])
+        df_del_data["Group"] = df_del_data["Group"].map(group_map.__getitem__)
+        df_del_data[edges_ylabel] = df_del_data["del_edges"].map(lambda x: x.shape[1])
+        df_del_data[edges_ylabel + "Lab"] = (df_del_data[edges_ylabel] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
+        df_del_data.sort_values(edges_ylabel, inplace=True)
+
+        rec_str = exp_rec_data.title() if data_info != 'test' else "Test"
+        for metric in evaluator.metrics:
+            metr_str = metric.upper()
+
+            fig = plt.figure(figsize=(10, 10))
+            plot_df = df[df["metric"] == metric].copy()
+            plot_df.rename(columns={"value": metr_str}, inplace=True)
+
+            rec_male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+            rec_female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+            rec_intersects = np.argwhere(np.diff(np.sign(rec_male_val - rec_female_val))).flatten()
+            rec_x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
 
             if data_info != "test":
-                df_test_result_data = []
-                for epoch in test_result_per_epoch_per_group[e_type]:
-                    for gr, gr_res in test_result_per_epoch_per_group[e_type][epoch].items():
-                        for metric in gr_res:
-                            df_test_result_data.append([epoch, gr, metric, gr_res[metric]])
+                plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
+                plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
-                df_test_result = pd.DataFrame(df_test_result_data, columns=columns)
-                df_test_result["Group"] = df_test_result["Group"].map(group_map.__getitem__)
+                test_male_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+                test_female_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+                test_intersects = np.argwhere(np.diff(np.sign(test_male_val - test_female_val))).flatten()
+                test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
+            else:
+                plot_test_df, test_male_val, test_female_val, test_intersects, test_x_intersects = [None] * 5
 
-            df_del_data = pd.DataFrame(del_edge_data, columns=["Epoch", "Group", "del_edges"])
-            df_del_data["Group"] = df_del_data["Group"].map(group_map.__getitem__)
-            df_del_data[edges_ylabel] = df_del_data["del_edges"].map(lambda x: x.shape[1])
-            df_del_data[edges_ylabel + "Lab"] = (df_del_data[edges_ylabel] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
-            df_del_data.sort_values(edges_ylabel, inplace=True)
+            colors = sns.color_palette("colorblind", n_colors=2)
 
-            rec_str = exp_rec_data.title() if data_info != 'test' else "Test"
-            for metric in evaluator.metrics:
-                metr_str = metric.upper()
+            if data_info != "test":
+                gs = plt.GridSpec(8, 6)
 
-                fig = plt.figure(figsize=(10, 10))
-                plot_df = df[df["metric"] == metric].copy()
-                plot_df.rename(columns={"value": metr_str}, inplace=True)
+                ax_rec = fig.add_subplot(gs[2:5, :])
+                ax_test = fig.add_subplot(gs[5:, :], sharex=ax_rec)
+                ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
+                ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
 
-                rec_male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-                rec_female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
-                rec_intersects = np.argwhere(np.diff(np.sign(rec_male_val - rec_female_val))).flatten()
-                rec_x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
+                off_margin_ticks(ax_rec, ax_metric_diff, ax_del_edges)
+            else:
+                gs = plt.GridSpec(6, 6)
 
-                if data_info != "test":
-                    plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
-                    plot_test_df.rename(columns={"value": metr_str}, inplace=True)
+                ax_rec = fig.add_subplot(gs[2:, :])
+                ax_test = None
+                ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
+                ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
 
-                    test_male_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-                    test_female_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
-                    test_intersects = np.argwhere(np.diff(np.sign(test_male_val - test_female_val))).flatten()
-                    test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
-                else:
-                    plot_test_df, test_male_val, test_female_val, test_intersects, test_x_intersects = [None] * 5
+                off_margin_ticks(ax_metric_diff, ax_del_edges)
 
-                colors = sns.color_palette("colorblind", n_colors=2)
+            df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch"]].copy()
+            df_diff[metr_str] = np.abs(
+                plot_df.loc[plot_df["Group"] == "M", metr_str].values -
+                plot_df.loc[plot_df["Group"] == "F", metr_str].values
+            )
+            df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
+            df_diff["Source Eval Data"] = rec_str
 
-                if data_info != "test":
-                    gs = plt.GridSpec(8, 6)
+            if metric == "ndcg":
+                df_fair_loss_data = []
+                for epoch in fair_loss_per_epoch[e_type]:
+                    df_fair_loss_data.append([epoch, fair_loss_per_epoch[e_type][epoch]])
 
-                    ax_rec = fig.add_subplot(gs[2:5, :])
-                    ax_test = fig.add_subplot(gs[5:, :], sharex=ax_rec)
-                    ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
-                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
+                df_fair_loss_df = pd.DataFrame(df_fair_loss_data, columns=["Epoch", f"{metr_str} Diff"])
 
-                    off_margin_ticks(ax_rec, ax_metric_diff, ax_del_edges)
-                else:
-                    gs = plt.GridSpec(6, 6)
+                df_fair_loss_df["Source Eval Data"] = "ApproxNDCG Loss"
 
-                    ax_rec = fig.add_subplot(gs[2:, :])
-                    ax_test = None
-                    ax_metric_diff = fig.add_subplot(gs[1, :], sharex=ax_rec)
-                    ax_del_edges = fig.add_subplot(gs[0, :], sharex=ax_rec)
+                df_diff = pd.concat([df_diff, df_fair_loss_df]).reset_index()
 
-                    off_margin_ticks(ax_metric_diff, ax_del_edges)
-
-                df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch"]].copy()
-                df_diff[metr_str] = np.abs(
-                    plot_df.loc[plot_df["Group"] == "M", metr_str].values -
-                    plot_df.loc[plot_df["Group"] == "F", metr_str].values
+            if data_info != "test":
+                df_test_diff = plot_test_df.loc[plot_test_df["Group"] == "M", ["Epoch", "Group"]].copy()
+                df_test_diff[metr_str] = np.abs(
+                    plot_test_df.loc[plot_test_df["Group"] == "M", metr_str].values -
+                    plot_test_df.loc[plot_test_df["Group"] == "F", metr_str].values
                 )
-                df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
-                df_diff["Source Eval Data"] = rec_str
+                df_test_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
 
-                if metric == "ndcg":
-                    df_fair_loss_data = []
-                    for epoch in fair_loss_per_epoch[e_type]:
-                        df_fair_loss_data.append([epoch, fair_loss_per_epoch[e_type][epoch]])
+                df_test_diff["Source Eval Data"] = "Test"
+                df_diff = pd.concat([df_diff, df_test_diff]).reset_index()
 
-                    df_fair_loss_df = pd.DataFrame(df_fair_loss_data, columns=["Epoch", f"{metr_str} Diff"])
+            lines = []
+            for ax, data_df, data_type in zip([ax_rec, ax_test], [plot_df, plot_test_df], [rec_str, "Test"]):
+                if ax is not None:
+                    ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+                    lines.append(ax_lines)
 
-                    df_fair_loss_df["Source Eval Data"] = "ApproxNDCG Loss"
+                    title_proxy = Rectangle((0, 0), 0, 0, color='w')
+                    ls_legend_handles = [
+                        Line2D([0], [0], ls='-', color='k'),
+                        Line2D([0], [0], ls='--', color='k')
+                    ]
 
-                    df_diff = pd.concat([df_diff, df_fair_loss_df]).reset_index()
+                    ls_legend_labels = [
+                        data_type,
+                        f"{data_type} Original"
+                    ]
 
-                if data_info != "test":
-                    df_test_diff = plot_test_df.loc[plot_test_df["Group"] == "M", ["Epoch", "Group"]].copy()
-                    df_test_diff[metr_str] = np.abs(
-                        plot_test_df.loc[plot_test_df["Group"] == "M", metr_str].values -
-                        plot_test_df.loc[plot_test_df["Group"] == "F", metr_str].values
-                    )
-                    df_test_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
-
-                    df_test_diff["Source Eval Data"] = "Test"
-                    df_diff = pd.concat([df_diff, df_test_diff]).reset_index()
-
-                lines = []
-                for ax, data_df, data_type in zip([ax_rec, ax_test], [plot_df, plot_test_df], [rec_str, "Test"]):
-                    if ax is not None:
-                        ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
-                        lines.append(ax_lines)
-
-                        title_proxy = Rectangle((0, 0), 0, 0, color='w')
-                        ls_legend_handles = [
-                            Line2D([0], [0], ls='-', color='k'),
-                            Line2D([0], [0], ls='--', color='k')
-                        ]
-
-                        ls_legend_labels = [
-                            data_type,
-                            f"{data_type} Original"
-                        ]
-
-                        handles, labels = ax.get_legend_handles_labels()
-                        ax.legend(
-                            [title_proxy] + handles + [title_proxy] + ls_legend_handles,
-                            ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
-                        )
-
-                diff_groups = df_diff.groupby("Source Eval Data")
-                # diff_colors = sns.color_palette("colorblind")[::-1][:diff_groups.ngroups]
-                diff_colors = sns.color_palette("colorblind6", n_colors=diff_groups.ngroups)
-
-                sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, palette=diff_colors, hue="Source Eval Data", ax=ax_metric_diff)
-                # for i, (eval_type, eval_diff_df) in enumerate(diff_groups):
-                #     zorder = 1 if eval_type == "ApproxNDCG Loss" else 2
-                #     ax_metric_diff.fill_between(eval_diff_df["Epoch"], eval_diff_df[f"{metr_str} Diff"], color=diff_colors[i], alpha=0.3, zorder=zorder)
-                ax_metric_diff.grid(axis='y', ls=':')
-
-                sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
-
-                df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
-                max_epoch = df_del_data["Epoch"].max()
-                if df_del_data_epoch_group.loc[(max_epoch, "F"), edges_ylabel] <= df_del_data_epoch_group.loc[(max_epoch, "M"), edges_ylabel]:
-                    lower_del_edges_group = "F"
-                else:
-                    lower_del_edges_group = "M"
-                ax_del_edges.annotate(
-                    df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel + "Lab"],
-                    (max_epoch, df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel])
-                )
-
-                ax_del_edges.yaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
-
-                texts = []
-                for ax, male_val, female_val, intersects, x_intersects in zip([ax_rec, ax_test],
-                                                                              [rec_male_val, test_male_val],
-                                                                              [rec_female_val, test_female_val],
-                                                                              [rec_intersects, test_intersects],
-                                                                              [rec_x_intersects, test_x_intersects]):
-                    if ax is not None:
-                        y_scatter = []
-                        texts.append([])
-                        for i, (x_cross, cross) in enumerate(zip(x_intersects, intersects)):
-                            mean_metric = (male_val[cross] + female_val[cross]) / 2
-                            diff_metric = abs(male_val[cross] - female_val[cross])
-                            texts[-1].append(ax.text(x_cross, mean_metric, f"{mean_metric:.4f} ({diff_metric:.4f})"))
-                            y_scatter.append(mean_metric)
-
-                        if len(intersects) > 0:
-                            ax.scatter(x_intersects, y_scatter, marker="X", c="k")
-
-                if metric == "ndcg":
-                    x_lim = [plot_df["Epoch"].min(), plot_df["Epoch"].max()]
-                    ax_rec.plot(x_lim, [orig_males_ndcg, orig_males_ndcg], c=colors[0], ls='--')
-                    ax_rec.plot(x_lim, [orig_females_ndcg, orig_females_ndcg], c=colors[1], ls='--')
-
-                    if test_orig_ndcg is not None:
-                        _test_orig_males_ndcg, _test_orig_females_ndcg = test_orig_ndcg
-                        x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
-                        ax_test.plot(x_lim, [_test_orig_males_ndcg, _test_orig_males_ndcg], c=colors[0], ls='--')
-                        ax_test.plot(x_lim, [_test_orig_females_ndcg, _test_orig_females_ndcg], c=colors[1], ls='--')
-
-                    # global_idx_inters = (
-                    #         plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
-                    # ).abs().sort_values().index[0]
-                    # inters_val, y_global_idx_inters = plot_df.loc[global_idx_inters, [metr_str, "Epoch"]]
-                    # ax.annotate(
-                    #     f"{orig_females_ndcg:.4f} ({abs(orig_females_ndcg - inters_val):.4f})",
-                    #     (y_global_idx_inters + y_global_idx_inters * annot_offset, orig_females_ndcg + orig_females_ndcg * annot_offset)
-                    # )
-                    # ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
-
-                for ax, ax_texts, ax_lines in zip([ax_rec, ax_test], texts, lines):
-                    ax.minorticks_on()
-                    ax.grid(True, which="both", ls=':')
-
-                    adjust_text(
-                        ax_texts,
-                        only_move={'points': 'xy', 'text': 'xy'},
-                        arrowprops=dict(arrowstyle="->", color='k', lw=0.5),
-                        ax=ax,
-                        expand_text=(1.1, 1.2),
-                        expand_points=(1.1, 2.5),
-                        expand_objects=(0.3, 0.2),
-                        add_objects=ax_lines.lines[:2]
+                    handles, labels = ax.get_legend_handles_labels()
+                    ax.legend(
+                        [title_proxy] + handles + [title_proxy] + ls_legend_handles,
+                        ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
                     )
 
-                fig.suptitle(title)
+            diff_groups = df_diff.groupby("Source Eval Data")
+            # diff_colors = sns.color_palette("colorblind")[::-1][:diff_groups.ngroups]
+            diff_colors = sns.color_palette("colorblind6", n_colors=diff_groups.ngroups)
 
-                # utils.legend_without_duplicate_labels(ax)
+            sns.lineplot(x="Epoch", y=f"{metr_str} Diff", data=df_diff, palette=diff_colors, hue="Source Eval Data", ax=ax_metric_diff)
+            # for i, (eval_type, eval_diff_df) in enumerate(diff_groups):
+            #     zorder = 1 if eval_type == "ApproxNDCG Loss" else 2
+            #     ax_metric_diff.fill_between(eval_diff_df["Epoch"], eval_diff_df[f"{metr_str} Diff"], color=diff_colors[i], alpha=0.3, zorder=zorder)
+            ax_metric_diff.grid(axis='y', ls=':')
 
-                plt.tight_layout()
-                fig.savefig(os.path.join(plots_path, f'{data_info}_lineplot_per_epoch_per_group_{e_type}_{metric}.png'))
-                plt.close()
+            sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
+
+            df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
+            max_epoch = df_del_data["Epoch"].max()
+            if df_del_data_epoch_group.loc[(max_epoch, "F"), edges_ylabel] <= df_del_data_epoch_group.loc[(max_epoch, "M"), edges_ylabel]:
+                lower_del_edges_group = "F"
+            else:
+                lower_del_edges_group = "M"
+            ax_del_edges.annotate(
+                df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel + "Lab"],
+                (max_epoch, df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel])
+            )
+
+            ax_del_edges.yaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
+
+            texts = []
+            for ax, male_val, female_val, intersects, x_intersects in zip([ax_rec, ax_test],
+                                                                          [rec_male_val, test_male_val],
+                                                                          [rec_female_val, test_female_val],
+                                                                          [rec_intersects, test_intersects],
+                                                                          [rec_x_intersects, test_x_intersects]):
+                if ax is not None:
+                    y_scatter = []
+                    texts.append([])
+                    for i, (x_cross, cross) in enumerate(zip(x_intersects, intersects)):
+                        mean_metric = (male_val[cross] + female_val[cross]) / 2
+                        diff_metric = abs(male_val[cross] - female_val[cross])
+                        texts[-1].append(ax.text(x_cross, mean_metric, f"{mean_metric:.4f} ({diff_metric:.4f})"))
+                        y_scatter.append(mean_metric)
+
+                    if len(intersects) > 0:
+                        ax.scatter(x_intersects, y_scatter, marker="X", c="k")
+
+            if metric == "ndcg":
+                x_lim = [plot_df["Epoch"].min(), plot_df["Epoch"].max()]
+                ax_rec.plot(x_lim, [orig_m_ndcg, orig_m_ndcg], c=colors[0], ls='--')
+                ax_rec.plot(x_lim, [orig_f_ndcg, orig_f_ndcg], c=colors[1], ls='--')
+
+                if test_orig_ndcg is not None:
+                    _test_orig_m_ndcg, _test_orig_f_ndcg = test_orig_ndcg
+                    x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
+                    ax_test.plot(x_lim, [_test_orig_m_ndcg, _test_orig_m_ndcg], c=colors[0], ls='--')
+                    ax_test.plot(x_lim, [_test_orig_f_ndcg, _test_orig_f_ndcg], c=colors[1], ls='--')
+
+                # global_idx_inters = (
+                #         plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
+                # ).abs().sort_values().index[0]
+                # inters_val, y_global_idx_inters = plot_df.loc[global_idx_inters, [metr_str, "Epoch"]]
+                # ax.annotate(
+                #     f"{orig_females_ndcg:.4f} ({abs(orig_females_ndcg - inters_val):.4f})",
+                #     (y_global_idx_inters + y_global_idx_inters * annot_offset, orig_females_ndcg + orig_females_ndcg * annot_offset)
+                # )
+                # ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
+
+            for ax, ax_texts, ax_lines in zip([ax_rec, ax_test], texts, lines):
+                ax.minorticks_on()
+                ax.grid(True, which="both", ls=':')
+
+                adjust_text(
+                    ax_texts,
+                    only_move={'points': 'xy', 'text': 'xy'},
+                    arrowprops=dict(arrowstyle="->", color='k', lw=0.5),
+                    ax=ax,
+                    expand_text=(1.1, 1.2),
+                    expand_points=(1.1, 2.5),
+                    expand_objects=(0.3, 0.2),
+                    add_objects=ax_lines.lines[:2]
+                )
+
+            fig.suptitle(title)
+
+            # utils.legend_without_duplicate_labels(ax)
+
+            plt.tight_layout()
+            fig.savefig(os.path.join(plots_path, f'{data_info}_lineplot_per_epoch_per_group_{e_type}_{metric}.png'))
+            plt.close()
 
 
 # %%
 def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_ids, n_bins=10, hist_type="test", test_f="f_oneway"):
-    sens_attributes = config['sensitive_attributes']
-    sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
+    sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     order = [model_name, f'{model_name}+DP']
 
@@ -477,52 +474,50 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
     P_001 = '^'
 
     for metric in metrics_names:
-        for attr in sens_attributes:
-            sens_map = sensitive_maps[attr]
-            plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), attr)
-            if not os.path.exists(plots_path):
-                os.makedirs(plots_path)
+        plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), sens_attr)
+        if not os.path.exists(plots_path):
+            os.makedirs(plots_path)
 
-            # e_type with highest number of explanations
-            max_del_edges_e_type = max([(k, len(x)) for k, x in _result_all_data.items()], key=lambda v: v[1])[0]
-            del_edges = sorted(list(_result_all_data[max_del_edges_e_type]))
+        # e_type with highest number of explanations
+        max_del_edges_e_type = max([(k, len(x)) for k, x in _result_all_data.items()], key=lambda v: v[1])[0]
+        del_edges = sorted(list(_result_all_data[max_del_edges_e_type]))
 
-            bin_size = max(del_edges) // n_bins
-            bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
-                       range(max(del_edges) // bin_size + 1)}
+        bin_size = max(del_edges) // n_bins
+        bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
+                   range(max(del_edges) // bin_size + 1)}
 
-            del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
+        del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
 
-            d_grs = np.arange(1, len(sens_map))
+        d_grs = np.arange(1, len(sensitive_map))
 
-            exp_data, stats_data, final_bins = compute_exp_stats_data(
-                _result_all_data, _pref_dfs, orig_result, order, attr, d_grs, del_edges_map, metric, test_f=test_f
-            )
+        exp_data, stats_data, final_bins = compute_exp_stats_data(
+            _result_all_data, _pref_dfs, orig_result, order, sens_attr, d_grs, del_edges_map, metric, test_f=test_f
+        )
 
-            # plot_vals = []
-            # for row, stat in zip(exp_data, stats_data):
-            #     plot_vals.append([])
-            #     for j in range(len(final_bins)):
-            #         if row:
-            #             plot_vals[-1].append(f"{row[j]:.4f}"
-            #                                  f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
-            #         else:
-            #             plot_vals[-1].append("-")
+        # plot_vals = []
+        # for row, stat in zip(exp_data, stats_data):
+        #     plot_vals.append([])
+        #     for j in range(len(final_bins)):
+        #         if row:
+        #             plot_vals[-1].append(f"{row[j]:.4f}"
+        #                                  f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
+        #         else:
+        #             plot_vals[-1].append("-")
 
-            final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
-                          for bin in final_bins]
+        final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
+                      for bin in final_bins]
 
-            df_attr = pd.DataFrame(zip(
-                exp_data.flatten(),
-                np.repeat(order, len(final_bins)),
-                np.tile(final_bins, len(order))
-            ), columns=['DP', 'model', '% Del Edges'])
+        df_attr = pd.DataFrame(zip(
+            exp_data.flatten(),
+            np.repeat(order, len(final_bins)),
+            np.tile(final_bins, len(order))
+        ), columns=['DP', 'model', '% Del Edges'])
 
-            sns.lineplot(x='% Del Edges', y='DP', hue='model', data=df_attr)
+        sns.lineplot(x='% Del Edges', y='DP', hue='model', data=df_attr)
 
-            plt.tight_layout()
-            plt.savefig(os.path.join(plots_path, f"{hist_type}_lineplot_over_edges_{attr}_{metric}.png"))
-            plt.close()
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_path, f"{hist_type}_lineplot_over_edges_{sens_attr}_{metric}.png"))
+        plt.close()
 
 
 def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr, d_grs, del_edges_map, metric, test_f="f_oneway"):
@@ -605,8 +600,7 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
 
 # %%
 def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_ids, n_bins=10, hist_type="test", test_f="f_oneway"):
-    sens_attributes = config['sensitive_attributes']
-    sensitive_maps = {sens_attr: train_data.dataset.field2id_token[sens_attr] for sens_attr in sens_attributes}
+    sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     order = [model_name, f'{model_name}+DP']
 
@@ -614,45 +608,43 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
     P_001 = '^'
 
     for metric in metrics_names:
-        for attr in sens_attributes:
-            sens_map = sensitive_maps[attr]
-            tables_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), attr)
-            if not os.path.exists(tables_path):
-                os.makedirs(tables_path)
+        tables_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", '_'.join(config_ids), sens_attr)
+        if not os.path.exists(tables_path):
+            os.makedirs(tables_path)
 
-            # e_type with highest number of explanations
-            max_del_edges_e_type = max([(k, len(x)) for k, x in _result_all_data.items()], key=lambda v: v[1])[0]
-            del_edges = sorted(list(_result_all_data[max_del_edges_e_type]))
+        # e_type with highest number of explanations
+        max_del_edges_e_type = max([(k, len(x)) for k, x in _result_all_data.items()], key=lambda v: v[1])[0]
+        del_edges = sorted(list(_result_all_data[max_del_edges_e_type]))
 
-            bin_size = max(del_edges) // n_bins
-            bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
-                       range(max(del_edges) // bin_size + 1)}
+        bin_size = max(del_edges) // n_bins
+        bin_map = {i: f"{i * bin_size + 1 if i != 0 else 1}-{(i + 1) * bin_size}" for i in
+                   range(max(del_edges) // bin_size + 1)}
 
-            del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
+        del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
 
-            d_grs = np.arange(1, len(sens_map))
+        d_grs = np.arange(1, len(sensitive_map))
 
-            exp_data, stats_data, final_bins = compute_exp_stats_data(
-                _result_all_data, _pref_dfs, orig_result, order, attr, d_grs, del_edges_map, metric, test_f=test_f
-            )
+        exp_data, stats_data, final_bins = compute_exp_stats_data(
+            _result_all_data, _pref_dfs, orig_result, order, sens_attr, d_grs, del_edges_map, metric, test_f=test_f
+        )
 
-            plot_vals = []
-            for row, stat in zip(exp_data, stats_data):
-                plot_vals.append([])
-                for j in range(len(final_bins)):
-                    if row:
-                        plot_vals[-1].append(f"{row[j]:.4f}"
-                                             f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
-                    else:
-                        plot_vals[-1].append("-")
+        plot_vals = []
+        for row, stat in zip(exp_data, stats_data):
+            plot_vals.append([])
+            for j in range(len(final_bins)):
+                if row:
+                    plot_vals[-1].append(f"{row[j]:.4f}"
+                                         f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
+                else:
+                    plot_vals[-1].append("-")
 
-            final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
-                          for bin in final_bins]
+        final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
+                      for bin in final_bins]
 
-            df_attr = pd.DataFrame(plot_vals, columns=final_bins, index=order).T
+        df_attr = pd.DataFrame(plot_vals, columns=final_bins, index=order).T
 
-            df_attr.to_markdown(os.path.join(tables_path, f"{hist_type}_table_over_edges_{attr}_{metric}_{test_f}.md"), tablefmt="github")
-            df_attr.to_latex(os.path.join(tables_path, f"{hist_type}_table_over_edges_{attr}_{metric}_{test_f}.tex"), multirow=True)
+        df_attr.to_markdown(os.path.join(tables_path, f"{hist_type}_table_over_edges_{sens_attr}_{metric}_{test_f}.md"), tablefmt="github")
+        df_attr.to_latex(os.path.join(tables_path, f"{hist_type}_table_over_edges_{sens_attr}_{metric}_{test_f}.tex"), multirow=True)
 
 
 # %%
@@ -661,10 +653,9 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
         bd = bd_all[e_type]
         bd_attrs = defaultdict(list)
         for n_del in bd:
-            for attr in bd[n_del]:
-                for d_gr, bd_d_gr in bd[n_del][attr].items():
-                    if bd_d_gr is not None:
-                        bd_attrs[attr].extend(list(zip([n_del] * len(bd_d_gr), bd_d_gr.numpy(), [d_gr] * len(bd_d_gr))))
+            for d_gr, bd_d_gr in bd[n_del][sens_attr].items():
+                if bd_d_gr is not None:
+                    bd_attrs[sens_attr].extend(list(zip([n_del] * len(bd_d_gr), bd_d_gr.numpy(), [d_gr] * len(bd_d_gr))))
 
         bd_attrs = dict(bd_attrs)
 
@@ -699,7 +690,6 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_ids, max_del_edges=8
 
 # %%
 def plot_del_edges_hops(dfs, _config_ids):
-    sens_attrs = config['sensitive_attributes']
     # td_G = utils.get_nx_biadj_matrix(train_data.dataset)
 
     inter_matrix = train_data.dataset.inter_matrix(form='csr').astype(np.float32)
@@ -723,60 +713,59 @@ def plot_del_edges_hops(dfs, _config_ids):
 
         new_df = new_df.join(user_df.set_index('user_id'), on='user_id')
 
-        for attr in sens_attrs:
-            data_hops = []
-            for (u_attr, u_id), u_df in new_df.groupby([attr, 'user_id']):
-                # if e_type == "GCMC+NDCG":
-                #     print(u_attr, u_id)
-                #     print(u_df)
-                #     input()
-                # continue
-                u_G = nx.Graph()
-                e = np.array(u_df['edge'].tolist())
-                if not (e[:, 0] == u_id).all():
-                    fig = plt.figure(figsize=(14, 14))
-                    ego = set(nx.ego_graph(td_G, u_id, radius=1, center=True, undirected=True))
-                    sub = td_G.subgraph(ego | set(np.unique(np.append(e, u_id)))).copy()
-                    top_nodes = {n for n, d in sub.nodes(data=True) if d['bipartite'] == 0}
-                    node_color = list({n: 'green' if n == u_id else (color_0 if d['bipartite'] == 0 else color_1)
-                                       for n, d in sub.nodes(data=True)}.values())
+        data_hops = []
+        for (u_attr, u_id), u_df in new_df.groupby([sens_attr, 'user_id']):
+            # if e_type == "GCMC+NDCG":
+            #     print(u_attr, u_id)
+            #     print(u_df)
+            #     input()
+            # continue
+            u_G = nx.Graph()
+            e = np.array(u_df['edge'].tolist())
+            if not (e[:, 0] == u_id).all():
+                fig = plt.figure(figsize=(14, 14))
+                ego = set(nx.ego_graph(td_G, u_id, radius=1, center=True, undirected=True))
+                sub = td_G.subgraph(ego | set(np.unique(np.append(e, u_id)))).copy()
+                top_nodes = {n for n, d in sub.nodes(data=True) if d['bipartite'] == 0}
+                node_color = list({n: 'green' if n == u_id else (color_0 if d['bipartite'] == 0 else color_1)
+                                   for n, d in sub.nodes(data=True)}.values())
 
-                    tuple_e = list(map(tuple, e))
-                    sub_edges = sub.edges()
-                    edge_list = [edge for edge in sub_edges if u_id in edge] + tuple_e
-                    edge_color = ['red' if edge in tuple_e else 'black' for edge in edge_list]
-                    nx.draw(
-                        sub,
-                        nx.bipartite_layout(sub, top_nodes),
-                        edgelist=edge_list,
-                        node_color=node_color,
-                        edge_color=edge_color
-                    )
-                    plt.show()
-                    plt.close("all")
-                    import pdb; pdb.set_trace()
-                # u_G.add_edges_from(e)
+                tuple_e = list(map(tuple, e))
+                sub_edges = sub.edges()
+                edge_list = [edge for edge in sub_edges if u_id in edge] + tuple_e
+                edge_color = ['red' if edge in tuple_e else 'black' for edge in edge_list]
+                nx.draw(
+                    sub,
+                    nx.bipartite_layout(sub, top_nodes),
+                    edgelist=edge_list,
+                    node_color=node_color,
+                    edge_color=edge_color
+                )
+                plt.show()
+                plt.close("all")
+                import pdb; pdb.set_trace()
+            # u_G.add_edges_from(e)
 
-                # max_hop = 0
-                # while True:
-                #     try:
-                #         if len(nx.descendants_at_distance(u_G, u_id, max_hop + 1)) > 0:
-                #             max_hop += 1
-                #         else:
-                #             break
-                #     except Exception as e:
-                #         import pdb; pdb.set_trace()
-                #         break
-                #
-                # data_hops.append([u_id, max_hop])
+            # max_hop = 0
+            # while True:
+            #     try:
+            #         if len(nx.descendants_at_distance(u_G, u_id, max_hop + 1)) > 0:
+            #             max_hop += 1
+            #         else:
+            #             break
+            #     except Exception as e:
+            #         import pdb; pdb.set_trace()
+            #         break
+            #
+            # data_hops.append([u_id, max_hop])
 
-            df_hops = pd.DataFrame(data_hops, columns=['user_id', 'max_hops'])
+        df_hops = pd.DataFrame(data_hops, columns=['user_id', 'max_hops'])
 
-            print(df_hops)
+        print(df_hops)
 
-            del new_df['edge']
+        del new_df['edge']
 
-            print(new_df)
+        print(new_df)
 
 
 def draw_graph3(networkx_graph, notebook=True, output_filename='graph.html', show_buttons=False, only_physics_buttons=False):
@@ -861,9 +850,10 @@ config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_
                                                                                       args.explainer_config_file)
 
 model_name = model.__class__.__name__
+sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
 
-gender_map = dataset.field2id_token['gender']
-female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
+attr_map = dataset.field2id_token[sens_attr]
+f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 user_num, item_num = dataset.user_num, dataset.item_num
 evaluator = Evaluator(config)
 
@@ -884,7 +874,6 @@ metrics_names = evaluator.metrics
 # exit()
 
 # %%
-sens_attrs, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
 
 exp_paths = {}
 for c_id, exp_t, old_exp_t in zip(
@@ -895,7 +884,7 @@ for c_id, exp_t, old_exp_t in zip(
     exp_paths[exp_t] = None
     if c_id != -1:
         exp_paths[exp_t] = os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name, model_name,
-                                        old_exp_t, '_'.join(sens_attrs), f"epochs_{epochs}", str(c_id))
+                                        old_exp_t, sens_attr, f"epochs_{epochs}", str(c_id))
 
 with open(os.path.join(exp_paths[f'{model_name}+DP'], 'config.pkl'), 'rb') as f:
     exp_config = pickle.load(f)
@@ -907,7 +896,7 @@ rec_data = locals()[f"{exp_rec_data}_data"]
 
 user_df = pd.DataFrame({
     'user_id': train_data.dataset.user_feat['user_id'].numpy(),
-    **{sens_attr: train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sens_attrs}
+    sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
 })
 
 train_df = pd.DataFrame(train_data.dataset.inter_feat.numpy())[["user_id", "item_id"]]
@@ -934,46 +923,46 @@ all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = 
 test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, all_exp_test_dfs[f'{model_name}+DP'], 'topk_pred', 'ndcg')
 rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, all_exp_rec_dfs[f'{model_name}+DP'], 'topk_pred', 'ndcg')
 
-test_orig_males_ndcg = utils.compute_metric(
+test_orig_m_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
-test_orig_females_ndcg = utils.compute_metric(
+test_orig_f_ndcg = utils.compute_metric(
     evaluator,
     test_data.dataset,
-    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    all_exp_test_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 
-rec_orig_males_ndcg = utils.compute_metric(
+rec_orig_m_ndcg = utils.compute_metric(
     evaluator,
     rec_data.dataset,
-    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
-rec_orig_females_ndcg = utils.compute_metric(
+rec_orig_f_ndcg = utils.compute_metric(
     evaluator,
     rec_data.dataset,
-    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+    all_exp_rec_dfs[f'{model_name}+DP'].set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
     'topk_pred',
     'ndcg'
 )[:, -1].mean()
 
-if rec_orig_males_ndcg >= rec_orig_females_ndcg:
+if rec_orig_m_ndcg >= rec_orig_f_ndcg:
     if delete_adv_group is not None:
-        group_edge_del = male_idx if delete_adv_group else female_idx
+        group_edge_del = m_idx if delete_adv_group else f_idx
     else:
-        group_edge_del = male_idx
+        group_edge_del = m_idx
 else:
     if delete_adv_group is not None:
-        group_edge_del = female_idx if delete_adv_group else male_idx
+        group_edge_del = f_idx if delete_adv_group else m_idx
     else:
-        group_edge_del = female_idx
+        group_edge_del = f_idx
 
 test_result_per_epoch_per_group, test_del_edges_per_epoch, test_fair_loss_per_epoch = result_data_per_epoch_per_group(all_exp_test_dfs, data=test_data.dataset)
 rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = result_data_per_epoch_per_group(all_exp_rec_dfs, data=rec_data.dataset)
@@ -983,15 +972,15 @@ plot_lineplot_per_epoch_per_group(
     test_result_per_epoch_per_group,
     test_del_edges_per_epoch,
     test_fair_loss_per_epoch,
-    (test_orig_males_ndcg, test_orig_females_ndcg),
+    (test_orig_m_ndcg, test_orig_f_ndcg),
     data_info="test"
 )
 plot_lineplot_per_epoch_per_group(
     rec_result_per_epoch_per_group,
     rec_del_edges_per_epoch,
     rec_fair_loss_per_epoch,
-    (rec_orig_males_ndcg, rec_orig_females_ndcg),
-    test_orig_ndcg=(test_orig_males_ndcg, test_orig_females_ndcg),
+    (rec_orig_m_ndcg, rec_orig_f_ndcg),
+    test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
     data_info=exp_rec_data
 )
 
