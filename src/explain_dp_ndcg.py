@@ -111,6 +111,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     epochs = config['cf_epochs']
     topk = config['cf_topk']
     explainer_config_file = kwargs.get("explainer_config_file", None)
+    opt_loss_mem_usage = kwargs.get("optimized_loss_memory_usage", False)
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
@@ -127,7 +128,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
             print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
     bge = DPBGExplainer(config, _train_dataset, _rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
-    exp, _ = bge.explain(user_data, _test_data, epochs, topk=topk)
+    exp, _ = bge.explain(user_data, _test_data, epochs, topk=topk, optimized_loss_memory_usage=opt_loss_mem_usage)
     del bge
 
     exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
@@ -146,6 +147,8 @@ def execute_explanation(model_file,
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
                                                                                           explainer_config_file)
 
+    optimized_loss_memory_usage = config['optimized_loss_memory_usage'] or False
+
     if config['exp_rec_data'] is not None:
         if config['exp_rec_data'] != 'train+valid':
             rec_data = locals()[f"{config['exp_rec_data']}_data"]
@@ -159,7 +162,11 @@ def execute_explanation(model_file,
     base_exps_filepath = get_base_exps_filepath(config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file)
 
     if not load:
-        kwargs = dict(verbose=verbose, explainer_config_file=explainer_config_file)
+        kwargs = dict(
+            verbose=verbose,
+            explainer_config_file=explainer_config_file,
+            optimized_loss_memory_usage=optimized_loss_memory_usage
+        )
 
         explain(
             config,

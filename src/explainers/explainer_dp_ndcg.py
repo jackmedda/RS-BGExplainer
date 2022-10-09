@@ -7,7 +7,7 @@ import math
 import copy
 import itertools
 from logging import getLogger
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Callable
 
 import tqdm
 import torch
@@ -285,7 +285,7 @@ class DPBGExplainer:
 
         return iter_data
 
-    def explain(self, batched_data, test_data, epochs, topk=10):
+    def explain(self, batched_data, test_data, epochs, topk=10, optimized_loss_memory_usage=False):
         """
         The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
         :param batched_data:
@@ -328,7 +328,7 @@ class DPBGExplainer:
                 batched_data_epoch = DPBGExplainer.prepare_batched_data(batch_user, self.rec_data_loader)
                 self.compute_model_predictions(batched_data_epoch, topk)
 
-                new_example, loss_total, fair_loss = self.train(epoch, topk=topk)
+                new_example, loss_total, fair_loss = self.train(epoch, topk=topk, optimized_loss_memory_usage=optimized_loss_memory_usage)
                 epoch_fair_loss.append(fair_loss)
 
             epoch_fair_loss = np.mean(epoch_fair_loss)
@@ -417,7 +417,7 @@ class DPBGExplainer:
         return best_cf_example, self.model_scores.detach().cpu().numpy()
 
     # @profile
-    def train(self, epoch, topk=10):
+    def train(self, epoch, topk=10, optimized_loss_memory_usage=False):
         """
         Training procedure of explanation
         :param epoch:
@@ -458,7 +458,8 @@ class DPBGExplainer:
                 self.sensitive_attributes,
                 user_feat,
                 topk=topk,
-                adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]['ndcg@10'])
+                adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]['ndcg@10']),
+                optimized_loss_memory_usage=optimized_loss_memory_usage
             ),
             target
         )
@@ -568,10 +569,11 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
                  user_feat,
                  topk=10,
                  adv_group_data: Tuple[str, int, float] = None,
+                 optimized_loss_memory_usage=False,
                  size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1) -> None:
         super(DPNDCGLoss, self).__init__(size_average, reduce, reduction)
 
-        self.ndcg_loss = utils.NDCGApproxLoss(
+        self.ndcg_loss: Callable = utils.NDCGApproxLoss(
             size_average=size_average,
             topk=topk,
             reduce=reduce,
@@ -581,6 +583,7 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
         self.sensitive_attributes = sensitive_attributes
         self.user_feat = user_feat
         self.adv_group_data = adv_group_data
+        self.optimized_loss_memory_usage = optimized_loss_memory_usage
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         groups = list(itertools.product(*[self.user_feat[attr].unique().numpy() for attr in self.sensitive_attributes]))
@@ -591,7 +594,13 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
         # bitwise and finds the users that belong simultaneously to the groups in the product
         masks = np.bitwise_and.reduce(masks, axis=1)
 
-        ndcg_values = self.ndcg_loss(_input, target)
+        if not self.optimized_loss_memory_usage:
+            ndcg_values = self.ndcg_loss(_input, target)
+        else:
+            ndcg_values = []
+            for i in range(_input.shape[0]):
+                ndcg_values.append(self.ndcg_loss(_input[[i]], target[[i]])[0])
+            ndcg_values = torch.stack(ndcg_values)
 
         masked_ndcg = []
         for mask in masks:

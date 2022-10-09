@@ -87,3 +87,5 @@ earlys_fn: 'lt'
 earlys_delta: 0.0001
 
 earlys_pvalue:
+
+optimized_loss_memory_usage: False
