@@ -500,7 +500,7 @@ class DPBGExplainer:
             cf_dist = None
 
             cf_adj, adj = cf_adj.detach(), adj.detach()
-            del_edges = (cf_adj - adj).nonzero()
+            del_edges = (cf_adj - adj).nonzero().T
             del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].cpu().numpy()  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
