@@ -11,7 +11,7 @@ momentum: 0.0
 # epochs to generate explanations
 cf_epochs: 100
 # how many users should be considered to explain?
-user_batch_exp: 32
+user_batch_exp: 6
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed

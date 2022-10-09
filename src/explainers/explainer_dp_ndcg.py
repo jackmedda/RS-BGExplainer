@@ -257,6 +257,10 @@ class DPBGExplainer:
             distrib.append(mask.nonzero()[0].shape[0] / batched_data.shape[0])
 
         for batch in range(n_batch):
+            distrib = []
+            for mask in masks:
+                distrib.append(mask.nonzero()[0].shape[0] / n_samples)
+
             batch_len = min(n_samples, self.user_batch_exp)  # n_samples is lower than user_batch only for last batch
             batch_counter = batch_len
             batch_data = []
@@ -265,16 +269,22 @@ class DPBGExplainer:
                     n_mask_samples = batch_counter
                 else:
                     if batch_counter < batch_len:
-                        n_mask_samples = min(round(distrib[mask_idx] * batch_len), batch_counter)
+                        n_mask_samples = max(min(round(distrib[mask_idx] * batch_len), batch_counter), 1)
                     else:
-                        n_mask_samples = min(round(distrib[mask_idx] * batch_len), batch_counter - 1)
+                        n_mask_samples = max(min(round(distrib[mask_idx] * batch_len), batch_counter - 1), 1)
                 mask_samples = np.random.permutation(masks[mask_idx].nonzero()[0])
                 if batch != (n_batch - 1):
+                    if mask_samples.shape[0] == n_mask_samples:
+                        n_mask_samples = max(n_mask_samples - (n_batch - 1) - batch, 1)
+
                     mask_samples = mask_samples[:n_mask_samples]
                 batch_data.append(batched_data[mask_samples])
-                masks[:, mask_samples] = False  # affect groups where these users belong (e.g. gender and age group)
+                masks[mask_idx, mask_samples] = False  # affect groups where these users belong (e.g. gender and age group)
                 batch_counter -= mask_samples.shape[0]
                 n_samples -= mask_samples.shape[0]
+
+                if batch_counter > 0 and mask_i == (masks.shape[0] - 1):
+                    print()
 
                 if batch_counter == 0:
                     break
