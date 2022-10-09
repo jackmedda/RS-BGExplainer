@@ -6,8 +6,6 @@ import inspect
 import argparse
 import logging
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
 import numpy as np
 import pandas as pd
 from recbole.config import Config

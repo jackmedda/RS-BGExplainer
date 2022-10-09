@@ -439,6 +439,7 @@ class DPBGExplainer:
         # compute differentiable permutation of adj matrix
         # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
         cf_scores = self.get_scores(self.cf_model, *self.scores_args, pred=False)
+
         # remove neginf from output
         cf_scores = torch.nan_to_num(cf_scores, neginf=(torch.min(cf_scores[~torch.isinf(cf_scores)]) - 1).item())
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
@@ -498,10 +499,8 @@ class DPBGExplainer:
             cf_dist = None
 
             cf_adj, adj = cf_adj.detach(), adj.detach()
-            del_edges = (cf_adj - adj)
-            del_edges = del_edges.indices()[:, del_edges.values() != 0]
-            import pdb; pdb.set_trace()
-            del_edges = del_edges[:, del_edges[0, :] < self.dataset.user_num].cpu().numpy()  # remove duplicated edges
+            del_edges = (cf_adj - adj).nonzero()
+            del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].cpu().numpy()  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
