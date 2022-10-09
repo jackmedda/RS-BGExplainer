@@ -452,7 +452,7 @@ class DPBGExplainer:
         target[torch.arange(target.shape[0])[:, None], self.rec_data.history_item_matrix()[0][user_feat['user_id']]] = 1
         target[:, 0] = 0
 
-        loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, cf_adj, adj = self.cf_model.loss(
+        loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, adj_sub_cf_adj = self.cf_model.loss(
             cf_scores,
             DPNDCGLoss(
                 self.sensitive_attributes,
@@ -500,9 +500,9 @@ class DPBGExplainer:
             # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
             cf_dist = None
 
-            cf_adj, adj = cf_adj.detach(), adj.detach()
-            del_edges = (cf_adj - adj).nonzero().T
-            del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].cpu().numpy()  # remove duplicated edges
+            del_edges = adj_sub_cf_adj.detach().cpu().to_dense().nonzero().T
+
+            del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].numpy()  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),

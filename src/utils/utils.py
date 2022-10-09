@@ -267,8 +267,7 @@ def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
     if old_idx is None:
         idx = torch.tril_indices(n_rows, n_rows, -1)
     symm_matrix[idx[0], idx[1]] = vector
-    if old_idx is None:
-        symm_matrix = symm_matrix + symm_matrix.t()
+    symm_matrix[idx[1], idx[0]] = vector
 
     return symm_matrix
 
@@ -308,6 +307,26 @@ def dense2d_to_sparse_without_nonzero(tensor):
     indices = torch.stack((x_idxs, y_idxs)).to(tensor.device)
     values = tensor[nonzero]
     return torch.sparse.FloatTensor(indices, values, torch.Size((x, y)))
+
+
+def get_adj_matrix(interaction_matrix,
+                   num_all,
+                   n_users):
+    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
+    inter_M = interaction_matrix
+    inter_M_t = interaction_matrix.transpose()
+    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
+    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
+    A._update(data_dict)
+    A = A.tocoo()
+    row = A.row
+    col = A.col
+    i = torch.LongTensor(np.stack([row, col], axis=0))
+    data = torch.FloatTensor(A.data)
+    adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
+    edge_subset = [torch.LongTensor(i)]
+
+    return adj, edge_subset[0]
 
 
 def create_symm_matrix_from_sparse_tril(tril):

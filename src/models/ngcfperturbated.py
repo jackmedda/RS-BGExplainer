@@ -19,9 +19,8 @@ Reference code:
 
 """
 
-import numpy as np
-import scipy.sparse as sp
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -80,14 +79,13 @@ class NGCFPerturbated(GeneralRecommender):
 
         self.edge_additions = config['edge_additions']
 
-        # adj matrices for each relation are stored in self.support
-        self.Graph, self.sub_Graph = self.get_adj_matrix(
-            user_id,
-            self.n_hops,
-            neighbors_hops=self.neighbors_hops,
-            only_last_level=self.sub_matrix_only_last_level,
-            not_user_sub_matrix=self.not_user_sub_matrix
+        self.Graph, self.sub_Graph = utils.get_adj_matrix(
+            self.interaction_matrix,
+            self.num_all,
+            self.n_users
         )
+
+        self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
 
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
@@ -114,33 +112,6 @@ class NGCFPerturbated(GeneralRecommender):
         self.apply(xavier_normal_initialization)
         self.other_parameter_name = ['restore_user_e', 'restore_item_e']
 
-    def get_adj_matrix(self, user_id, n_hops, neighbors_hops=False, only_last_level=False, not_user_sub_matrix=False):
-        A = sp.dok_matrix((self.num_all, self.num_all), dtype=np.float32)
-        inter_M = self.interaction_matrix
-        inter_M_t = self.interaction_matrix.transpose()
-        data_dict = dict(zip(zip(inter_M.row, inter_M.col + self.n_users), [1] * inter_M.nnz))
-        data_dict.update(dict(zip(zip(inter_M_t.row + self.n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
-        A._update(data_dict)
-        A = A.tocoo()
-        row = A.row
-        col = A.col
-        i = torch.LongTensor(np.stack([row, col], axis=0))
-        data = torch.FloatTensor(A.data)
-        adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
-        if len(user_id) == 1:
-            edge_subset = utils.get_neighbourhood(
-                user_id[0].item(),
-                i,
-                n_hops,
-                neighbors_hops=neighbors_hops,
-                only_last_level=only_last_level,
-                not_user_sub_matrix=not_user_sub_matrix,
-                max_num_nodes=self.num_all
-            )
-        else:
-            edge_subset = [torch.LongTensor(i)]
-        return adj.to_dense().to(self.device), edge_subset[0].to(self.device)
-
     def get_eye_mat(self):
         r"""Construct the identity matrix with the size of  n_items+n_users.
 
@@ -165,7 +136,7 @@ class NGCFPerturbated(GeneralRecommender):
 
     def perturbate_adj_matrix(self, pred=False):
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
-            self.Graph,
+            self.Graph.to_dense(),
             self.P_symm,
             self.mask_sub_adj,
             self.num_all,
@@ -228,22 +199,24 @@ class NGCFPerturbated(GeneralRecommender):
 
         :return:
         """
-        adj = self.Graph
-
-        # non-differentiable adj matrix is taken to compute the graph dist loss
-        cf_adj = self.P_loss.to_dense()
-        cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
-
         # compute fairness loss
         fair_loss = fair_loss_f(output, fair_loss_target)
 
+        adj = self.Graph
+
+        # non-differentiable adj matrix is taken to compute the graph dist loss
+        cf_adj = self.P_loss
+        cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
+
+        orig_dist = (cf_adj - adj).coalesce()
+
         # compute normalized graph dist loss (logistic sigmoid is not used because reaches too fast 1)
-        orig_loss_graph_dist = torch.sum((cf_adj - adj).abs()) / 2  # Number of edges changed (symmetrical)
+        orig_loss_graph_dist = torch.sum(orig_dist.values().abs()) / 2  # Number of edges changed (symmetrical)
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
         loss_total = fair_loss + 0.01 * loss_graph_dist
 
-        return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, cf_adj, adj
+        return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, orig_dist
 
     def predict(self, interaction, pred=False):
 
