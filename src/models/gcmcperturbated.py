@@ -384,9 +384,9 @@ class GcEncoder(nn.Module):
             if not self.share_weights:
                 self.dense_layer_v.bias.data.fill_(0)
 
-    def perturbate_adj_matrix(self, pred=False):
+    def perturbate_adj_matrix(self, i, pred=False):
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
-            self.Graph,
+            self.support[i],
             self.P_symm,
             self.mask_sub_adj,
             self.num_all,
