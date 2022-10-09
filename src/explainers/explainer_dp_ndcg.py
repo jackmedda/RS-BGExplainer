@@ -474,7 +474,8 @@ class DPBGExplainer:
         self.cf_optimizer.step()
 
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
-        self.logger.info(f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}, " +
+        self.logger.info(f"{self.cf_model.__class__.__name__} " +
+                         f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - t))}, " +
                          # 'User id: {}, '.format(str(self.user_id)) +
                          'Epoch: {}, '.format(epoch + 1) +
                          'loss: {:.4f}, '.format(loss_total.item()) +
