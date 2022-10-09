@@ -302,14 +302,12 @@ def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pre
 
 def dense2d_to_sparse_without_nonzero(tensor):
     x, y = tensor.shape
-    nonzero = tensor != 0
+    nonzero = (tensor != 0).detach().cpu()
     x_idxs = torch.repeat_interleave(torch.arange(x), y)[nonzero.flatten()]
     y_idxs = torch.tile(torch.arange(y), [x])[nonzero.flatten()]
     indices = torch.stack((x_idxs, y_idxs)).to(tensor.device)
-    indices = indices[:, nonzero.flatten()]
     values = tensor[nonzero]
     return torch.sparse.FloatTensor(indices, values, torch.Size((x, y)))
-
 
 
 def create_symm_matrix_from_sparse_tril(tril):
