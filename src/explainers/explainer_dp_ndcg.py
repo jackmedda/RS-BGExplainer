@@ -308,7 +308,6 @@ class DPBGExplainer:
             # check if each batch has at least 2 groups
             while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
                 iter_data = self.randperm2groups(batched_data)
-            import pdb; pdb.set_trace()
         else:
             batched_attr_data = self.rec_data_loader.dataset.user_feat[self.sensitive_attribute][batched_data]
             iter_data = batched_data[batched_attr_data == self.adv_group].split(self.user_batch_exp)
