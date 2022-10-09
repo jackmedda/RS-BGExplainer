@@ -297,8 +297,8 @@ def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pre
 def dense2d_to_sparse_without_nonzero(tensor):
     x, y = tensor.shape
     indices = torch.stack((
-        torch.repeat_interleave(torch.arange(x), [y]),
-        torch.tile(torch.arange(y), x)
+        torch.repeat_interleave(torch.arange(x), y),
+        torch.tile(torch.arange(y), [x])
     )).to(tensor.device)
     nonzero = tensor != 0
     indices = indices[:, nonzero.flatten()]
