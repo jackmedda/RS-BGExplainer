@@ -639,9 +639,18 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         def approx_ranks(inp):
             shape = inp.shape[1]
 
-            a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
-            b = torch.tile(torch.unsqueeze(inp, 1), [1, shape, 1])
-            return torch.sum(torch.sigmoid(b - a), dim=-1) + .5
+            try:
+                a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
+                a = torch.transpose(a, 1, 2) - a
+                res = torch.sum(torch.sigmoid(a), dim=-1) + .5
+            except:
+                res = []
+                for i in range(inp.shape[0]):
+                    a = torch.tile(torch.unsqueeze(inp[[i]], 2), [1, 1, shape])
+                    a = torch.transpose(a, 1, 2) - a
+                    res.append((torch.sum(torch.sigmoid(a), dim=-1) + .5)[0])
+                res = torch.stack(res)
+            return res
 
         def inverse_max_dcg(_target,
                             gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
