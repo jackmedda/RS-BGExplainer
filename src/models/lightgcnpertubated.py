@@ -122,7 +122,7 @@ class LightGCNPerturbated(GeneralRecommender):
 
     def perturbate_adj_matrix(self, pred=False):
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
-            self.Graph,
+            self.Graph.to_dense(),
             self.P_symm,
             self.mask_sub_adj,
             self.num_all,
