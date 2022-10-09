@@ -276,10 +276,12 @@ def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
 def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False):
     if pred:
         P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
-        P = create_symm_matrix_from_vec(P_hat_symm, num_all, idx=mask_sub_adj, base_symm=graph_A).to_sparse()
+        P = create_symm_matrix_from_vec(P_hat_symm, num_all, idx=mask_sub_adj, base_symm=graph_A)
+        P = dense2d_to_sparse_without_nonzero(P)
         P_loss = P
     else:
-        P = create_symm_matrix_from_vec(torch.sigmoid(P_symm), num_all, idx=mask_sub_adj, base_symm=graph_A).to_sparse()
+        P = create_symm_matrix_from_vec(torch.sigmoid(P_symm), num_all, idx=mask_sub_adj, base_symm=graph_A)
+        P = dense2d_to_sparse_without_nonzero(P)
         P_loss = None
 
     # Don't need gradient of this if pred is False
@@ -290,6 +292,19 @@ def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pre
 
     # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
     return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp), P_loss
+
+
+def dense2d_to_sparse_without_nonzero(tensor):
+    x, y = tensor.shape
+    indices = torch.stack((
+        torch.repeat_interleave(torch.arange(x), [y]),
+        torch.tile(torch.arange(y), x)
+    )).to(tensor.device)
+    nonzero = tensor != 0
+    indices = indices[:, nonzero.flatten()]
+    values = tensor[nonzero]
+    return torch.sparse.FloatTensor(indices, values, torch.Size((x, y)))
+
 
 
 def create_symm_matrix_from_sparse_tril(tril):

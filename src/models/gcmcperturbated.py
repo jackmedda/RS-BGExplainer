@@ -227,7 +227,7 @@ class GCMCPerturbated(GeneralRecommender):
         adj = self.Graph
 
         # non-differentiable adj matrix is taken to compute the graph dist loss
-        cf_adj = self.P_loss.to_dense()
+        cf_adj = self.GcEncoder.P_loss.to_dense()
         cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
 
         # compute fairness loss
