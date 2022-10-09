@@ -306,8 +306,7 @@ class DPBGExplainer:
         if self.only_adv_group != "global":
             iter_data = self.randperm2groups(batched_data)
             # check if each batch has at least 2 groups
-            user_feat = self.dataset.user_feat[self.sensitive_attribute][self.dataset.user_feat[self.sensitive_attribute] != 0]
-            while any(user_feat[d].unique().shape[0] < 2 for d in iter_data):
+            while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
                 iter_data = self.randperm2groups(batched_data)
         else:
             batched_attr_data = self.rec_data_loader.dataset.user_feat[self.sensitive_attribute][batched_data]
