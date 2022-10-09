@@ -277,11 +277,17 @@ def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pre
     if pred:
         P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
         P = create_symm_matrix_from_vec(P_hat_symm, num_all, idx=mask_sub_adj, base_symm=graph_A)
-        P = dense2d_to_sparse_without_nonzero(P)
+        try:
+            P = P.to_sparse()
+        except:
+            P = dense2d_to_sparse_without_nonzero(P)
         P_loss = P
     else:
         P = create_symm_matrix_from_vec(torch.sigmoid(P_symm), num_all, idx=mask_sub_adj, base_symm=graph_A)
-        P = dense2d_to_sparse_without_nonzero(P)
+        try:
+            P = P.to_sparse()
+        except:
+            P = dense2d_to_sparse_without_nonzero(P)
         P_loss = None
 
     # Don't need gradient of this if pred is False
