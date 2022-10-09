@@ -283,9 +283,6 @@ class DPBGExplainer:
                 batch_counter -= mask_samples.shape[0]
                 n_samples -= mask_samples.shape[0]
 
-                if batch_counter > 0 and mask_i == (masks.shape[0] - 1):
-                    print()
-
                 if batch_counter == 0:
                     break
             iter_data.append(torch.cat(batch_data))
