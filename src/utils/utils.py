@@ -1,4 +1,5 @@
 import os
+import copy
 import pickle
 from logging import getLogger
 from collections import defaultdict
@@ -257,14 +258,38 @@ def get_neighbourhood(node_idx,
     return edge_subset
 
 
-def create_symm_matrix_from_vec(vector, n_rows, idx=None):
-    symm_matrix = torch.zeros(n_rows, n_rows).to(vector.device)
-    if idx is None:
+def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
+    if isinstance(base_symm, str):
+        symm_matrix = getattr(torch, base_symm)(n_rows, n_rows).to(vector.device)
+    else:
+        symm_matrix = copy.copy(base_symm)
+    old_idx = idx
+    if old_idx is None:
         idx = torch.tril_indices(n_rows, n_rows, -1)
     symm_matrix[idx[0], idx[1]] = vector
-    symm_matrix = symm_matrix + symm_matrix.t()
+    if old_idx is None:
+        symm_matrix = symm_matrix + symm_matrix.t()
 
     return symm_matrix
+
+
+def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False):
+    if pred:
+        P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
+        P = create_symm_matrix_from_vec(P_hat_symm, num_all, idx=mask_sub_adj, base_symm=graph_A).to_sparse()
+        P_loss = P
+    else:
+        P = create_symm_matrix_from_vec(torch.sigmoid(P_symm), num_all, idx=mask_sub_adj, base_symm=graph_A).to_sparse()
+        P_loss = None
+
+    # Don't need gradient of this if pred is False
+    D_tilde = torch.sparse.sum(P, dim=1) if pred else torch.sparse.sum(P, dim=1).detach()
+    D_tilde_exp = (D_tilde.to_dense() + 1e-7).pow(-0.5)
+
+    D_tilde_exp = torch.sparse.FloatTensor(D_indices, D_tilde_exp, torch.Size((num_all, num_all)))
+
+    # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
+    return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp), P_loss
 
 
 def create_symm_matrix_from_sparse_tril(tril):

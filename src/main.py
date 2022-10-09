@@ -1,16 +1,16 @@
 import os
 import yaml
-import copy
 import shutil
 import pickle
 import inspect
 import argparse
 import logging
 
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 import numpy as np
 import pandas as pd
 from recbole.config import Config
-from recbole.data.interaction import Interaction
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 

@@ -497,9 +497,11 @@ class DPBGExplainer:
             # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
             cf_dist = None
 
-            cf_adj, adj = cf_adj.detach().cpu().numpy(), adj.detach().cpu().numpy()
-            del_edges = np.stack((adj != cf_adj).nonzero(), axis=0)
-            del_edges = del_edges[:, del_edges[0, :] < self.dataset.user_num]  # remove duplicated edges
+            cf_adj, adj = cf_adj.detach(), adj.detach()
+            del_edges = (cf_adj - adj)
+            del_edges = del_edges.indices()[:, del_edges.values() != 0]
+            import pdb; pdb.set_trace()
+            del_edges = del_edges[:, del_edges[0, :] < self.dataset.user_num].cpu().numpy()  # remove duplicated edges
 
             cf_stats = [self.user_id.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),

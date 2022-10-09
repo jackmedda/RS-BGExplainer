@@ -1,9 +1,10 @@
 import os
 import re
 import shutil
-import argparse
-import inspect
 import pickle
+import logging
+import inspect
+import argparse
 
 import torch
 import pandas as pd
@@ -133,6 +134,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
     with open(exps_file_user, 'wb') as f:
         pickle.dump(exp, f)
+    logging.getLogger().info(f"Saved explanations at path {exps_file_user}")
 
 
 def execute_explanation(model_file,
