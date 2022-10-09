@@ -96,17 +96,17 @@ class DPBGExplainer:
         attr_map = dataset.field2id_token[self.sensitive_attribute]
         f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 
-        females = rec_data.dataset.user_feat[self.sensitive_attribute] == f_idx
-        males = rec_data.dataset.user_feat[self.sensitive_attribute] == m_idx
+        f_group = rec_data.dataset.user_feat[self.sensitive_attribute] == f_idx
+        m_group = rec_data.dataset.user_feat[self.sensitive_attribute] == m_idx
         rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
 
-        rec_data_f.user_df = Interaction({k: v[females] for k, v in rec_data_f.dataset.user_feat.interaction.items()})
+        rec_data_f.user_df = Interaction({k: v[f_group] for k, v in rec_data_f.dataset.user_feat.interaction.items()})
         rec_data_f.uid_list = rec_data_f.user_df['user_id']
 
         self.f_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
         self.logger.info(self.f_result)
 
-        rec_data_m.user_df = Interaction({k: v[males] for k, v in rec_data_m.dataset.user_feat.interaction.items()})
+        rec_data_m.user_df = Interaction({k: v[m_group] for k, v in rec_data_m.dataset.user_feat.interaction.items()})
         rec_data_m.uid_list = rec_data_m.user_df['user_id']
         self.m_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
         self.logger.info(self.m_result)
@@ -294,7 +294,7 @@ class DPBGExplainer:
         """
         best_cf_example = []
         best_loss = np.inf
-        orig_ndcg_loss = np.abs(self.males_result['ndcg@10'] - self.females_result['ndcg@10'])
+        orig_ndcg_loss = np.abs(self.m_result['ndcg@10'] - self.f_result['ndcg@10'])
 
         iter_epochs = tqdm.tqdm(
             range(epochs),

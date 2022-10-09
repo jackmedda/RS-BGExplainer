@@ -286,21 +286,21 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             plot_df = df[df["metric"] == metric].copy()
             plot_df.rename(columns={"value": metr_str}, inplace=True)
 
-            rec_male_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-            rec_female_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
-            rec_intersects = np.argwhere(np.diff(np.sign(rec_male_val - rec_female_val))).flatten()
+            rec_m_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+            rec_f_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+            rec_intersects = np.argwhere(np.diff(np.sign(rec_m_val - rec_f_val))).flatten()
             rec_x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
 
             if data_info != "test":
                 plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
                 plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
-                test_male_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-                test_female_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
-                test_intersects = np.argwhere(np.diff(np.sign(test_male_val - test_female_val))).flatten()
+                test_m_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
+                test_f_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+                test_intersects = np.argwhere(np.diff(np.sign(test_m_val - test_f_val))).flatten()
                 test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
             else:
-                plot_test_df, test_male_val, test_female_val, test_intersects, test_x_intersects = [None] * 5
+                plot_test_df, test_m_val, test_f_val, test_intersects, test_x_intersects = [None] * 5
 
             colors = sns.color_palette("colorblind", n_colors=2)
 
@@ -402,17 +402,17 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             ax_del_edges.yaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
 
             texts = []
-            for ax, male_val, female_val, intersects, x_intersects in zip([ax_rec, ax_test],
-                                                                          [rec_male_val, test_male_val],
-                                                                          [rec_female_val, test_female_val],
+            for ax, m_val, f_val, intersects, x_intersects in zip([ax_rec, ax_test],
+                                                                          [rec_m_val, test_m_val],
+                                                                          [rec_f_val, test_f_val],
                                                                           [rec_intersects, test_intersects],
                                                                           [rec_x_intersects, test_x_intersects]):
                 if ax is not None:
                     y_scatter = []
                     texts.append([])
                     for i, (x_cross, cross) in enumerate(zip(x_intersects, intersects)):
-                        mean_metric = (male_val[cross] + female_val[cross]) / 2
-                        diff_metric = abs(male_val[cross] - female_val[cross])
+                        mean_metric = (m_val[cross] + f_val[cross]) / 2
+                        diff_metric = abs(m_val[cross] - f_val[cross])
                         texts[-1].append(ax.text(x_cross, mean_metric, f"{mean_metric:.4f} ({diff_metric:.4f})"))
                         y_scatter.append(mean_metric)
 
@@ -429,16 +429,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                     x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
                     ax_test.plot(x_lim, [_test_orig_m_ndcg, _test_orig_m_ndcg], c=colors[0], ls='--')
                     ax_test.plot(x_lim, [_test_orig_f_ndcg, _test_orig_f_ndcg], c=colors[1], ls='--')
-
-                # global_idx_inters = (
-                #         plot_df.loc[plot_df["Group"] == "M"].sort_values("Epoch")[metr_str] - orig_females_ndcg
-                # ).abs().sort_values().index[0]
-                # inters_val, y_global_idx_inters = plot_df.loc[global_idx_inters, [metr_str, "Epoch"]]
-                # ax.annotate(
-                #     f"{orig_females_ndcg:.4f} ({abs(orig_females_ndcg - inters_val):.4f})",
-                #     (y_global_idx_inters + y_global_idx_inters * annot_offset, orig_females_ndcg + orig_females_ndcg * annot_offset)
-                # )
-                # ax.scatter([y_global_idx_inters], [orig_females_ndcg], c="k")
 
             for ax, ax_texts, ax_lines in zip([ax_rec, ax_test], texts, lines):
                 ax.minorticks_on()
