@@ -155,7 +155,9 @@ def prepare_data(config, model, pert_model, dataset, pert_dataset, train_data, t
     model_name = model.__class__.__name__
     pert_model_name = pert_model.__class__.__name__
 
-    sens_attr, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
+    epochs, batch_exp = config['cf_epochs'], config['user_batch_exp']
+    sens_attr = config['sensitive_attributes'] or config['sensitive_attribute']
+    sens_attr = sens_attr[0] if isinstance(sens_attr, list) else sens_attr
 
     user_df = pd.DataFrame({
         'user_id': train_data.dataset.user_feat['user_id'].numpy(),

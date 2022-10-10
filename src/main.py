@@ -251,8 +251,8 @@ if __name__ == "__main__":
     train_group.add_argument('--config_dict', default=None)
     train_group.add_argument('--saved', action='store_true')
     train_group.add_argument('--use_perturbed_graph', action='store_true')
-    train_group.add_argument('--best_exp', nargs='+', help="one of ['fairest', 'fairest_before_exp', 'fixed_exp'] with"
-                                                           " the chosen exp number for the last two types")
+    train_group.add_argument('--best_exp', nargs=2, help="one of ['fairest', 'fairest_before_exp', 'fixed_exp'] with"
+                                                         " the chosen exp number for the last two types")
     train_group.add_argument('--load_config_attr_id', type=str, nargs=2, default=None)  # ex. ("gender", "2")
     explain_group.add_argument('--model_file')
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))

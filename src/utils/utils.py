@@ -259,6 +259,8 @@ def get_neighbourhood(node_idx,
 
 
 def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
+    # TODO: sparsify this process. It can be accomplished by concatenating the indices of the symm matrix with `idx`
+    #       and the values with vector (to check if gradient is maintained). With indices and value generate the sparse
     if isinstance(base_symm, str):
         symm_matrix = getattr(torch, base_symm)(n_rows, n_rows).to(vector.device)
     else:
