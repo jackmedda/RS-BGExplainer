@@ -176,7 +176,7 @@ def extract_all_exp_metrics_data(_exp_paths, data=None, rec=False):
             ))
 
             gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
-            n_users_data[e_type][n_del] = gr_df_attr[sens_attr].value_counts().to_dict()
+            n_users_data[e_type][n_del] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
             n_users_del = n_users_data[e_type][n_del][sens_attr]
             n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
 
