@@ -361,7 +361,7 @@ class GcEncoder(nn.Module):
 
     def perturbate_adj_matrix(self, i, pred=False):
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
-            self.support[i].to_dense(),
+            self.support[i],
             self.P_symm,
             self.mask_sub_adj,
             self.num_all,

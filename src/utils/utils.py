@@ -259,12 +259,10 @@ def get_neighbourhood(node_idx,
 
 
 def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
-    # TODO: sparsify this process. It can be accomplished by concatenating the indices of the symm matrix with `idx`
-    #       and the values with vector (to check if gradient is maintained). With indices and value generate the sparse
     if isinstance(base_symm, str):
         symm_matrix = getattr(torch, base_symm)(n_rows, n_rows).to(vector.device)
     else:
-        symm_matrix = copy.copy(base_symm)
+        symm_matrix = copy.deepcopy(base_symm)
     old_idx = idx
     if old_idx is None:
         idx = torch.tril_indices(n_rows, n_rows, -1)
@@ -274,21 +272,25 @@ def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
     return symm_matrix
 
 
+def create_sparse_symm_matrix_from_vec(vector, idx, base_symm):
+    symm_matrix = copy.deepcopy(base_symm)
+    if not symm_matrix.is_coalesced():
+        symm_matrix = symm_matrix.coalesce()
+    symm_matrix_idxs, symm_matrix_vals = symm_matrix.indices(), symm_matrix.values()
+
+    idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
+    vector = torch.cat((symm_matrix_vals, vector, vector))
+    symm_matrix = torch.sparse.FloatTensor(idx, vector, symm_matrix.shape)
+
+    return symm_matrix
+
+
 def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False):
     if pred:
         P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
-        P = create_symm_matrix_from_vec(P_hat_symm, num_all, idx=mask_sub_adj, base_symm=graph_A)
-        try:
-            P = P.to_sparse()
-        except:
-            P = dense2d_to_sparse_without_nonzero(P)
-        P_loss = P
+        P = create_sparse_symm_matrix_from_vec(P_hat_symm, mask_sub_adj, graph_A)
     else:
-        P = create_symm_matrix_from_vec(torch.sigmoid(P_symm), num_all, idx=mask_sub_adj, base_symm=graph_A)
-        try:
-            P = P.to_sparse()
-        except:
-            P = dense2d_to_sparse_without_nonzero(P)
+        P = create_sparse_symm_matrix_from_vec(torch.sigmoid(P_symm), mask_sub_adj, graph_A)
         P_loss = None
 
     # Don't need gradient of this if pred is False
@@ -649,29 +651,28 @@ def damerau_levenshtein_distance(s1, s2):
 class NDCGApproxLoss(torch.nn.modules.loss._Loss):
     __constants__ = ['reduction']
 
+    __MAX_TOPK_ITEMS__ = 10000
+
     def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
         super(NDCGApproxLoss, self).__init__(size_average, reduce, reduction)
         self.topk = topk
         self.temperature = temperature
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if _input.shape[1] > self.__MAX_TOPK_ITEMS__:
+            topk = self.topk or target.shape[1]
+            _, _input_topk = torch.topk(_input, dim=1, k=topk)
+            _input = _input[torch.arange(_input.shape[0])[:, None], _input_topk]
+            target = target[torch.arange(target.shape[0])[:, None], _input_topk]
+
         _input_temp = torch.nn.ReLU()(_input) / self.temperature
 
         def approx_ranks(inp):
             shape = inp.shape[1]
 
-            try:
-                a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
-                a = torch.transpose(a, 1, 2) - a
-                res = torch.sum(torch.sigmoid(a), dim=-1) + .5
-            except:
-                res = []
-                for i in range(inp.shape[0]):
-                    a = torch.tile(torch.unsqueeze(inp[[i]], 2), [1, 1, shape])
-                    a = torch.transpose(a, 1, 2) - a
-                    res.append((torch.sum(torch.sigmoid(a), dim=-1) + .5)[0])
-                res = torch.stack(res)
-            return res
+            a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
+            a = torch.transpose(a, 1, 2) - a
+            return torch.sum(torch.sigmoid(a), dim=-1) + .5
 
         def inverse_max_dcg(_target,
                             gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
