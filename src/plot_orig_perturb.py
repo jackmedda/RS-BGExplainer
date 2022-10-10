@@ -18,7 +18,7 @@ script_path = os.path.join(script_path, 'src') if 'src' not in script_path else 
 
 
 # %%
-def get_plots_path(dataset, model_name, epochs, sens_attrs):
+def get_plots_path(dataset, model_name, epochs, sens_attr):
     plots_path = os.path.join(
         script_path,
         os.pardir,
@@ -27,7 +27,7 @@ def get_plots_path(dataset, model_name, epochs, sens_attrs):
         model_name,
         'comparison_orig_pert',
         f"epochs_{epochs}",
-        '_'.join(sens_attrs),
+        sens_attr,
     )
 
     if not os.path.exists(plots_path):
@@ -155,16 +155,16 @@ def prepare_data(config, model, pert_model, dataset, pert_dataset, train_data, t
     model_name = model.__class__.__name__
     pert_model_name = pert_model.__class__.__name__
 
-    gender_map = dataset.field2id_token['gender']
-    female_idx, male_idx = (gender_map == 'F').nonzero()[0][0], (gender_map == 'M').nonzero()[0][0]
-    evaluator = Evaluator(config)
-
-    sens_attrs, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
+    sens_attr, epochs, batch_exp = config['sensitive_attributes'], config['cf_epochs'], config['user_batch_exp']
 
     user_df = pd.DataFrame({
         'user_id': train_data.dataset.user_feat['user_id'].numpy(),
-        **{sens_attr: train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sens_attrs}
+        sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
     })
+
+    attr_map = dataset.field2id_token[sens_attr]
+    f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
+    evaluator = Evaluator(config)
 
     orig_tot_item_num = dataset.item_num
     orig_item_tensor = dataset.get_item_feature().to(model.device)
@@ -203,44 +203,44 @@ def prepare_data(config, model, pert_model, dataset, pert_dataset, train_data, t
     orig_pref_df = pd.DataFrame(zip(user_data.numpy(), orig_model_topk_idx), columns=['user_id', 'topk_pred'])
     pert_pref_df = pd.DataFrame(zip(user_data.numpy(), pert_model_topk_idx), columns=['user_id', 'topk_pred'])
 
-    test_orig_males_ndcg = utils.compute_metric(
+    test_orig_m_ndcg = utils.compute_metric(
         evaluator,
         test_data.dataset,
-        orig_pref_df.set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+        orig_pref_df.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
         'topk_pred',
         'ndcg'
     )[:, -1]
-    test_orig_females_ndcg = utils.compute_metric(
+    test_orig_f_ndcg = utils.compute_metric(
         evaluator,
         test_data.dataset,
-        orig_pref_df.set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+        orig_pref_df.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
         'topk_pred',
         'ndcg'
     )[:, -1]
 
-    test_pert_males_ndcg = utils.compute_metric(
+    test_pert_m_ndcg = utils.compute_metric(
         evaluator,
         test_data.dataset,
-        pert_pref_df.set_index('user_id').loc[user_df.loc[user_df['gender'] == male_idx, 'user_id']].reset_index(),
+        pert_pref_df.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
         'topk_pred',
         'ndcg'
     )[:, -1]
-    test_pert_females_ndcg = utils.compute_metric(
+    test_pert_f_ndcg = utils.compute_metric(
         evaluator,
         test_data.dataset,
-        pert_pref_df.set_index('user_id').loc[user_df.loc[user_df['gender'] == female_idx, 'user_id']].reset_index(),
+        pert_pref_df.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
         'topk_pred',
         'ndcg'
     )[:, -1]
 
     plot_barplot_orig_pert(
-        test_orig_males_ndcg,
-        test_orig_females_ndcg,
-        test_pert_males_ndcg,
-        test_pert_females_ndcg,
+        test_orig_m_ndcg,
+        test_orig_f_ndcg,
+        test_pert_m_ndcg,
+        test_pert_f_ndcg,
         user_data,
         model_name=model_name,
         pert_model_name=pert_model_name,
-        plots_path=get_plots_path(dataset, model_name, epochs, sens_attrs),
+        plots_path=get_plots_path(dataset, model_name, epochs, sens_attr),
         pert_model_file=pert_model_file
     )
