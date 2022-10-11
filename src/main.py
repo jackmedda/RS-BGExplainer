@@ -126,7 +126,7 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
                     logger.info(f"No explanation exists for epoch {args.best_exp[1]}")
             edges = best_exp[10]
             mapped_edges = []
-            import pdb; pdb.set_trace()
+
             for i, field in enumerate([dataset.uid_field, dataset.iid_field]):
                 mapped_edges.append([])
                 for val in edges[i]:
@@ -135,7 +135,6 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
                         idx_val = val - dataset.num(dataset.uid_field)
 
                     mapped_edges[-1].append(int(dataset.field2id_token[field][idx_val]))
-            import pdb; pdb.set_trace()
             edges = np.stack(mapped_edges)
 
             check_new_edges = False  # if True must check if new edges are contained in test and/or validation
