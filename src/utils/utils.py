@@ -278,8 +278,13 @@ def create_sparse_symm_matrix_from_vec(vector, idx, base_symm):
         symm_matrix = symm_matrix.coalesce()
     symm_matrix_idxs, symm_matrix_vals = symm_matrix.indices(), symm_matrix.values()
 
-    idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
-    vector = torch.cat((symm_matrix_vals, vector, vector))
+    edge_deletions = False
+    if idx.shape[1] == symm_matrix_idxs.shape[1]:
+        edge_deletions = (idx.sort(dim=1).values == symm_matrix_idxs.sort(dim=1).values).all()
+
+    if not edge_deletions:  # if pass is edge additions
+        idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
+        vector = torch.cat((symm_matrix_vals, vector, vector))
     symm_matrix = torch.sparse.FloatTensor(idx, vector, symm_matrix.shape)
 
     return symm_matrix

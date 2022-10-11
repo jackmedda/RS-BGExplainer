@@ -89,7 +89,7 @@ class NGCFPerturbated(GeneralRecommender):
 
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
-            self.mask_sub_adj = self.mask_sub_adj[:, self.mask_sub_adj[0] != self.mask_sub_adj[1]]
+            self.mask_sub_adj = self.mask_sub_adj[:, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)]
             self.mask_sub_adj[1] += self.n_users
             self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device=self.device)
             # to get sigmoid closer to 0

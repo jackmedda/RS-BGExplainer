@@ -353,6 +353,8 @@ class DPBGExplainer:
             if new_example is not None:
                 new_example[6] = epoch_fair_loss
 
+                # TODO: the following 3 lines and the other 3 for the original model could be computed outside of the
+                #       for loop
                 # Recommendations generated passing test set (items in train and validation are considered watched)
                 test_batch_data = DPBGExplainer.prepare_batched_data(batched_data, test_data)
                 self.compute_model_predictions(test_batch_data, topk)
