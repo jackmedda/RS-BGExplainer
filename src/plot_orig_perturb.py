@@ -54,24 +54,10 @@ def barplot_annotate_brackets(num1, num2, diff, data, center, height, yerr=None,
     :param maxasterix: maximum number of asterixes to write (for very small p-values)
     """
 
-    # if type(data) is str:
-    #     text = data
-    # else:
-    #     # * is p < 0.05
-    #     # ** is p < 0.005
-    #     # *** is p < 0.0005
-    #     # etc.
-    #     text = ''
-    #     p_005 = '*'
-    #     p_001 = '^'
-    #     p = .05
-    #
-    #     text = p_001 if data < p else (p_005 if data < p else '')
-    #
-    #     if len(text) == 0:
-    #         text = 'n. s.'
+    p_005 = '*'
+    p_001 = '^'
 
-    text = f"Diff: {diff:.4f}"
+    text = f"Diff: {diff:.4f}" + p_001 if data < 0.01 else (p_005 if data < 0.05 else '')
 
     lx, ly = center[num1], height[num1]
     rx, ry = center[num2], height[num2]
@@ -109,23 +95,28 @@ def barplot_annotate_brackets(num1, num2, diff, data, center, height, yerr=None,
     plt.text(*mid, text, **kwargs)
 
 
-def plot_barplot_orig_pert(orig_m_ndcg, orig_f_ndcg, pert_m_ndcg, pert_f_ndcg, user_data, plots_path="", **kwargs):
+def plot_barplot_orig_pert(orig_m_ndcg, orig_f_ndcg, pert_m_ndcg, pert_f_ndcg, user_data, sens_attr, plots_path="", **kwargs):
     model_name, pert_model_name = kwargs.get("model_name", ""), kwargs.get("pert_model_name", "")
     pert_model_file = kwargs.get("pert_model_file", "_perturbed")
+
+    if sens_attr == 'age':
+        m_idx, f_idx = "Y", "O"
+    else:
+        m_idx, f_idx = "M", "F"
 
     df = pd.DataFrame(
         zip(
             np.concatenate([orig_m_ndcg, orig_f_ndcg, pert_m_ndcg, pert_f_ndcg]),
-            np.tile(["M"] * orig_m_ndcg.shape[0] + ["F"] * orig_f_ndcg.shape[0], 2),
+            np.tile([m_idx] * orig_m_ndcg.shape[0] + [f_idx] * orig_f_ndcg.shape[0], 2),
             ["Original"] * user_data.shape[0] + ["Perturbed"] * user_data.shape[0]
         ),
         columns=["NDCG", "Group", "Graph Type"]
     )
 
-    ax = sns.barplot(x="Graph Type", y="NDCG", hue="Group", order=["Original", "Perturbed"], hue_order=["M", "F"], data=df)
+    ax = sns.barplot(x="Graph Type", y="NDCG", hue="Group", order=["Original", "Perturbed"], hue_order=[m_idx, f_idx], data=df)
     for cp_bars, graph_type in zip([[0, 2], [1, 3]], ["Original", "Perturbed"]):
         gt_df = df[df["Graph Type"] == graph_type]
-        m_vals, f_vals = gt_df.loc[gt_df["Group"] == "M", "NDCG"].values, gt_df.loc[gt_df["Group"] == "F", "NDCG"].values
+        m_vals, f_vals = gt_df.loc[gt_df["Group"] == m_idx, "NDCG"].values, gt_df.loc[gt_df["Group"] == f_idx, "NDCG"].values
         stat = stats.f_oneway(m_vals, f_vals)
         mean_diff = abs(m_vals.mean() - f_vals.mean())
 
@@ -240,6 +231,7 @@ def prepare_data(config, model, pert_model, dataset, pert_dataset, train_data, t
         test_pert_m_ndcg,
         test_pert_f_ndcg,
         user_data,
+        sens_attr,
         model_name=model_name,
         pert_model_name=pert_model_name,
         plots_path=get_plots_path(dataset, model_name, epochs, sens_attr),

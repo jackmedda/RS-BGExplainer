@@ -48,6 +48,9 @@ class DPBGExplainer:
         self.item_tensor = dataset.get_item_feature().to(model.device)
         self.test_batch_size = self.tot_item_num
 
+        # TODO: create a PerturbedModel wrapper around each model (it is necessary only to instantiate P inside
+        #       __init__ and define "loss"). get_adj_matrix needs to be overloaded to return the perturbed version
+        #       instead. This also solves the problem of calling "GcEncoder.P_loss" for GCMC
         # Instantiate CF model class, load weights from original model
         self.cf_model = getattr(exp_models, f"{model.__class__.__name__}Perturbated")(config, dataset, self.user_id).to(model.device)
 
