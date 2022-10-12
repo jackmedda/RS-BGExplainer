@@ -97,6 +97,14 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
         splits = ['train', 'validation', 'test']
         feats = ['inter', 'item']
         data_path = config['data_path']
+
+        # Check outside of the try block
+        for spl in splits:
+            spl_file = os.path.join(data_path, f"{config['dataset']}.{spl}")
+            if os.path.isfile(spl_file):
+                if os.path.isfile(spl_file + '.temp'):
+                    raise FileExistsError("Only one training with augmented graph per dataset can be performed")
+
         try:
             script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
             script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
