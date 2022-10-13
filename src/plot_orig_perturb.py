@@ -57,7 +57,8 @@ def barplot_annotate_brackets(num1, num2, diff, data, center, height, yerr=None,
     p_005 = '*'
     p_001 = '^'
 
-    text = f"Diff: {diff:.4f}" + p_001 if data < 0.01 else (p_005 if data < 0.05 else '')
+    text = f"Diff: {diff:.4f}"
+    text += p_001 if data < 0.01 else (p_005 if data < 0.05 else '')
 
     lx, ly = center[num1], height[num1]
     rx, ry = center[num2], height[num2]
