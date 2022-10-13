@@ -239,8 +239,12 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
     title = "Edge Additions " if edge_additions else "Edge Deletions "
     if sens_attr == "gender":
         title += "of Males " if group_edge_del == m_idx else "of Females "
+        real_group_map = None
+        m_label, f_label = "M", "F"
     else:
         title += "of Younger " if group_edge_del == m_idx else "of Older "
+        real_group_map = {'M': 'Y', 'F': 'O'}
+        m_label, f_label = "Y", "O"
     title += "Optimized on " + f"{exp_rec_data.title()} Data"
 
     df_test_result = None
@@ -261,6 +265,8 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
         df = pd.DataFrame(df_data, columns=columns)
         df["Group"] = df["Group"].map(group_map.__getitem__)
+        if real_group_map is not None:
+            df["Group"] = df["Group"].map(real_group_map.__getitem__)
 
         if data_info != "test":
             df_test_result_data = []
@@ -286,19 +292,19 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             plot_df = df[df["metric"] == metric].copy()
             plot_df.rename(columns={"value": metr_str}, inplace=True)
 
-            rec_m_val = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-            rec_f_val = plot_df.loc[plot_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+            rec_m_val = plot_df.loc[plot_df['Group'] == m_label].sort_values("Epoch")[metr_str].to_numpy()
+            rec_f_val = plot_df.loc[plot_df['Group'] == f_label].sort_values("Epoch")[metr_str].to_numpy()
             rec_intersects = np.argwhere(np.diff(np.sign(rec_m_val - rec_f_val))).flatten()
-            rec_x_intersects = plot_df.loc[plot_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
+            rec_x_intersects = plot_df.loc[plot_df['Group'] == m_label].sort_values("Epoch")["Epoch"].iloc[rec_intersects].to_numpy()
 
             if data_info != "test":
                 plot_test_df = df_test_result[df_test_result["metric"] == metric].copy()
                 plot_test_df.rename(columns={"value": metr_str}, inplace=True)
 
-                test_m_val = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")[metr_str].to_numpy()
-                test_f_val = plot_test_df.loc[plot_test_df['Group'] == "F"].sort_values("Epoch")[metr_str].to_numpy()
+                test_m_val = plot_test_df.loc[plot_test_df['Group'] == m_label].sort_values("Epoch")[metr_str].to_numpy()
+                test_f_val = plot_test_df.loc[plot_test_df['Group'] == f_label].sort_values("Epoch")[metr_str].to_numpy()
                 test_intersects = np.argwhere(np.diff(np.sign(test_m_val - test_f_val))).flatten()
-                test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == "M"].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
+                test_x_intersects = plot_test_df.loc[plot_test_df['Group'] == m_label].sort_values("Epoch")["Epoch"].iloc[test_intersects].to_numpy()
             else:
                 plot_test_df, test_m_val, test_f_val, test_intersects, test_x_intersects = [None] * 5
 
@@ -323,10 +329,10 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
                 off_margin_ticks(ax_metric_diff, ax_del_edges)
 
-            df_diff = plot_df.loc[plot_df["Group"] == "M", ["Epoch"]].copy()
+            df_diff = plot_df.loc[plot_df["Group"] == m_label, ["Epoch"]].copy()
             df_diff[metr_str] = np.abs(
-                plot_df.loc[plot_df["Group"] == "M", metr_str].values -
-                plot_df.loc[plot_df["Group"] == "F", metr_str].values
+                plot_df.loc[plot_df["Group"] == m_label, metr_str].values -
+                plot_df.loc[plot_df["Group"] == f_label, metr_str].values
             )
             df_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
             df_diff["Source Eval Data"] = rec_str
@@ -343,10 +349,10 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                 df_diff = pd.concat([df_diff, df_fair_loss_df]).reset_index()
 
             if data_info != "test":
-                df_test_diff = plot_test_df.loc[plot_test_df["Group"] == "M", ["Epoch", "Group"]].copy()
+                df_test_diff = plot_test_df.loc[plot_test_df["Group"] == m_label, ["Epoch", "Group"]].copy()
                 df_test_diff[metr_str] = np.abs(
-                    plot_test_df.loc[plot_test_df["Group"] == "M", metr_str].values -
-                    plot_test_df.loc[plot_test_df["Group"] == "F", metr_str].values
+                    plot_test_df.loc[plot_test_df["Group"] == m_label, metr_str].values -
+                    plot_test_df.loc[plot_test_df["Group"] == f_label, metr_str].values
                 )
                 df_test_diff.rename(columns={metr_str: f"{metr_str} Diff"}, inplace=True)
 
@@ -356,7 +362,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             lines = []
             for ax, data_df, data_type in zip([ax_rec, ax_test], [plot_df, plot_test_df], [rec_str, "Test"]):
                 if ax is not None:
-                    ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=["M", "F"], ax=ax)
+                    ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=[m_label, f_label], ax=ax)
                     lines.append(ax_lines)
 
                     title_proxy = Rectangle((0, 0), 0, 0, color='w')
@@ -386,14 +392,14 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             #     ax_metric_diff.fill_between(eval_diff_df["Epoch"], eval_diff_df[f"{metr_str} Diff"], color=diff_colors[i], alpha=0.3, zorder=zorder)
             ax_metric_diff.grid(axis='y', ls=':')
 
-            sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=["M", "F"], ax=ax_del_edges)
+            sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=[m_label, f_label], ax=ax_del_edges)
 
             df_del_data_epoch_group = df_del_data.set_index(["Epoch", "Group"])
             max_epoch = df_del_data["Epoch"].max()
-            if df_del_data_epoch_group.loc[(max_epoch, "F"), edges_ylabel] <= df_del_data_epoch_group.loc[(max_epoch, "M"), edges_ylabel]:
-                lower_del_edges_group = "F"
+            if df_del_data_epoch_group.loc[(max_epoch, f_label), edges_ylabel] <= df_del_data_epoch_group.loc[(max_epoch, m_label), edges_ylabel]:
+                lower_del_edges_group = f_label
             else:
-                lower_del_edges_group = "M"
+                lower_del_edges_group = m_label
             ax_del_edges.annotate(
                 df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel + "Lab"],
                 (max_epoch, df_del_data_epoch_group.loc[(max_epoch, lower_del_edges_group), edges_ylabel])
