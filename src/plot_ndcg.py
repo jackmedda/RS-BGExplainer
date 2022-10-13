@@ -277,9 +277,13 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
             df_test_result = pd.DataFrame(df_test_result_data, columns=columns)
             df_test_result["Group"] = df_test_result["Group"].map(group_map.__getitem__)
+            if real_group_map is not None:
+                df_test_result["Group"] = df_test_result["Group"].map(real_group_map.__getitem__)
 
         df_del_data = pd.DataFrame(del_edge_data, columns=["Epoch", "Group", "del_edges"])
         df_del_data["Group"] = df_del_data["Group"].map(group_map.__getitem__)
+        if real_group_map is not None:
+            df_del_data["Group"] = df_del_data["Group"].map(real_group_map.__getitem__)
         df_del_data[edges_ylabel] = df_del_data["del_edges"].map(lambda x: x.shape[1])
         df_del_data[edges_ylabel + "Lab"] = (df_del_data[edges_ylabel] / train_data.dataset.inter_num * 100).map("{:.2f}%".format)
         df_del_data.sort_values(edges_ylabel, inplace=True)
