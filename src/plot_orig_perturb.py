@@ -5,6 +5,7 @@ import inspect
 import torch
 import numpy as np
 import pandas as pd
+import networkx as nx
 import scipy.stats as stats
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ from recbole.evaluator import Evaluator
 
 import src.utils as utils
 import src.explainers as explainers
+import src.utils.plot_utils as plot_utils
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -57,7 +59,7 @@ def barplot_annotate_brackets(num1, num2, diff, data, center, height, yerr=None,
     p_005 = '*'
     p_001 = '^'
 
-    text = f"Diff: {diff:.4f}"
+    text = f"Diff: {diff:.6f}"
     text += p_001 if data < 0.01 else (p_005 if data < 0.05 else '')
 
     lx, ly = center[num1], height[num1]
@@ -115,10 +117,11 @@ def plot_barplot_orig_pert(orig_m_ndcg, orig_f_ndcg, pert_m_ndcg, pert_f_ndcg, u
     )
 
     ax = sns.barplot(x="Graph Type", y="NDCG", hue="Group", order=["Original", "Perturbed"], hue_order=[m_idx, f_idx], data=df)
+    x_tick_mean = []
     for cp_bars, graph_type in zip([[0, 2], [1, 3]], ["Original", "Perturbed"]):
         gt_df = df[df["Graph Type"] == graph_type]
         m_vals, f_vals = gt_df.loc[gt_df["Group"] == m_idx, "NDCG"].values, gt_df.loc[gt_df["Group"] == f_idx, "NDCG"].values
-        stat = stats.f_oneway(m_vals, f_vals)
+        stat = stats.mannwhitneyu(m_vals, f_vals)
         mean_diff = abs(m_vals.mean() - f_vals.mean())
 
         barplot_annotate_brackets(
@@ -129,12 +132,169 @@ def plot_barplot_orig_pert(orig_m_ndcg, orig_f_ndcg, pert_m_ndcg, pert_f_ndcg, u
             dh=0.03,
             barh=0.01
         )
+        x_tick_mean.append(graph_type + f" {mean_diff:.6f}")
 
+    ax.set_xticklabels(x_tick_mean)
     ax.minorticks_on()
     ax.grid(axis='y', ls=':')
 
     plt.savefig(os.path.join(plots_path, f"{model_name}_orig_{pert_model_name}_{pert_model_file}.png"))
     plt.tight_layout()
+    plt.close()
+
+
+def graph_statistics(pert_config,
+                     orig_train_dataset,
+                     orig_valid_dataset,
+                     orig_test_dataset,
+                     pert_dataset,
+                     orig_model_name,
+                     sens_attr,
+                     c_id,
+                     exp_type,
+                     exp_value,
+                     short_head=0.05):
+    orig_model_name = os.path.splitext(os.path.basename(orig_model_name))[0].split('-')[0] if '-' in orig_model_name else orig_model_name
+
+    group_name_map = {
+        "M": "Males",
+        "F": "Females",
+        "Y": "Younger",
+        "O": "Older"
+    }
+    m_label, f_label = ("M", "F") if sens_attr == "gender" else ("Y", "O")
+    m_idx, f_idx = (orig_train_dataset.dataset.field2token_id[sens_attr][lab] for lab in ["M", "F"])
+
+    user_feat = orig_train_dataset.dataset.user_feat
+    user_df = pd.DataFrame({'user_id': user_feat['user_id'].numpy(), sens_attr: user_feat[sens_attr].numpy()})
+
+    m_group, f_group = (user_feat[sens_attr] == m_idx).nonzero().T[0].numpy() - 1,\
+                       (user_feat[sens_attr] == f_idx).nonzero().T[0].numpy() - 1
+
+    sens_attr_map = dict(zip(np.concatenate([m_group, f_group]), [m_label] * len(m_group) + [f_label] * len(f_group)))
+
+    _, _, orig_item_pop = orig_train_dataset.dataset.history_user_matrix()
+    _, _, pert_item_pop = pert_dataset.dataset.history_user_matrix()
+
+    orig_item_pop, pert_item_pop = orig_item_pop[1:].numpy(), pert_item_pop[1:].numpy()
+
+    orig_item_pop, pert_item_pop = np.argsort(orig_item_pop)[::-1], np.argsort(pert_item_pop)[::-1]
+
+    orig_sh_n, pert_sh_n = round(len(orig_item_pop) * short_head), round(len(pert_item_pop) * short_head)
+    orig_short_head, orig_long_tail = np.split(orig_item_pop, [orig_sh_n])
+    pert_short_head, pert_long_tail = np.split(pert_item_pop, [pert_sh_n])
+
+    orig_sh_pop = dict(zip(
+        np.concatenate([orig_short_head, orig_long_tail]),
+        ["Short Head"] * len(orig_short_head) + ["Long Tail"] * len(orig_long_tail)
+    ))
+    pert_sh_pop = dict(zip(
+        np.concatenate([pert_short_head, pert_long_tail]),
+        ["Short Head"] * len(pert_short_head) + ["Long Tail"] * len(pert_long_tail)
+    ))
+
+    evaluator = Evaluator(pert_config)
+    edge_additions = pert_config['edge_additions']
+    cf_epochs = pert_config['cf_epochs']
+    exp_rec_data = pert_config['exp_rec_data']
+    delete_adv_group = pert_config['delete_adv_group']
+    rec_data = locals()[f"orig_{exp_rec_data}_dataset"]
+
+    exp_path = os.path.join(script_path, 'dp_ndcg_explanations', orig_train_dataset.dataset.dataset_name,
+                            orig_model_name, "FairDP", sens_attr, f"epochs_{cf_epochs}", str(c_id))
+
+    # Does not matter which explanation we take if we evaluate just the recommendations of the original model
+    exp_rec_df, rec_result_data = plot_utils.extract_best_metrics(
+        {f'{orig_model_name}+FairDP': exp_path},
+        "first",
+        evaluator,
+        rec_data.dataset
+    )
+
+    orig_m_ndcg = rec_result_data[orig_model_name]["ndcg"][
+        (m_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
+    ][:, -1].mean()
+
+    orig_f_ndcg = rec_result_data[orig_model_name]["ndcg"][
+        (f_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
+    ][:, -1].mean()
+
+    if orig_m_ndcg >= orig_f_ndcg:
+        if delete_adv_group is not None:
+            group_edge_del = m_idx if delete_adv_group else f_idx
+        else:
+            group_edge_del = m_idx
+    else:
+        if delete_adv_group is not None:
+            group_edge_del = f_idx if delete_adv_group else m_idx
+        else:
+            group_edge_del = f_idx
+    print(orig_train_dataset.dataset.field2id_token[sens_attr])
+    suptitle = f"{'Addition' if edge_additions else 'Deletions'} of Edges Connected to " \
+               f"{group_name_map[orig_train_dataset.dataset.field2id_token[sens_attr][group_edge_del]]}"
+
+    orig_nx = utils.get_nx_biadj_matrix(orig_train_dataset.dataset, remove_first_row_col=True)
+    pert_nx = utils.get_nx_biadj_matrix(pert_dataset.dataset, remove_first_row_col=True)
+
+    orig_top = {n for n, d in orig_nx.nodes(data=True) if d["bipartite"] == 0}
+    orig_bottom = set(orig_nx) - orig_top
+    pert_top = {n for n, d in pert_nx.nodes(data=True) if d["bipartite"] == 0}
+    pert_bottom = set(pert_nx) - pert_top
+
+    orig_node_type_map = dict(zip(orig_top, ["users"] * len(orig_top)))
+    pert_node_type_map = dict(zip(pert_top, ["users"] * len(pert_top)))
+    orig_node_type_map.update(dict(zip(orig_bottom, ["items"] * len(orig_bottom))))
+    pert_node_type_map.update(dict(zip(pert_bottom, ["items"] * len(pert_bottom))))
+
+    orig_centr = nx.bipartite.degree_centrality(orig_nx, orig_top)
+    pert_centr = nx.bipartite.degree_centrality(pert_nx, pert_top)
+
+    orig_top, orig_bottom = list(orig_top), list(orig_bottom)
+    pert_top, pert_bottom = list(pert_top), list(pert_bottom)
+    orig_df_data = zip(orig_top + orig_bottom, [orig_centr[n] for n in (orig_top + orig_bottom)])
+    pert_df_data = zip(pert_top + pert_bottom, [pert_centr[n] for n in (pert_top + pert_bottom)])
+
+    orig_df = pd.DataFrame(orig_df_data, columns=["node_id_minus_1", "Centrality"])
+    pert_df = pd.DataFrame(pert_df_data, columns=["node_id_minus_1", "Centrality"])
+
+    orig_df["Node Type"] = orig_df["node_id_minus_1"].map(orig_node_type_map)
+    pert_df["Node Type"] = pert_df["node_id_minus_1"].map(pert_node_type_map)
+
+    orig_user_df, orig_item_df = orig_df[orig_df["Node Type"] == "users"], orig_df[orig_df["Node Type"] == "items"]
+    pert_user_df, pert_item_df = pert_df[pert_df["Node Type"] == "users"], pert_df[pert_df["Node Type"] == "items"]
+
+    orig_user_df["Group"] = orig_user_df["node_id_minus_1"].map(sens_attr_map)
+    pert_user_df["Group"] = pert_user_df["node_id_minus_1"].map(sens_attr_map)
+
+    orig_item_df["Popularity"] = orig_item_df["node_id_minus_1"].map(lambda x: orig_sh_pop[int(x) - len(user_feat) + 1])
+    pert_item_df["Popularity"] = pert_item_df["node_id_minus_1"].map(lambda x: pert_sh_pop[int(x) - len(user_feat) + 1])
+
+    orig_user_df["Graph Type"], pert_user_df["Graph Type"] = "Original", "Perturbed"
+    user_df = pd.concat([orig_user_df, pert_user_df], ignore_index=True)
+
+    orig_item_df["Graph Type"], pert_item_df["Graph Type"] = "Original", "Perturbed"
+    item_df = pd.concat([orig_item_df, pert_item_df], ignore_index=True)
+
+    fig, axs = plt.subplots(2, 2, sharey=True)
+    sns.kdeplot(x="Centrality", data=user_df[user_df["Group"] == m_label], hue="Graph Type", ax=axs[0, 0])
+    sns.kdeplot(x="Centrality", data=user_df[user_df["Group"] == f_label], hue="Graph Type", ax=axs[0, 1])
+
+    axs[0, 0].set_title(group_name_map[m_label])
+    axs[0, 1].set_title(group_name_map[f_label])
+
+    sns.kdeplot(x="Centrality", data=item_df[item_df["Popularity"] == "Short Head"], hue="Graph Type", ax=axs[1, 0])
+    sns.kdeplot(x="Centrality", data=item_df[item_df["Popularity"] == "Long Tail"], hue="Graph Type", ax=axs[1, 1])
+
+    axs[1, 0].set_title("Short Head")
+    axs[1, 1].set_title("Long Tail")
+
+    fig.suptitle(suptitle)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(
+        get_plots_path(orig_train_dataset.dataset, orig_model_name, pert_config['cf_epochs'], sens_attr),
+        f"kdeplot_orig_perturbed_{orig_model_name}_{c_id}__{exp_type}_{exp_value}.png"
+    ))
     plt.close()
 
 

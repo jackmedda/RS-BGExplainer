@@ -123,8 +123,10 @@ def get_nx_adj_matrix(config, dataset):
     return nx.Graph(A)
 
 
-def get_nx_biadj_matrix(dataset):
+def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
     inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
+    if remove_first_row_col:
+        inter_matrix = inter_matrix[1:, 1:]
 
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
@@ -147,6 +149,27 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
     result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
 
     return result
+
+
+def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, metric="ndcg", raw=False):
+    m_idx, f_idx = group_idxs
+
+    _m_ndcg = compute_metric(
+        evaluator,
+        data.dataset,
+        pref_data.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
+        'topk_pred',
+        metric
+    )[:, -1]
+    _f_ndcg = compute_metric(
+        evaluator,
+        data.dataset,
+        pref_data.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
+        'topk_pred',
+        metric
+    )[:, -1]
+
+    return (_m_ndcg, _f_ndcg) if raw else (_m_ndcg.mean(), _f_ndcg.mean())
 
 
 def compute_uniform_categories_prob(_item_df, n_categories, raw=False):

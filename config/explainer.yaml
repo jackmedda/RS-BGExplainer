@@ -5,7 +5,7 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 8000 # 1200 for NDCGApprox
+cf_learning_rate: 12000 # 1200 for NDCGApprox
 
 momentum: 0.0
 # epochs to generate explanations
@@ -33,10 +33,6 @@ edge_additions: False
 exp_rec_data: "valid"
 
 # device: cpu
-
-# It explains the predictions for all the users in the dataset on a single graph or for each demographic group
-group_explain: True
-group_explain_by: gender
 
 # "local": the optimization uses the NDCG of the disadvantaged group computed locally for the current batch
 # "global": the optimization uses the NDCG of the disadvantaged group computed globally on the original model
@@ -81,7 +77,7 @@ eval_args:
 
 # Early stopping parameters
 earlys_patience: 5
-earlys_ignore: 0
+earlys_ignore: 2
 earlys_method: 'consistency'
 earlys_fn: 'lt'
 earlys_delta: 0.0001

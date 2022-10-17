@@ -13,7 +13,7 @@ from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
 from src.explain_dp_ndcg import execute_explanation
-from src.plot_orig_perturb import prepare_data
+from src.plot_orig_perturb import prepare_data, graph_statistics
 from src.utils import utils
 
 
@@ -86,8 +86,8 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     dataset = create_dataset(config)
     logger.info(dataset)
 
-    if args.run == 'evaluate_perturbed':
-        orig_config, orig_model, orig_dataset, orig_train_data, _, orig_test_data = \
+    if args.run == 'evaluate_perturbed' or args.run == 'graph_stats':
+        orig_config, orig_model, orig_dataset, orig_train_data, orig_valid_data, orig_test_data = \
             utils.load_data_and_model(args.original_model_file, args.explainer_config_file)
 
     if args.use_perturbed_graph:
@@ -223,6 +223,19 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
                     topk=args.topk,
                     perturbed_model_file=os.path.splitext(os.path.basename(args.model_file))[0]
                 )
+            elif args.run == 'graph_stats':
+                pert_config, _, _, pert_train_data, _, _ = utils.load_data_and_model(args.model_file, args.explainer_config_file)
+                runner(
+                    pert_config,
+                    orig_train_data,
+                    orig_valid_data,
+                    orig_test_data,
+                    pert_train_data,
+                    args.original_model_file,
+                    sens_attr,
+                    c_id,
+                    *args.best_exp
+                )
         finally:
             # Restore train validation test splits
             for spl in splits:
@@ -263,7 +276,7 @@ if __name__ == "__main__":
         "All the arguments related to evaluate the original and the perturbed model"
     )
 
-    train_group.add_argument('--run', default='train', choices=['train', 'explain', 'evaluate_perturbed'], required=True)
+    train_group.add_argument('--run', default='train', choices=['train', 'explain', 'evaluate_perturbed', 'graph_stats'], required=True)
     train_group.add_argument('--model', default='GCMC')
     train_group.add_argument('--dataset', default='ml-100k')
     train_group.add_argument('--config_file_list', nargs='+', default=None)
@@ -292,6 +305,8 @@ if __name__ == "__main__":
         runner = execute_explanation
     elif args.run == 'evaluate_perturbed':
         runner = prepare_data
+    elif args.run == 'graph_stats':  # only works with --use_perturbed_graph
+        runner = graph_statistics
     else:
         raise NotImplementedError(f"The run `{args.run}` is not supported.")
 
