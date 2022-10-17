@@ -62,7 +62,7 @@ for model_file, c_id in zip(args.model_files, args.load_config_ids):
                                                                                           args.explainer_config_file)
 
     if dataset.dataset_name not in axs:
-        sub_kwargs = {'sharey': axs[-1]} if len(axs) > 0 else {}
+        sub_kwargs = {'sharey': list(axs.values())[0]} if len(axs) > 0 else {}
         axs[dataset.dataset_name] = fig.add_subplot(1, args.n_datasets, len(axs) + 1, **sub_kwargs)
 
     model_name = model.__class__.__name__
