@@ -172,6 +172,27 @@ def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, gro
     return (_m_ndcg, _f_ndcg) if raw else (_m_ndcg.mean(), _f_ndcg.mean())
 
 
+def chunk_categorize(array_1d, n_chunks=10):
+    array_1d = np.asarray(array_1d)
+    a_min, a_max = array_1d.min(), array_1d.max()
+    step = np.abs(a_max - a_min) / n_chunks
+    if issubclass(array_1d.dtype.type, np.integer):
+        step = round(step)
+
+    mapped_a = np.empty_like(array_1d)
+    for chunk in range(1, n_chunks + 1):
+        if chunk == 1:
+            mask = array_1d < step * chunk + a_min
+        elif chunk == n_chunks + 1:
+            mask = array_1d > step * chunk
+        else:
+            mask = (array_1d >= step * (chunk - 1) + a_min) & (array_1d <= step * chunk + a_min)
+
+        mapped_a[mask] = step * chunk
+
+    return mapped_a
+
+
 def compute_uniform_categories_prob(_item_df, n_categories, raw=False):
     uni_cat_prob = np.zeros(n_categories)
     for cat_list in _item_df['class']:

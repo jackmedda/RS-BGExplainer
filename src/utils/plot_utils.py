@@ -4,6 +4,7 @@ import tqdm
 import scipy
 import numpy as np
 import pandas as pd
+import networkx as nx
 import matplotlib.pyplot as plt
 
 import src.utils as utils
@@ -263,6 +264,119 @@ def result_data_per_epoch_per_group(exp_dfs, evaluator, group_idxs: tuple, user_
             fair_loss_per_epoch[e_type][epoch] = epoch_df.iloc[0]['fair_loss']
 
     return result_per_epoch, del_edges_per_epoch, fair_loss_per_epoch
+
+
+def get_adv_group_idx_to_delete(exp_path,
+                                orig_model_name,
+                                evaluator,
+                                rec_data,
+                                user_feat,
+                                delete_adv_group,
+                                sens_attr="gender",
+                                m_idx=1,
+                                f_idx=2):
+    m_group, f_group = (user_feat[sens_attr] == m_idx).nonzero().T[0].numpy() - 1, \
+                       (user_feat[sens_attr] == f_idx).nonzero().T[0].numpy() - 1
+
+    # Does not matter which explanation we take if we evaluate just the recommendations of the original model
+    exp_rec_df, rec_result_data = extract_best_metrics(
+        {f'{orig_model_name}+FairDP': exp_path},
+        "first",
+        evaluator,
+        rec_data.dataset
+    )
+
+    orig_m_ndcg = rec_result_data[orig_model_name]["ndcg"][
+                      (m_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
+                  ][:, -1].mean()
+
+    orig_f_ndcg = rec_result_data[orig_model_name]["ndcg"][
+                      (f_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
+                  ][:, -1].mean()
+
+    if orig_m_ndcg >= orig_f_ndcg:
+        if delete_adv_group is not None:
+            group_edge_del = m_idx if delete_adv_group else f_idx
+        else:
+            group_edge_del = m_idx
+    else:
+        if delete_adv_group is not None:
+            group_edge_del = f_idx if delete_adv_group else m_idx
+        else:
+            group_edge_del = f_idx
+
+    return group_edge_del
+
+
+def get_centrality_graph_df(graph_nx, top, original=True, sens_attr_map=None):
+    label = "Original" if original else "Perturbed"
+
+    bottom = set(graph_nx) - top
+
+    node_type_map = dict(zip(top, ["users"] * len(top)))
+    node_type_map.update(dict(zip(bottom, ["items"] * len(bottom))))
+
+    centr = nx.bipartite.degree_centrality(graph_nx, top)
+
+    top, bottom = list(top), list(bottom)
+    df_data = zip(top + bottom, [centr[n] for n in (top + bottom)])
+
+    df = pd.DataFrame(df_data, columns=["node_id_minus_1", "Centrality"])
+
+    df["Node Type"] = df["node_id_minus_1"].map(node_type_map)
+
+    user_df, item_df = df[df["Node Type"] == "users"], df[df["Node Type"] == "items"]
+
+    if sens_attr_map is not None:
+        user_df["Group"] = user_df["node_id_minus_1"].map(sens_attr_map)
+
+    user_df["Graph Type"], item_df["Graph Type"] = label, label
+
+    return user_df, item_df
+
+
+def get_data_sh_lt(dataloader, short_head=0.05):
+    """
+    Get items id mapping to short head and long tails labels
+    :param dataloader:
+    :param short_head:
+    :return:
+    """
+    _, _, item_pop = dataloader.dataset.history_user_matrix()
+
+    item_pop = item_pop[1:].numpy()
+
+    item_pop = np.argsort(item_pop)[::-1]
+
+    sh_n = round(len(item_pop) * short_head)
+    short_head, long_tail = np.split(item_pop, [sh_n])
+
+    return dict(zip(
+        np.concatenate([short_head, long_tail]),
+        ["Short Head"] * len(short_head) + ["Long Tail"] * len(long_tail)
+    ))
+
+
+def get_data_active_inactive(dataloader, inactive_perc=0.3):
+    """
+    Get users id mapping to active and inactive labels
+    :param dataloader:
+    :param inactive_perc:
+    :return:
+    """
+    _, _, user_inters = dataloader.dataset.history_item_matrix()
+
+    user_inters = user_inters[1:].numpy()
+
+    user_inters = np.argsort(user_inters)
+
+    inactive_n = round(len(user_inters) * inactive_perc)
+    inactive, active = np.split(user_inters, [inactive_n])
+
+    return dict(zip(
+        np.concatenate([inactive, active]),
+        ["Inactive"] * len(inactive) + ["Active"] * len(active)
+    ))
 
 
 def off_margin_ticks(*axs):

@@ -153,7 +153,9 @@ def graph_statistics(pert_config,
                      c_id,
                      exp_type,
                      exp_value,
-                     short_head=0.05):
+                     short_head_perc=0.05,
+                     inactive_perc=0.3,
+                     n_chunks=10):
     orig_model_name = os.path.splitext(os.path.basename(orig_model_name))[0].split('-')[0] if '-' in orig_model_name else orig_model_name
 
     group_name_map = {
@@ -166,32 +168,14 @@ def graph_statistics(pert_config,
     m_idx, f_idx = (orig_train_dataset.dataset.field2token_id[sens_attr][lab] for lab in ["M", "F"])
 
     user_feat = orig_train_dataset.dataset.user_feat
-    user_df = pd.DataFrame({'user_id': user_feat['user_id'].numpy(), sens_attr: user_feat[sens_attr].numpy()})
 
     m_group, f_group = (user_feat[sens_attr] == m_idx).nonzero().T[0].numpy() - 1,\
                        (user_feat[sens_attr] == f_idx).nonzero().T[0].numpy() - 1
 
     sens_attr_map = dict(zip(np.concatenate([m_group, f_group]), [m_label] * len(m_group) + [f_label] * len(f_group)))
 
-    _, _, orig_item_pop = orig_train_dataset.dataset.history_user_matrix()
-    _, _, pert_item_pop = pert_dataset.dataset.history_user_matrix()
-
-    orig_item_pop, pert_item_pop = orig_item_pop[1:].numpy(), pert_item_pop[1:].numpy()
-
-    orig_item_pop, pert_item_pop = np.argsort(orig_item_pop)[::-1], np.argsort(pert_item_pop)[::-1]
-
-    orig_sh_n, pert_sh_n = round(len(orig_item_pop) * short_head), round(len(pert_item_pop) * short_head)
-    orig_short_head, orig_long_tail = np.split(orig_item_pop, [orig_sh_n])
-    pert_short_head, pert_long_tail = np.split(pert_item_pop, [pert_sh_n])
-
-    orig_sh_pop = dict(zip(
-        np.concatenate([orig_short_head, orig_long_tail]),
-        ["Short Head"] * len(orig_short_head) + ["Long Tail"] * len(orig_long_tail)
-    ))
-    pert_sh_pop = dict(zip(
-        np.concatenate([pert_short_head, pert_long_tail]),
-        ["Short Head"] * len(pert_short_head) + ["Long Tail"] * len(pert_long_tail)
-    ))
+    orig_sh_pop = plot_utils.get_data_sh_lt(orig_train_dataset, short_head=short_head_perc)
+    pert_sh_pop = plot_utils.get_data_sh_lt(pert_dataset, short_head=short_head_perc)
 
     evaluator = Evaluator(pert_config)
     edge_additions = pert_config['edge_additions']
@@ -203,97 +187,115 @@ def graph_statistics(pert_config,
     exp_path = os.path.join(script_path, 'dp_ndcg_explanations', orig_train_dataset.dataset.dataset_name,
                             orig_model_name, "FairDP", sens_attr, f"epochs_{cf_epochs}", str(c_id))
 
-    # Does not matter which explanation we take if we evaluate just the recommendations of the original model
-    exp_rec_df, rec_result_data = plot_utils.extract_best_metrics(
-        {f'{orig_model_name}+FairDP': exp_path},
-        "first",
+    group_edge_del = plot_utils.get_adv_group_idx_to_delete(
+        exp_path,
+        orig_model_name,
         evaluator,
-        rec_data.dataset
+        rec_data,
+        user_feat,
+        delete_adv_group,
+        sens_attr=sens_attr,
+        m_idx=m_idx,
+        f_idx=f_idx
     )
 
-    orig_m_ndcg = rec_result_data[orig_model_name]["ndcg"][
-        (m_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
-    ][:, -1].mean()
-
-    orig_f_ndcg = rec_result_data[orig_model_name]["ndcg"][
-        (f_group[:, None] == (exp_rec_df[f'{orig_model_name}+FairDP'].user_id.values - 1)).nonzero()[1]
-    ][:, -1].mean()
-
-    if orig_m_ndcg >= orig_f_ndcg:
-        if delete_adv_group is not None:
-            group_edge_del = m_idx if delete_adv_group else f_idx
-        else:
-            group_edge_del = m_idx
-    else:
-        if delete_adv_group is not None:
-            group_edge_del = f_idx if delete_adv_group else m_idx
-        else:
-            group_edge_del = f_idx
-    print(orig_train_dataset.dataset.field2id_token[sens_attr])
     suptitle = f"{'Addition' if edge_additions else 'Deletions'} of Edges Connected to " \
                f"{group_name_map[orig_train_dataset.dataset.field2id_token[sens_attr][group_edge_del]]}"
 
-    orig_nx = utils.get_nx_biadj_matrix(orig_train_dataset.dataset, remove_first_row_col=True)
-    pert_nx = utils.get_nx_biadj_matrix(pert_dataset.dataset, remove_first_row_col=True)
+    orig_graph_nx = utils.get_nx_biadj_matrix(orig_train_dataset.dataset, remove_first_row_col=True)
 
-    orig_top = {n for n, d in orig_nx.nodes(data=True) if d["bipartite"] == 0}
-    orig_bottom = set(orig_nx) - orig_top
-    pert_top = {n for n, d in pert_nx.nodes(data=True) if d["bipartite"] == 0}
-    pert_bottom = set(pert_nx) - pert_top
+    orig_top = {n for n, d in orig_graph_nx.nodes(data=True) if d["bipartite"] == 0}
+    orig_bottom = set(orig_graph_nx) - orig_top
 
-    orig_node_type_map = dict(zip(orig_top, ["users"] * len(orig_top)))
-    pert_node_type_map = dict(zip(pert_top, ["users"] * len(pert_top)))
-    orig_node_type_map.update(dict(zip(orig_bottom, ["items"] * len(orig_bottom))))
-    pert_node_type_map.update(dict(zip(pert_bottom, ["items"] * len(pert_bottom))))
+    pert_graph_nx = utils.get_nx_biadj_matrix(orig_train_dataset.dataset, remove_first_row_col=True)
 
-    orig_centr = nx.bipartite.degree_centrality(orig_nx, orig_top)
-    pert_centr = nx.bipartite.degree_centrality(pert_nx, pert_top)
+    pert_top = {n for n, d in pert_graph_nx.nodes(data=True) if d["bipartite"] == 0}
+    pert_bottom = set(pert_graph_nx) - pert_top
 
-    orig_top, orig_bottom = list(orig_top), list(orig_bottom)
-    pert_top, pert_bottom = list(pert_top), list(pert_bottom)
-    orig_df_data = zip(orig_top + orig_bottom, [orig_centr[n] for n in (orig_top + orig_bottom)])
-    pert_df_data = zip(pert_top + pert_bottom, [pert_centr[n] for n in (pert_top + pert_bottom)])
-
-    orig_df = pd.DataFrame(orig_df_data, columns=["node_id_minus_1", "Centrality"])
-    pert_df = pd.DataFrame(pert_df_data, columns=["node_id_minus_1", "Centrality"])
-
-    orig_df["Node Type"] = orig_df["node_id_minus_1"].map(orig_node_type_map)
-    pert_df["Node Type"] = pert_df["node_id_minus_1"].map(pert_node_type_map)
-
-    orig_user_df, orig_item_df = orig_df[orig_df["Node Type"] == "users"], orig_df[orig_df["Node Type"] == "items"]
-    pert_user_df, pert_item_df = pert_df[pert_df["Node Type"] == "users"], pert_df[pert_df["Node Type"] == "items"]
-
-    orig_user_df["Group"] = orig_user_df["node_id_minus_1"].map(sens_attr_map)
-    pert_user_df["Group"] = pert_user_df["node_id_minus_1"].map(sens_attr_map)
+    orig_user_df, orig_item_df = plot_utils.get_centrality_graph_df(orig_graph_nx, orig_top, original=True, sens_attr_map=sens_attr_map)
+    pert_user_df, pert_item_df = plot_utils.get_centrality_graph_df(pert_graph_nx, pert_top, original=False, sens_attr_map=sens_attr_map)
 
     orig_item_df["Popularity"] = orig_item_df["node_id_minus_1"].map(lambda x: orig_sh_pop[int(x) - len(user_feat) + 1])
     pert_item_df["Popularity"] = pert_item_df["node_id_minus_1"].map(lambda x: pert_sh_pop[int(x) - len(user_feat) + 1])
 
-    orig_user_df["Graph Type"], pert_user_df["Graph Type"] = "Original", "Perturbed"
-    user_df = pd.concat([orig_user_df, pert_user_df], ignore_index=True)
+    orig_activity_map = plot_utils.get_data_active_inactive(orig_train_dataset, inactive_perc=inactive_perc)
+    pert_activity_map = plot_utils.get_data_active_inactive(pert_dataset, inactive_perc=inactive_perc)
 
-    orig_item_df["Graph Type"], pert_item_df["Graph Type"] = "Original", "Perturbed"
+    orig_user_df["Activity"] = orig_user_df["node_id_minus_1"].map(orig_activity_map)
+    pert_user_df["Activity"] = pert_user_df["node_id_minus_1"].map(pert_activity_map)
+
+    user_df = pd.concat([orig_user_df, pert_user_df], ignore_index=True)
     item_df = pd.concat([orig_item_df, pert_item_df], ignore_index=True)
 
-    fig, axs = plt.subplots(2, 2, sharey=True)
-    sns.kdeplot(x="Centrality", data=user_df[user_df["Group"] == m_label], hue="Graph Type", ax=axs[0, 0])
-    sns.kdeplot(x="Centrality", data=user_df[user_df["Group"] == f_label], hue="Graph Type", ax=axs[0, 1])
+    fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+    for i, (gr, gr_df) in enumerate(user_df.groupby("Group")):
+        sns.kdeplot(x="Centrality", data=gr_df, hue="Graph Type", ax=axs[0, i])
+        axs[0, i].set_title(group_name_map[gr])
 
-    axs[0, 0].set_title(group_name_map[m_label])
-    axs[0, 1].set_title(group_name_map[f_label])
-
-    sns.kdeplot(x="Centrality", data=item_df[item_df["Popularity"] == "Short Head"], hue="Graph Type", ax=axs[1, 0])
-    sns.kdeplot(x="Centrality", data=item_df[item_df["Popularity"] == "Long Tail"], hue="Graph Type", ax=axs[1, 1])
-
-    axs[1, 0].set_title("Short Head")
-    axs[1, 1].set_title("Long Tail")
+    for i, (pop, pop_df) in enumerate(item_df.groupby("Popularity")):
+        sns.kdeplot(x="Centrality", data=pop_df, hue="Graph Type", ax=axs[1, i])
+        axs[1, i].set_title(pop)
 
     fig.suptitle(suptitle)
 
     fig.tight_layout()
     fig.savefig(os.path.join(
         get_plots_path(orig_train_dataset.dataset, orig_model_name, pert_config['cf_epochs'], sens_attr),
-        f"kdeplot_orig_perturbed_{orig_model_name}_{c_id}__{exp_type}_{exp_value}.png"
+        f"kdeplot_popularity_orig_perturbed_{orig_model_name}_{c_id}__{exp_type}_{exp_value}.png"
+    ))
+    plt.close()
+
+    # for col in ['Centrality', '#Interactions']:
+    #     _n_ch = n_chunks[col] if isinstance(n_chunks, dict) else n_chunks
+    #     user_df[col] = utils.chunk_categorize(user_df[col], n_chunks=_n_ch)
+    #
+    # fig, axs = plt.subplots(1, 2, sharey=True, sharex=True)
+    # for i, (gr, gr_df) in enumerate(user_df.groupby("Group")):
+    #     # df_counts = gr_df.groupby(['Graph Type', 'Centrality', '#Interactions']).size().reset_index(name='counts')
+    #     # sns.stripplot(x="Centrality", y="#Interactions", data=df_counts, size=df_counts.counts, hue="Graph Type", ax=axs[i])
+    #     sns.jointplot(x="Centrality", y="#Interactions", data=gr_df, hue="Graph Type")#, ax=axs[i])
+    #     plt.show()
+    #     axs[i].set_title(group_name_map[gr])
+    #
+    # # sns.lmplot(x="Centrality", y="#Interactions", data=user_df, row="Graph Type", col="Group")
+    # fig.suptitle(suptitle)
+    #
+    # fig.tight_layout()
+    # fig.savefig(os.path.join(
+    #     get_plots_path(orig_train_dataset.dataset, orig_model_name, pert_config['cf_epochs'], sens_attr),
+    #     f"jointplot_orig_perturbed_{orig_model_name}_{c_id}__{exp_type}_{exp_value}.png"
+    # ))
+    # plt.close()
+
+    # for u_df, graph_nx in zip([orig_user_df, pert_user_df], [orig_graph_nx, pert_graph_nx]):
+    #     u_idxed_df = u_df.set_index("node_id_minus_1")
+    #     nhbors_data = []
+    #     for u in u_idxed_df.index:
+    #         item_nhbors = list(graph_nx.neighbors(u))
+    #         unq_user_nhbors = set()
+    #         for item in item_nhbors:
+    #             unq_user_nhbors |= set(graph_nx.neighbors(item))
+    #         unq_user_nhbors = np.array(list(unq_user_nhbors))
+    #         nhbors_data.append([
+    #             np.intersect1d(unq_user_nhbors, m_group).shape[0],
+    #             np.intersect1d(unq_user_nhbors, f_group).shape[0]
+    #         ])
+    #     u_df[[f"#{m_label} Neighbors", f"#{f_label} Neighbors"]] = nhbors_data
+
+    # TODO: add information of percentage of edges deleted/added for each group
+
+    fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+    axs_1d = axs.ravel()
+    for i, ((gr, act), gr_df) in enumerate(user_df.groupby(["Group", "Activity"])):
+        sns.kdeplot(x="Centrality", data=gr_df, hue="Graph Type", ax=axs_1d[i])
+        axs_1d[i].set_title(f"{act} {group_name_map[gr]}")
+
+    fig.suptitle(suptitle)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(
+        get_plots_path(orig_train_dataset.dataset, orig_model_name, pert_config['cf_epochs'], sens_attr),
+        f"kdeplot_activity_orig_perturbed_{orig_model_name}_{c_id}__{exp_type}_{exp_value}.png"
     ))
     plt.close()
 
