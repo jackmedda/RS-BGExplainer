@@ -227,7 +227,7 @@ def graph_statistics(pert_config,
     user_df = pd.concat([orig_user_df, pert_user_df], ignore_index=True)
     item_df = pd.concat([orig_item_df, pert_item_df], ignore_index=True)
 
-    fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+    fig, axs = plt.subplots(2, 2, sharex="row", sharey=True)
     for i, (gr, gr_df) in enumerate(user_df.groupby("Group")):
         sns.kdeplot(x="Centrality", data=gr_df, hue="Graph Type", ax=axs[0, i])
         axs[0, i].set_title(group_name_map[gr])
@@ -284,7 +284,7 @@ def graph_statistics(pert_config,
 
     # TODO: add information of percentage of edges deleted/added for each group
 
-    fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
+    fig, axs = plt.subplots(2, 2, sharex="row", sharey=True)
     axs_1d = axs.ravel()
     for i, ((gr, act), gr_df) in enumerate(user_df.groupby(["Group", "Activity"])):
         sns.kdeplot(x="Centrality", data=gr_df, hue="Graph Type", ax=axs_1d[i])
