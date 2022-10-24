@@ -56,19 +56,19 @@ def get_base_exps_filepath(config, config_id=-1):
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
-            i = 1
+            paths_c_ids = sorted(os.listdir(base_exps_file), key=int)
             for path_c in sorted(os.listdir(base_exps_file), key=int):
                 config_path = os.path.join(base_exps_file, path_c, 'config.pkl')
                 if os.path.exists(config_path):
                     with open(config_path, 'rb') as f:
                         _c = pickle.load(f)
                     if config.final_config_dict == _c.final_config_dict:
+                        base_exps_file = os.path.join(base_exps_file, str(i))
                         break
-                i += 1
 
-            base_exps_file = os.path.join(base_exps_file, str(i))
-        else:
-            base_exps_file = os.path.join(base_exps_file, str(config_id))
+            config_id = 1 if len(paths_c_ids) == 0 else max(paths_c_ids, key=int)
+
+        base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
         base_exps_file = os.path.join(base_exps_file, "1")
 
