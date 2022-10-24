@@ -205,7 +205,7 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             #     zorder = 1 if eval_type == "ApproxNDCG Loss" else 2
             #     ax_metric_diff.fill_between(eval_diff_df["Epoch"], eval_diff_df[f"{metr_str} Diff"], color=diff_colors[i], alpha=0.3, zorder=zorder)
             ax_metric_diff.grid(axis='y', ls=':')
-            ax_metric_diff.legend(*ax_metric_diff.get_legend_handles_labels(), n_cols=3)
+            ax_metric_diff.legend(*ax_metric_diff.get_legend_handles_labels(), ncol=3)
 
             sns.lineplot(x="Epoch", y=edges_ylabel, hue="Group", data=df_del_data, palette=colors, hue_order=[m_label, f_label], ax=ax_del_edges)
 

@@ -357,11 +357,12 @@ def get_data_sh_lt(dataloader, short_head=0.05):
     ))
 
 
-def get_data_active_inactive(dataloader, inactive_perc=0.3):
+def get_data_active_inactive(dataloader, inactive_perc=0.3, group_mask=None):
     """
     Get users id mapping to active and inactive labels
     :param dataloader:
     :param inactive_perc:
+    :param group_mask:
     :return:
     """
     _, _, user_inters = dataloader.dataset.history_item_matrix()

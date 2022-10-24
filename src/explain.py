@@ -66,7 +66,7 @@ def get_base_exps_filepath(config, config_id=-1):
                         base_exps_file = os.path.join(base_exps_file, str(path_c))
                         break
 
-            config_id = 1 if len(paths_c_ids) == 0 else max(paths_c_ids, key=int)
+            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
 
         base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
