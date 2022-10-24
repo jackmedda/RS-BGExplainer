@@ -50,8 +50,8 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
-            i = 1
-            for path_c in sorted(os.listdir(base_exps_file), key=int):
+            paths_c_ids = sorted(os.listdir(base_exps_file), key=int)
+            for path_c in paths_c_ids:
                 config_path = os.path.join(base_exps_file, path_c, 'config.pkl')
                 if os.path.exists(config_path):
                     with open(config_path, 'rb') as f:
@@ -63,12 +63,12 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
                                                   "y/yes to confirm this outcome. Other inputs will assign a new id: ")
                             if check_perturb.lower() != "y" and check_perturb.lower() != "yes":
                                 continue
+                        base_exps_file = os.path.join(base_exps_file, str(path_c))
                         break
-                i += 1
 
-            base_exps_file = os.path.join(base_exps_file, str(i))
-        else:
-            base_exps_file = os.path.join(base_exps_file, str(config_id))
+            config_id = 1 if len(paths_c_ids) == 0 else max(paths_c_ids, key=int)
+
+        base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
         base_exps_file = os.path.join(base_exps_file, "1")
 
