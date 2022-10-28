@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mpl_tick
 from adjustText import adjust_text
 from matplotlib.lines import Line2D
-from recbole.evaluator import Evaluator
 from matplotlib.patches import Rectangle
+from recbole.evaluator import Evaluator
 
 import src.utils.utils as utils
 import src.utils.plot_utils as plot_utils
@@ -277,8 +277,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
 
 # %%
 def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_id, n_bins=10, hist_type="test", test_f="f_oneway"):
-    sensitive_map = train_data.dataset.field2id_token[sens_attr]
-
     order = [model_name, model_dp_s]
 
     P_005 = '*'
@@ -299,21 +297,13 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
 
         del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
 
-        d_grs = np.arange(1, len(sensitive_map))
+        d_grs = np.arange(1, len(attr_map))
 
         exp_data, stats_data, final_bins = plot_utils.compute_exp_stats_data(
             _result_all_data, _pref_dfs, orig_result, order, sens_attr, user_df, d_grs, del_edges_map, metric, test_f=test_f
         )
 
-        # plot_vals = []
-        # for row, stat in zip(exp_data, stats_data):
-        #     plot_vals.append([])
-        #     for j in range(len(final_bins)):
-        #         if row:
-        #             plot_vals[-1].append(f"{row[j]:.4f}"
-        #                                  f"{P_001 if stat[j] < 0.01 else (P_005 if stat[j] < 0.05 else '')}")
-        #         else:
-        #             plot_vals[-1].append("-")
+        exp_data = np.asarray(exp_data)
 
         final_bins = ['-'.join(map(lambda x: f"{int(x) / train_data.dataset.inter_num * 100:.2f}%", bin.split('-')))
                       for bin in final_bins]
@@ -332,9 +322,232 @@ def create_lineplot_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_res
 
 
 # %%
-def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_id, n_bins=10, hist_type="test", test_f="f_oneway"):
-    sensitive_map = train_data.dataset.field2id_token[sens_attr]
+def create_metric_access_over_del_edges_per_group(
+    _result_all_data,
+    _pref_dfs,
+    orig_result,
+    config_id,
+    hist_type="test",
+    zerometric=False
+):
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges']]
 
+    uid_list = next(pref_df.groupby('n_del_edges').__iter__())[1].user_id.to_numpy()
+    joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
+    joint_df[sens_attr] = joint_df[sens_attr].map(attr_map.__getitem__)
+    joint_df[sens_attr] = joint_df[sens_attr].map(real_group_map)
+
+    plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
+    if not os.path.exists(plots_path):
+        os.makedirs(plots_path)
+
+    for metric in metrics_names:
+        metric_df_index = ['user_id', 'n_del_edges']
+        metric_df_cols = ['user_id', metric.upper(), 'n_del_edges', 'Graph Type']
+
+        if zerometric:
+            zerometric_s = "_zero_metric"
+            zero_users = uid_list[orig_result[metric][:, -1] == 0]
+        else:
+            zerometric_s = ""
+            zero_users = None
+
+        fig, axs = plt.subplots(1 + zerometric, joint_df[sens_attr].unique().shape[0], figsize=(20, 12), sharey=True)
+        for i, (group, gr_df) in enumerate(joint_df.groupby(sens_attr)):
+            del_edges_perc = np.fromiter(_result_all_data[model_dp_s].keys(), int)
+            del_edges_perc = dict(zip(
+                del_edges_perc,
+                [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
+            ))
+
+            gr_df['n_del_edges'] = gr_df['n_del_edges'].map(del_edges_perc)
+
+            plot_metric_df = [[], []]
+            for n_del in _result_all_data[model_dp_s]:
+                for gt_i, (gt, m_data) in enumerate(zip(["Perturbed", "Original"], [_result_all_data[model_dp_s][n_del], orig_result])):
+                    plot_metric_df[gt_i].extend(list(zip(
+                        uid_list,
+                        m_data[metric][:, -1].tolist(),
+                        [f"{n_del / train_data.dataset.inter_num * 100:.2f}%"] * len(uid_list),
+                        [gt] * len(uid_list)
+                    )))
+
+            for gt_i, gt in enumerate(["Perturbed", "Original"]):
+                plot_metric_df[gt_i] = pd.DataFrame(plot_metric_df[gt_i], columns=metric_df_cols)
+                plot_metric_df[gt_i] = gr_df.join(
+                    plot_metric_df[gt_i].set_index(metric_df_index),
+                    on=metric_df_index
+                ).reset_index(drop=True)
+
+            plot_df = pd.concat(plot_metric_df, ignore_index=True)
+            plot_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+            if zerometric:
+                mask = plot_df.user_id.isin(zero_users)
+                plot_zero_df, plot_nonzero_df = plot_df[mask], plot_df[~mask]
+
+                sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_zero_df, fliersize=0, ax=axs[0, i])
+                sns.lineplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type",
+                             data=plot_zero_df[plot_zero_df["Graph Type"] == "Perturbed"], ax=axs[0, i])
+
+                sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_nonzero_df, fliersize=0, ax=axs[1, i])
+                sns.lineplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type",
+                             data=plot_nonzero_df[plot_nonzero_df["Graph Type"] == "Perturbed"], ax=axs[1, i])
+
+                axs[0, i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[group]]} with {metric.upper()} = 0")
+                axs[1, i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[group]]} with {metric.upper()} ≠ 0")
+            else:
+                sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_df, fliersize=0, ax=axs[i])
+                sns.lineplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_df[plot_df["Graph Type"] == "Perturbed"], ax=axs[i])
+
+                axs[i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[group]]}")
+
+        fig.suptitle(title)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_path, f"{hist_type}_{metric}_access_plot_over_edges_{sens_attr}{zerometric_s}.png"))
+        plt.close()
+
+
+# %%
+def create_user_user_homophily_plot_over_del_edges_per_group(
+    _pref_dfs,
+    config_id,
+    hist_type="test"
+):
+    del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
+    del_edges_perc = dict(zip(
+        del_edges_perc,
+        [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
+    ))
+
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
+    pref_df['n_del_edges'] = pref_df['n_del_edges'].map(del_edges_perc)
+    pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+
+    joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
+    joint_df[sens_attr] = joint_df[sens_attr].map(attr_map.__getitem__)
+    joint_df[sens_attr] = joint_df[sens_attr].map(real_group_map)
+
+    sens_groups = joint_df[sens_attr].unique()
+
+    orig_user_graph_df = plot_utils.get_user_user_data_sens_df(train_data.dataset, user_df, sens_attr, attr_map=attr_map.__getitem__)
+    gr_sizes = (user_df[sens_attr].map(attr_map.__getitem__).value_counts() / (user_df.shape[0] - 1)).to_dict()
+    orig_user_homophily = plot_utils.compute_homophily(orig_user_graph_df, gr_sizes, sens_attr)
+
+    plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
+    if not os.path.exists(plots_path):
+        os.makedirs(plots_path)
+
+    plot_df_cols = ['Graph Type', 'User-User Homophily', sens_attr, edges_ylabel]
+
+    plot_data_df = [[], []]
+    joint_df_gr = joint_df.groupby(edges_ylabel)
+    for del_i, n_del in enumerate(del_edges_perc):
+        del_df = joint_df_gr.get_group(del_edges_perc[n_del])
+        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data)
+
+        pert_user_graph_df = plot_utils.get_user_user_data_sens_df(pert_train_dataset, user_df, sens_attr, attr_map=attr_map.__getitem__)
+        del_user_df = user_df[user_df['user_id'].isin(pert_train_dataset.inter_feat[uid_field].unique().numpy())]
+        pert_gr_sizes = (del_user_df[sens_attr].map(attr_map.__getitem__).value_counts() / (del_user_df.shape[0])).to_dict()
+
+        pert_user_homophily = plot_utils.compute_homophily(pert_user_graph_df, pert_gr_sizes, sens_attr)
+
+        for gr in sens_groups:
+            for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_user_homophily[gr], orig_user_homophily[gr]])):
+                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+
+    for gt_i, gt in enumerate(["Perturbed", "Original"]):
+        plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
+
+    plot_df = pd.concat(plot_data_df, ignore_index=True)
+
+    fig, axs = plt.subplots(1, sens_groups.shape[0], figsize=(20, 12), sharey=True)
+    for i, gr in enumerate(sens_groups):
+        sns.lineplot(x=edges_ylabel, y="User-User Homophily", hue="Graph Type",
+                     data=plot_df[plot_df[sens_attr] == gr], ax=axs[i], ci=None)
+        axs[i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[gr]]}")
+
+    fig.suptitle(title)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_path, f"{hist_type}_user_user_homophily_plot_over_edges_per_{sens_attr}_group.png"))
+    plt.close()
+
+
+# %%
+def create_item_item_homophily_plot_over_del_edges_per_popularity(
+    _pref_dfs,
+    config_id,
+    hist_type="test",
+    short_head=0.05
+):
+    pop_label = 'Popularity'
+
+    del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
+    del_edges_perc = dict(zip(
+        del_edges_perc,
+        [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
+    ))
+
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
+    pref_df['n_del_edges'] = pref_df['n_del_edges'].map(del_edges_perc)
+    pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+
+    item_df = pd.DataFrame({
+        'item_id': train_data.dataset.item_feat['item_id'].numpy()
+    })
+    orig_sh_pop = plot_utils.get_data_sh_lt(train_data, short_head=short_head)
+    orig_sh_pop = {k + 1: v for k, v in orig_sh_pop.items()}
+    item_df[pop_label] = item_df['item_id'].map(orig_sh_pop)
+
+    pop_groups = list(set(orig_sh_pop.values()))
+
+    orig_item_graph_df = plot_utils.get_item_item_data_pop_df(train_data.dataset, item_df, pop_label)
+    gr_sizes = (item_df[pop_label].value_counts() / (item_df.shape[0] - 1)).to_dict()
+    orig_item_homophily = plot_utils.compute_homophily(orig_item_graph_df, gr_sizes, pop_label)
+
+    plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
+    if not os.path.exists(plots_path):
+        os.makedirs(plots_path)
+
+    plot_df_cols = ['Graph Type', 'Item-Item Homophily', pop_label, edges_ylabel]
+
+    plot_data_df = [[], []]
+    pref_df_gr = pref_df.groupby(edges_ylabel)
+    for del_i, n_del in enumerate(del_edges_perc):
+        del_df = pref_df_gr.get_group(del_edges_perc[n_del])
+        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data)
+
+        pert_item_graph_df = plot_utils.get_item_item_data_pop_df(pert_train_dataset, item_df, pop_label)
+        del_item_df = item_df[item_df['item_id'].isin(pert_train_dataset.inter_feat[iid_field].unique().numpy())]
+        pert_gr_sizes = (del_item_df[pop_label].value_counts() / (del_item_df.shape[0])).to_dict()
+
+        pert_item_homophily = plot_utils.compute_homophily(pert_item_graph_df, pert_gr_sizes, pop_label)
+
+        for gr in pop_groups:
+            for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_item_homophily[gr], orig_item_homophily[gr]])):
+                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+
+    for gt_i, gt in enumerate(["Perturbed", "Original"]):
+        plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
+
+    plot_df = pd.concat(plot_data_df, ignore_index=True)
+
+    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12), sharey=True)
+    for i, gr in enumerate(pop_groups):
+        sns.lineplot(x=edges_ylabel, y="Item-Item Homophily", hue="Graph Type",
+                     data=plot_df[plot_df[pop_label] == gr], ax=axs[i], ci=None)
+        axs[i].set_title(f"{pop_label}: {gr}")
+
+    fig.suptitle(title)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_path, f"{hist_type}_item_item_homophily_plot_over_edges_per_{sens_attr}_popularity.png"))
+    plt.close()
+
+
+# %%
+def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result, config_id, n_bins=10, hist_type="test", test_f="f_oneway"):
     order = [model_name, model_dp_s]
 
     P_005 = '*'
@@ -355,7 +568,7 @@ def create_table_metrics_over_del_edges(_result_all_data, _pref_dfs, orig_result
 
         del_edges_map = {x: bin_map[x // bin_size] for x in del_edges}
 
-        d_grs = np.arange(1, len(sensitive_map))
+        d_grs = np.arange(1, len(attr_map))
 
         exp_data, stats_data, final_bins = plot_utils.compute_exp_stats_data(
             _result_all_data, _pref_dfs, orig_result, order, sens_attr, user_df, d_grs, del_edges_map, metric, test_f=test_f
@@ -428,7 +641,7 @@ parser.add_argument('--explainer_config_file', default=os.path.join("config", "e
 parser.add_argument('--load_config_id', type=str, default="1", help="model_name + '+FairDP'")
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args() # r"--model_file src\saved\GCMC-ML100K-Jun-01-2022_13-28-01.pth --explainer_config_file config\gcmc_explainer.yaml --load_config_id 3".split())
+args = parser.parse_args()  # r"--model_file saved\LightGCN-ML-100K-Oct-04-2022_19-50-30.pth --explainer_config_file config\explainer.yaml --load_config_id 14".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -447,6 +660,7 @@ sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'
 attr_map = dataset.field2id_token[sens_attr]
 f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 user_num, item_num = dataset.user_num, dataset.item_num
+uid_field, iid_field = dataset.uid_field, dataset.iid_field
 evaluator = Evaluator(config)
 
 metrics_names = evaluator.metrics
@@ -548,6 +762,23 @@ else:
     else:
         group_edge_del = f_idx
 
+edges_ylabel = "% Del Edges" if not edge_additions else "% Added Edges"
+title = "Edge Additions " if edge_additions else "Edge Deletions "
+if sens_attr == "gender":
+    title += "of Males " if group_edge_del == m_idx else "of Females "
+    real_group_map = {'M': 'M', 'F': 'F'}
+else:
+    title += "of Younger " if group_edge_del == m_idx else "of Older "
+    real_group_map = {'M': 'Y', 'F': 'O'}
+title += "Optimized on " + f"{exp_rec_data.title()} Data"
+
+group_name_map = {
+    "M": "Males",
+    "F": "Females",
+    "Y": "Younger",
+    "O": "Older"
+}
+
 test_result_per_epoch_per_group, test_del_edges_per_epoch, test_fair_loss_per_epoch = plot_utils.result_data_per_epoch_per_group(
     all_exp_test_dfs,
     evaluator,
@@ -565,39 +796,94 @@ rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch
     sens_attr
 )
 
-# %%
-plot_lineplot_per_epoch_per_group(
-    test_result_per_epoch_per_group,
-    test_del_edges_per_epoch,
-    test_fair_loss_per_epoch,
-    (test_orig_m_ndcg, test_orig_f_ndcg),
-    data_info="test"
-)
-plot_lineplot_per_epoch_per_group(
-    rec_result_per_epoch_per_group,
-    rec_del_edges_per_epoch,
-    rec_fair_loss_per_epoch,
-    (rec_orig_m_ndcg, rec_orig_f_ndcg),
-    test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
-    data_info=exp_rec_data
-)
+# # %%
+# plot_lineplot_per_epoch_per_group(
+#     test_result_per_epoch_per_group,
+#     test_del_edges_per_epoch,
+#     test_fair_loss_per_epoch,
+#     (test_orig_m_ndcg, test_orig_f_ndcg),
+#     data_info="test"
+# )
+# plot_lineplot_per_epoch_per_group(
+#     rec_result_per_epoch_per_group,
+#     rec_del_edges_per_epoch,
+#     rec_fair_loss_per_epoch,
+#     (rec_orig_m_ndcg, rec_orig_f_ndcg),
+#     test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
+#     data_info=exp_rec_data
+# )
+#
+# # %%
+# create_table_metrics_over_del_edges(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     args.load_config_id,
+#     n_bins=100,
+#     hist_type="test",
+#     test_f="f_oneway"
+# )
+# create_table_metrics_over_del_edges(
+#     rec_result_all_data,
+#     all_exp_rec_dfs,
+#     best_rec_result[model_name],
+#     args.load_config_id,
+#     n_bins=10,
+#     hist_type=exp_rec_data,
+#     test_f="f_oneway"
+# )
+#
+# create_lineplot_metrics_over_del_edges(
+#     rec_result_all_data,
+#     all_exp_rec_dfs,
+#     best_rec_result[model_name],
+#     args.load_config_id,
+#     n_bins=10,
+#     hist_type=exp_rec_data,
+#     test_f="f_oneway"
+# )
+#
+# # %%
+# create_metric_access_over_del_edges_per_group(
+#     rec_result_all_data,
+#     all_exp_rec_dfs,
+#     best_rec_result[model_name],
+#     args.load_config_id,
+#     hist_type=exp_rec_data,
+#     zerometric=True
+# )
+#
+# create_metric_access_over_del_edges_per_group(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     args.load_config_id,
+#     hist_type="test",
+#     zerometric=True
+# )
+
+# # %%
+# create_user_user_homophily_plot_over_del_edges_per_group(
+#     all_exp_rec_dfs,
+#     args.load_config_id,
+#     hist_type=exp_rec_data
+# )
+#
+# create_user_user_homophily_plot_over_del_edges_per_group(
+#     all_exp_test_dfs,
+#     args.load_config_id,
+#     hist_type="test"
+# )
 
 # %%
-create_table_metrics_over_del_edges(
-    test_result_all_data,
-    all_exp_test_dfs,
-    best_test_result[model_name],
-    args.load_config_id,
-    n_bins=100,
-    hist_type="test",
-    test_f="f_oneway"
-)
-create_table_metrics_over_del_edges(
-    rec_result_all_data,
+create_item_item_homophily_plot_over_del_edges_per_popularity(
     all_exp_rec_dfs,
-    best_rec_result[model_name],
     args.load_config_id,
-    n_bins=10,
-    hist_type=exp_rec_data,
-    test_f="f_oneway"
+    hist_type=exp_rec_data
+)
+
+create_item_item_homophily_plot_over_del_edges_per_popularity(
+    all_exp_test_dfs,
+    args.load_config_id,
+    hist_type="test"
 )

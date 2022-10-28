@@ -1,12 +1,14 @@
 import os
 import copy
 import pickle
+import itertools
 from logging import getLogger
 from collections import defaultdict
 
 import yaml
 import torch
 import scipy
+import numba
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -14,6 +16,7 @@ import recbole.evaluator.collector as recb_collector
 from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
+from recbole.data.interaction import Interaction
 
 EXPS_COLUMNS = [
     "user_id",
@@ -105,6 +108,50 @@ def load_dp_exps_file(base_exps_file):
     return exps
 
 
+def get_dataset_with_perturbed_edges(df, train_data):
+    user_num = train_data.dataset.user_num
+    uid_field, iid_field = train_data.dataset.uid_field, train_data.dataset.iid_field
+
+    del_edges = torch.tensor(df['del_edges'].iloc[0].copy())
+    del_edges[1] -= user_num  # remap items in range [0, user_num)
+
+    orig_inter_feat = train_data.dataset.inter_feat
+    pert_inter_feat = {}
+    for i, col in enumerate([uid_field, iid_field]):
+        pert_inter_feat[col] = torch.cat((orig_inter_feat[col], del_edges[i]))
+
+    unique, counts = torch.stack(
+        (pert_inter_feat[uid_field], pert_inter_feat[iid_field]),
+    ).unique(dim=1, return_counts=True)
+    pert_inter_feat[uid_field], pert_inter_feat[iid_field] = unique[:, counts == 1]
+
+    return train_data.dataset.copy(Interaction(pert_inter_feat))
+
+
+def get_adj_from_inter_matrix(inter_matrix, num_all, n_users):
+    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
+    inter_M = inter_matrix
+    inter_M_t = inter_matrix.transpose()
+    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
+    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
+    A._update(data_dict)
+    return A.tocoo()
+
+
+def get_adj_matrix(interaction_matrix,
+                   num_all,
+                   n_users):
+    A = get_adj_from_inter_matrix(interaction_matrix, num_all, n_users)
+    row = A.row
+    col = A.col
+    i = torch.LongTensor(np.stack([row, col], axis=0))
+    data = torch.FloatTensor(A.data)
+    adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
+    edge_subset = [torch.LongTensor(i)]
+
+    return adj, edge_subset[0]
+
+
 def get_nx_adj_matrix(config, dataset):
     USER_ID = config['USER_ID_FIELD']
     ITEM_ID = config['ITEM_ID_FIELD']
@@ -112,14 +159,8 @@ def get_nx_adj_matrix(config, dataset):
     n_items = dataset.num(ITEM_ID)
     inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
     num_all = n_users + n_items
+    A = get_adj_from_inter_matrix(inter_matrix, num_all, n_users)
 
-    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
-    inter_M = inter_matrix
-    inter_M_t = inter_matrix.transpose()
-    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
-    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
-    A._update(data_dict)
-    A = A.tocoo()
     return nx.Graph(A)
 
 
@@ -129,6 +170,20 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
         inter_matrix = inter_matrix[1:, 1:]
 
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
+
+
+@numba.jit(nopython=True, parallel=True)
+def get_node_node_graph_data(history):
+    n_nodes = history.shape[0]
+    node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.integer)  # number of combinations
+    for n1 in numba.prange(n_nodes):
+        for n2 in numba.prange(n1, n_nodes - 1):
+            # minus 1 because the history contain the padding node 0
+            node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1)] = [
+                n1, n2 + 1, np.intersect1d(history[n1], history[n2 + 1]).shape[0] - 1
+            ]
+
+    return node_node
 
 
 def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
@@ -361,26 +416,6 @@ def dense2d_to_sparse_without_nonzero(tensor):
     indices = torch.stack((x_idxs, y_idxs)).to(tensor.device)
     values = tensor[nonzero]
     return torch.sparse.FloatTensor(indices, values, torch.Size((x, y)))
-
-
-def get_adj_matrix(interaction_matrix,
-                   num_all,
-                   n_users):
-    A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
-    inter_M = interaction_matrix
-    inter_M_t = interaction_matrix.transpose()
-    data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
-    data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
-    A._update(data_dict)
-    A = A.tocoo()
-    row = A.row
-    col = A.col
-    i = torch.LongTensor(np.stack([row, col], axis=0))
-    data = torch.FloatTensor(A.data)
-    adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
-    edge_subset = [torch.LongTensor(i)]
-
-    return adj, edge_subset[0]
 
 
 def create_symm_matrix_from_sparse_tril(tril):

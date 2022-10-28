@@ -5,9 +5,8 @@ import sys
 import time
 import math
 import copy
-import itertools
 from logging import getLogger
-from typing import Iterable, Tuple, Callable
+from typing import Tuple, Callable
 
 import tqdm
 import torch
@@ -511,7 +510,8 @@ class DPBGExplainer:
             # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
             cf_dist = None
 
-            del_edges = adj_sub_cf_adj.detach().cpu().to_dense().nonzero().T
+            adj_del_edges = adj_sub_cf_adj.detach().cpu()
+            del_edges = adj_del_edges.indices()[:, adj_del_edges.values().nonzero().squeeze()]
 
             del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].numpy()  # remove duplicated edges
 

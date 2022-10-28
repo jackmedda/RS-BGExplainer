@@ -357,12 +357,11 @@ def get_data_sh_lt(dataloader, short_head=0.05):
     ))
 
 
-def get_data_active_inactive(dataloader, inactive_perc=0.3, group_mask=None):
+def get_data_active_inactive(dataloader, inactive_perc=0.3):
     """
     Get users id mapping to active and inactive labels
     :param dataloader:
     :param inactive_perc:
-    :param group_mask:
     :return:
     """
     _, _, user_inters = dataloader.dataset.history_item_matrix()
@@ -378,6 +377,56 @@ def get_data_active_inactive(dataloader, inactive_perc=0.3, group_mask=None):
         np.concatenate([inactive, active]),
         ["Inactive"] * len(inactive) + ["Active"] * len(active)
     ))
+
+
+def get_user_user_data_sens_df(dataset, user_df, sens_attr, attr_map=None):
+    user_history, _, _ = dataset.history_item_matrix()
+    user_graph_df = get_node_node_data_feature_df(user_history.numpy(), user_df, 'user_id', sens_attr, attr_map=attr_map)
+
+    return user_graph_df
+
+
+def get_item_item_data_pop_df(dataset, item_df, pop_attr):
+    item_history, _, _ = dataset.history_user_matrix()
+    item_graph_df = get_node_node_data_feature_df(item_history.numpy(), item_df, 'item_id', pop_attr)
+
+    return item_graph_df
+
+
+def get_node_node_data_feature_df(history, node_df, id_label, feat_attr, attr_map=None):
+    graph = utils.get_node_node_graph_data(history)
+    graph = graph[(graph[:, 0] != 0) & (graph[:, 1] != 0), :]
+
+    graph_df = pd.DataFrame(graph, columns=[f'{id_label}_1', f'{id_label}_2', 'n_common_edges'])
+    graph_df = graph_df.join(
+        node_df.set_index(id_label), on=f"{id_label}_1"
+    ).reset_index(drop=True).rename(columns={feat_attr: f"{feat_attr}_1"})
+
+    if attr_map is not None:
+        graph_df[f"{feat_attr}_1"] = graph_df[f"{feat_attr}_1"].map(attr_map)
+
+    graph_df = graph_df.join(
+        node_df.set_index(id_label), on=f'{id_label}_2'
+    ).reset_index(drop=True).rename(columns={feat_attr: f"{feat_attr}_2"})
+
+    if attr_map is not None:
+        graph_df[f"{feat_attr}_2"] = graph_df[f"{feat_attr}_2"].map(attr_map)
+
+    return graph_df
+
+
+def compute_homophily(graph_df, group_sizes, feat_attr):
+    homophily = {}
+    for (gr1, gr2), gr_df in graph_df.groupby([f"{feat_attr}_1", f"{feat_attr}_2"]):
+        if gr1 == gr2:
+            all_gr_edges = graph_df.loc[
+                (graph_df[f"{feat_attr}_1"] == gr1) |  # interactions of gr1 with any group (also gr1)
+                ((graph_df[f"{feat_attr}_2"] == gr1) & (graph_df[f"{feat_attr}_1"] != gr1)),  # interactions from gr2 to gr1
+                'n_common_edges'
+            ].sum()
+            homophily[gr1] = gr_df['n_common_edges'].sum() / all_gr_edges - group_sizes[gr1]
+
+    return homophily
 
 
 def off_margin_ticks(*axs):
