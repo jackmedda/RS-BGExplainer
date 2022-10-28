@@ -172,15 +172,38 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
 
-@numba.jit(nopython=True, parallel=True)
+# @numba.jit(nopython=True, parallel=True)
+# def get_node_node_graph_data2(history):
+#     hist = [set(h) for h in history]
+#     n_nodes = history.shape[0]
+#     node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.integer)  # number of combinations
+#     for n1 in numba.prange(n_nodes):
+#         for n2 in numba.prange(n1, n_nodes - 1):
+#             # minus 1 because the history contain the padding node 0
+#             node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1)] = [
+#                 n1, n2 + 1, len(hist[n1] & hist[n2 + 1]) - 1
+#             ]
+#
+#     return node_node
+
+
 def get_node_node_graph_data(history):
     n_nodes = history.shape[0]
-    node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.integer)  # number of combinations
-    for n1 in numba.prange(n_nodes):
-        for n2 in numba.prange(n1, n_nodes - 1):
-            # minus 1 because the history contain the padding node 0
-            node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1)] = [
-                n1, n2 + 1, np.intersect1d(history[n1], history[n2 + 1]).shape[0] - 1
+    combs = np.stack((np.repeat(np.arange(n_nodes), n_nodes), np.tile(np.arange(n_nodes), n_nodes)), axis=0)
+    return _get_node_node_graph_data(history, combs)
+
+
+@numba.jit(nopython=True, parallel=True)
+def _get_node_node_graph_data(history, combs):
+    hist = [set(h) for h in history]
+    n_nodes = history.shape[0]
+    node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.int32)  # number of combinations
+    for i in numba.prange(combs.shape[1]):
+        n1, n2 = combs[:, i]
+        # minus 1 because the history contain the padding node 0
+        if n1 < n2:  # only unique combinations
+            node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1 - 1)] = [
+                n1, n2, len(hist[n1] & hist[n2]) - 1
             ]
 
     return node_node
