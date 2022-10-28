@@ -454,7 +454,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
 
         for gr in sens_groups:
             for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_user_homophily[gr], orig_user_homophily[gr]])):
-                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+                plot_data_df[gt_i].append((gt, hom_data, gr, del_edges_perc[n_del]))
 
     for gt_i, gt in enumerate(["Perturbed", "Original"]):
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
@@ -526,7 +526,7 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
 
         for gr in pop_groups:
             for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_item_homophily[gr], orig_item_homophily[gr]])):
-                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+                plot_data_df[gt_i].append((gt, hom_data, gr, del_edges_perc[n_del]))
 
     for gt_i, gt in enumerate(["Perturbed", "Original"]):
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
