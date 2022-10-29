@@ -415,13 +415,8 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
     hist_type="test"
 ):
     del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
-    del_edges_perc = dict(zip(
-        del_edges_perc,
-        [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
-    ))
 
     pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
-    pref_df['n_del_edges'] = pref_df['n_del_edges'].map(del_edges_perc)
     pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
 
     joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
@@ -443,7 +438,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
     plot_data_df = [[], []]
     joint_df_gr = joint_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
-        del_df = joint_df_gr.get_group(del_edges_perc[n_del])
+        del_df = joint_df_gr.get_group(n_del)
         pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data)
 
         pert_user_graph_df = plot_utils.get_user_user_data_sens_df(pert_train_dataset, user_df, sens_attr, attr_map=attr_map.__getitem__)
@@ -454,7 +449,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
 
         for gr in sens_groups:
             for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_user_homophily[gr], orig_user_homophily[gr]])):
-                plot_data_df[gt_i].append((gt, hom_data, gr, del_edges_perc[n_del]))
+                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
 
     for gt_i, gt in enumerate(["Perturbed", "Original"]):
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
@@ -466,6 +461,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
         sns.lineplot(x=edges_ylabel, y="User-User Homophily", hue="Graph Type",
                      data=plot_df[plot_df[sens_attr] == gr], ax=axs[i], ci=None)
         axs[i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[gr]]}")
+        axs[i].xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
 
     fig.suptitle(title)
 
@@ -484,13 +480,8 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
     pop_label = 'Popularity'
 
     del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
-    del_edges_perc = dict(zip(
-        del_edges_perc,
-        [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
-    ))
 
     pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
-    pref_df['n_del_edges'] = pref_df['n_del_edges'].map(del_edges_perc)
     pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
 
     item_df = pd.DataFrame({
@@ -515,7 +506,7 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
     plot_data_df = [[], []]
     pref_df_gr = pref_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
-        del_df = pref_df_gr.get_group(del_edges_perc[n_del])
+        del_df = pref_df_gr.get_group(n_del)
         pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data)
 
         pert_item_graph_df = plot_utils.get_item_item_data_pop_df(pert_train_dataset, item_df, pop_label)
@@ -526,18 +517,19 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
 
         for gr in pop_groups:
             for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_item_homophily[gr], orig_item_homophily[gr]])):
-                plot_data_df[gt_i].append((gt, hom_data, gr, del_edges_perc[n_del]))
+                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
 
     for gt_i, gt in enumerate(["Perturbed", "Original"]):
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
 
     plot_df = pd.concat(plot_data_df, ignore_index=True)
 
-    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12), sharey=True)
+    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12), sharey=False)
     for i, gr in enumerate(pop_groups):
         sns.lineplot(x=edges_ylabel, y="Item-Item Homophily", hue="Graph Type",
                      data=plot_df[plot_df[pop_label] == gr], ax=axs[i], ci=None)
         axs[i].set_title(f"{pop_label}: {gr}")
+        axs[i].xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
 
     fig.suptitle(title)
 
@@ -862,18 +854,18 @@ rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch
 #     zerometric=True
 # )
 
-# # %%
-# create_user_user_homophily_plot_over_del_edges_per_group(
-#     all_exp_rec_dfs,
-#     args.load_config_id,
-#     hist_type=exp_rec_data
-# )
-#
-# create_user_user_homophily_plot_over_del_edges_per_group(
-#     all_exp_test_dfs,
-#     args.load_config_id,
-#     hist_type="test"
-# )
+# %%
+create_user_user_homophily_plot_over_del_edges_per_group(
+    all_exp_rec_dfs,
+    args.load_config_id,
+    hist_type=exp_rec_data
+)
+
+create_user_user_homophily_plot_over_del_edges_per_group(
+    all_exp_test_dfs,
+    args.load_config_id,
+    hist_type="test"
+)
 
 # %%
 create_item_item_homophily_plot_over_del_edges_per_popularity(

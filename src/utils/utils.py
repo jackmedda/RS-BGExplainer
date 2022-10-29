@@ -190,14 +190,17 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
 def get_node_node_graph_data(history):
     n_nodes = history.shape[0]
     combs = np.stack((np.repeat(np.arange(n_nodes), n_nodes), np.tile(np.arange(n_nodes), n_nodes)), axis=0)
+
     return _get_node_node_graph_data(history, combs)
 
 
 @numba.jit(nopython=True, parallel=True)
 def _get_node_node_graph_data(history, combs):
     hist = [set(h) for h in history]
-    n_nodes = history.shape[0]
+    n_nodes = history.shape[0] - 1  # removed padding 0
     node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.int32)  # number of combinations
+    combs = combs[:, (combs[1] > combs[0]) & (combs[0] != 0) & (combs[1] != 0)]  # does not compute for padding node 0
+
     for i in numba.prange(combs.shape[1]):
         n1, n2 = combs[:, i]
         # minus 1 because the history contain the padding node 0
