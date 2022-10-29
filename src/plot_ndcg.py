@@ -421,7 +421,6 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
 
     joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
     joint_df[sens_attr] = joint_df[sens_attr].map(attr_map.__getitem__)
-    joint_df[sens_attr] = joint_df[sens_attr].map(real_group_map)
 
     sens_groups = joint_df[sens_attr].unique()
 
@@ -455,11 +454,12 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
 
     plot_df = pd.concat(plot_data_df, ignore_index=True)
+    plot_df[sens_attr] = plot_df[sens_attr].map(real_group_map)
 
     fig, axs = plt.subplots(1, sens_groups.shape[0], figsize=(20, 12), sharey=True)
     for i, gr in enumerate(sens_groups):
         sns.lineplot(x=edges_ylabel, y="User-User Homophily", hue="Graph Type",
-                     data=plot_df[plot_df[sens_attr] == gr], ax=axs[i], ci=None)
+                     data=plot_df[plot_df[sens_attr] == real_group_map[gr]], ax=axs[i], ci=None)
         axs[i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[gr]]}")
         axs[i].xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
 
