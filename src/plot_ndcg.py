@@ -708,21 +708,31 @@ all_exp_test_dfs, test_result_all_data, test_n_users_data_all, test_topk_dist_al
     sens_attr,
     rec=False
 )
-all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = plot_utils.extract_all_exp_metrics_data(
-    exp_paths,
-    train_data,
-    rec_data.dataset,
-    evaluator,
-    sens_attr,
-    rec=True
-)
+
+if exp_rec_data != "test":
+    all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = plot_utils.extract_all_exp_metrics_data(
+        exp_paths,
+        train_data,
+        rec_data.dataset,
+        evaluator,
+        sens_attr,
+        rec=True
+    )
+else:
+    all_exp_rec_dfs, rec_result_all_data, rec_n_users_data_all, rec_topk_dist_all = [None] * 4
 
 # Does not matter which explanation we take if we evaluate just the recommendations of the original model
 exp_test_df = all_exp_test_dfs[model_dp_s][all_exp_test_dfs[model_dp_s]["epoch"] == all_exp_test_dfs[model_dp_s]["epoch"].unique()[0]]
-exp_rec_df = all_exp_rec_dfs[model_dp_s][all_exp_rec_dfs[model_dp_s]["epoch"] == all_exp_rec_dfs[model_dp_s]["epoch"].unique()[0]]
+if exp_rec_data != "test":
+    exp_rec_df = all_exp_rec_dfs[model_dp_s][all_exp_rec_dfs[model_dp_s]["epoch"] == all_exp_rec_dfs[model_dp_s]["epoch"].unique()[0]]
+else:
+    exp_rec_df = None
 
 test_orig_total_ndcg = utils.compute_metric(evaluator, test_data.dataset, exp_test_df, 'topk_pred', 'ndcg')
-rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, exp_rec_df, 'topk_pred', 'ndcg')
+if exp_rec_data != "test":
+    rec_orig_total_ndcg = utils.compute_metric(evaluator, rec_data.dataset, exp_rec_df, 'topk_pred', 'ndcg')
+else:
+    rec_orig_total_ndcg = None
 
 test_orig_m_ndcg, test_orig_f_ndcg = utils.compute_metric_per_group(
     evaluator,
@@ -733,17 +743,23 @@ test_orig_m_ndcg, test_orig_f_ndcg = utils.compute_metric_per_group(
     (m_idx, f_idx),
     metric="ndcg"
 )
-rec_orig_m_ndcg, rec_orig_f_ndcg = utils.compute_metric_per_group(
-    evaluator,
-    rec_data,
-    user_df,
-    all_exp_rec_dfs[model_dp_s],
-    sens_attr,
-    (m_idx, f_idx),
-    metric="ndcg"
-)
+if exp_rec_data != "test":
+    rec_orig_m_ndcg, rec_orig_f_ndcg = utils.compute_metric_per_group(
+        evaluator,
+        rec_data,
+        user_df,
+        all_exp_rec_dfs[model_dp_s],
+        sens_attr,
+        (m_idx, f_idx),
+        metric="ndcg"
+    )
 
-if rec_orig_m_ndcg >= rec_orig_f_ndcg:
+    value_orig_m_ndcg, value_orig_f_ndcg = rec_orig_m_ndcg, rec_orig_f_ndcg
+else:
+    rec_orig_m_ndcg, rec_orig_f_ndcg = None, None
+    value_orig_m_ndcg, value_orig_f_ndcg = test_orig_m_ndcg, test_orig_f_ndcg
+
+if value_orig_m_ndcg >= value_orig_f_ndcg:
     if delete_adv_group is not None:
         group_edge_del = m_idx if delete_adv_group else f_idx
     else:
@@ -779,87 +795,108 @@ test_result_per_epoch_per_group, test_del_edges_per_epoch, test_fair_loss_per_ep
     test_data.dataset,
     sens_attr
 )
-rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = plot_utils.result_data_per_epoch_per_group(
-    all_exp_rec_dfs,
-    evaluator,
-    (m_idx, f_idx),
-    user_df,
-    rec_data.dataset,
-    sens_attr
-)
-
-# # %%
-# plot_lineplot_per_epoch_per_group(
-#     test_result_per_epoch_per_group,
-#     test_del_edges_per_epoch,
-#     test_fair_loss_per_epoch,
-#     (test_orig_m_ndcg, test_orig_f_ndcg),
-#     data_info="test"
-# )
-# plot_lineplot_per_epoch_per_group(
-#     rec_result_per_epoch_per_group,
-#     rec_del_edges_per_epoch,
-#     rec_fair_loss_per_epoch,
-#     (rec_orig_m_ndcg, rec_orig_f_ndcg),
-#     test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
-#     data_info=exp_rec_data
-# )
-#
-# # %%
-# create_table_metrics_over_del_edges(
-#     test_result_all_data,
-#     all_exp_test_dfs,
-#     best_test_result[model_name],
-#     args.load_config_id,
-#     n_bins=100,
-#     hist_type="test",
-#     test_f="f_oneway"
-# )
-# create_table_metrics_over_del_edges(
-#     rec_result_all_data,
-#     all_exp_rec_dfs,
-#     best_rec_result[model_name],
-#     args.load_config_id,
-#     n_bins=10,
-#     hist_type=exp_rec_data,
-#     test_f="f_oneway"
-# )
-#
-# create_lineplot_metrics_over_del_edges(
-#     rec_result_all_data,
-#     all_exp_rec_dfs,
-#     best_rec_result[model_name],
-#     args.load_config_id,
-#     n_bins=10,
-#     hist_type=exp_rec_data,
-#     test_f="f_oneway"
-# )
-#
-# # %%
-# create_metric_access_over_del_edges_per_group(
-#     rec_result_all_data,
-#     all_exp_rec_dfs,
-#     best_rec_result[model_name],
-#     args.load_config_id,
-#     hist_type=exp_rec_data,
-#     zerometric=True
-# )
-#
-# create_metric_access_over_del_edges_per_group(
-#     test_result_all_data,
-#     all_exp_test_dfs,
-#     best_test_result[model_name],
-#     args.load_config_id,
-#     hist_type="test",
-#     zerometric=True
-# )
+if exp_rec_data != "test":
+    rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = plot_utils.result_data_per_epoch_per_group(
+        all_exp_rec_dfs,
+        evaluator,
+        (m_idx, f_idx),
+        user_df,
+        rec_data.dataset,
+        sens_attr
+    )
+else:
+    rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = [None] * 3
 
 # %%
-create_user_user_homophily_plot_over_del_edges_per_group(
-    all_exp_rec_dfs,
-    args.load_config_id,
-    hist_type=exp_rec_data
+plot_lineplot_per_epoch_per_group(
+    test_result_per_epoch_per_group,
+    test_del_edges_per_epoch,
+    test_fair_loss_per_epoch,
+    (test_orig_m_ndcg, test_orig_f_ndcg),
+    data_info="test"
 )
+
+if exp_rec_data != "test":
+    plot_lineplot_per_epoch_per_group(
+        rec_result_per_epoch_per_group,
+        rec_del_edges_per_epoch,
+        rec_fair_loss_per_epoch,
+        (rec_orig_m_ndcg, rec_orig_f_ndcg),
+        test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
+        data_info=exp_rec_data
+    )
+
+# %%
+create_table_metrics_over_del_edges(
+    test_result_all_data,
+    all_exp_test_dfs,
+    best_test_result[model_name],
+    args.load_config_id,
+    n_bins=100,
+    hist_type="test",
+    test_f="f_oneway"
+)
+
+if exp_rec_data != "test":
+    create_table_metrics_over_del_edges(
+        rec_result_all_data,
+        all_exp_rec_dfs,
+        best_rec_result[model_name],
+        args.load_config_id,
+        n_bins=10,
+        hist_type=exp_rec_data,
+        test_f="f_oneway"
+    )
+
+if exp_rec_data != "test":
+    create_lineplot_metrics_over_del_edges(
+        rec_result_all_data,
+        all_exp_rec_dfs,
+        best_rec_result[model_name],
+        args.load_config_id,
+        n_bins=10,
+        hist_type=exp_rec_data,
+        test_f="f_oneway"
+    )
+
+create_lineplot_metrics_over_del_edges(
+    test_result_all_data,
+    all_exp_test_dfs,
+    best_rec_result[model_name],
+    args.load_config_id,
+    n_bins=10,
+    hist_type="test",
+    test_f="f_oneway"
+)
+
+
+# %%
+if exp_rec_data != "test":
+    create_metric_access_over_del_edges_per_group(
+        rec_result_all_data,
+        all_exp_rec_dfs,
+        best_rec_result[model_name],
+        args.load_config_id,
+        hist_type=exp_rec_data,
+        zerometric=True
+    )
+
+create_metric_access_over_del_edges_per_group(
+    test_result_all_data,
+    all_exp_test_dfs,
+    best_test_result[model_name],
+    args.load_config_id,
+    hist_type="test",
+    zerometric=True
+)
+
+# %%
+if exp_rec_data != "test":
+    create_user_user_homophily_plot_over_del_edges_per_group(
+        all_exp_rec_dfs,
+        args.load_config_id,
+        hist_type=exp_rec_data
+    )
 
 create_user_user_homophily_plot_over_del_edges_per_group(
     all_exp_test_dfs,
@@ -868,11 +905,12 @@ create_user_user_homophily_plot_over_del_edges_per_group(
 )
 
 # %%
-create_item_item_homophily_plot_over_del_edges_per_popularity(
-    all_exp_rec_dfs,
-    args.load_config_id,
-    hist_type=exp_rec_data
-)
+if exp_rec_data != "test":
+    create_item_item_homophily_plot_over_del_edges_per_popularity(
+        all_exp_rec_dfs,
+        args.load_config_id,
+        hist_type=exp_rec_data
+    )
 
 create_item_item_homophily_plot_over_del_edges_per_popularity(
     all_exp_test_dfs,
