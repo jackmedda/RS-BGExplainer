@@ -8,6 +8,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mpl_tick
 from adjustText import adjust_text
@@ -456,7 +457,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
     plot_df = pd.concat(plot_data_df, ignore_index=True)
     plot_df[sens_attr] = plot_df[sens_attr].map(real_group_map)
 
-    fig, axs = plt.subplots(1, sens_groups.shape[0], figsize=(20, 12), sharey=True)
+    fig, axs = plt.subplots(1, sens_groups.shape[0], figsize=(20, 12))
     for i, gr in enumerate(sens_groups):
         sns.lineplot(x=edges_ylabel, y="User-User Homophily", hue="Graph Type",
                      data=plot_df[plot_df[sens_attr] == real_group_map[gr]], ax=axs[i], ci=None)
@@ -524,7 +525,80 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
 
     plot_df = pd.concat(plot_data_df, ignore_index=True)
 
-    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12), sharey=False)
+    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12))
+    for i, gr in enumerate(pop_groups):
+        sns.lineplot(x=edges_ylabel, y="Item-Item Homophily", hue="Graph Type",
+                     data=plot_df[plot_df[pop_label] == gr], ax=axs[i], ci=None)
+        axs[i].set_title(f"{pop_label}: {gr}")
+        axs[i].xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
+
+    fig.suptitle(title)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_path, f"{hist_type}_item_item_homophily_plot_over_edges_per_{sens_attr}_popularity.png"))
+    plt.close()
+
+
+def create_bias_ratio_categories_over_groups_plot_per_del_edges(
+    _pref_dfs,
+    config_id,
+    hist_type="test"
+):
+    def remove_pad_category(ratio):
+        for attr in ratio:
+            for gr in ratio[attr]:
+                if ratio[attr][gr] is not None:
+                    ratio[attr][gr] = ratio[attr][gr][1:]
+
+    del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
+    item_categories_map = train_data.dataset.field2id_token['class']
+
+    norm = mpl.colors.Normalize(vmin=0, vmax=del_edges_perc.max())
+    cmap = sns.color_palette("Blues_d", as_cmap=True)
+    colors = cmap(norm(del_edges_perc))
+
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
+    pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+
+    orig_bias_ratio, orig_pref_ratio = utils.generate_bias_ratio(
+        train_data,
+        config,
+        sensitive_attr=sens_attr,
+        history_matrix=best_test_pref_data[model_dp_s],
+        pred_col='topk_pred',
+        mapped_keys=True
+    )
+
+    remove_pad_category(orig_bias_ratio)
+
+    plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
+    if not os.path.exists(plots_path):
+        os.makedirs(plots_path)
+
+    plot_df_cols = ['Graph Type', 'Item-Item Homophily', pop_label, edges_ylabel]
+
+    plot_data_df = [[], []]
+    pref_df_gr = pref_df.groupby(edges_ylabel)
+    for del_i, n_del in enumerate(del_edges_perc):
+        orig_bias_ratio, orig_pref_ratio = utils.generate_bias_ratio(
+            train_data,
+            config,
+            sensitive_attr=sens_attr,
+            history_matrix=best_test_pref_data[model_dp_s],
+            pred_col='topk_pred',
+            mapped_keys=True
+        )
+
+        for gr in pop_groups:
+            for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_item_homophily[gr], orig_item_homophily[gr]])):
+                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+
+    for gt_i, gt in enumerate(["Perturbed", "Original"]):
+        plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
+
+    plot_df = pd.concat(plot_data_df, ignore_index=True)
+
+    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12))
     for i, gr in enumerate(pop_groups):
         sns.lineplot(x=edges_ylabel, y="Item-Item Homophily", hue="Graph Type",
                      data=plot_df[plot_df[pop_label] == gr], ax=axs[i], ci=None)
@@ -692,12 +766,16 @@ best_test_pref_data, best_test_result = plot_utils.extract_best_metrics(
     evaluator,
     test_data.dataset
 )
-best_rec_pref_data, best_rec_result = plot_utils.extract_best_metrics(
-    exp_paths,
-    args.best_exp_col,
-    evaluator,
-    rec_data.dataset
-)
+
+if exp_rec_data != "test":
+    best_rec_pref_data, best_rec_result = plot_utils.extract_best_metrics(
+        exp_paths,
+        args.best_exp_col,
+        evaluator,
+        rec_data.dataset
+    )
+else:
+    best_rec_pref_data, best_rec_result = None, None
 
 # %%
 all_exp_test_dfs, test_result_all_data, test_n_users_data_all, test_topk_dist_all = plot_utils.extract_all_exp_metrics_data(
@@ -862,7 +940,7 @@ if exp_rec_data != "test":
 create_lineplot_metrics_over_del_edges(
     test_result_all_data,
     all_exp_test_dfs,
-    best_rec_result[model_name],
+    best_test_result[model_name],
     args.load_config_id,
     n_bins=10,
     hist_type="test",
