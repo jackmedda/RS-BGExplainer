@@ -172,44 +172,28 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
 
-# @numba.jit(nopython=True, parallel=True)
-# def get_node_node_graph_data2(history):
-#     hist = [set(h) for h in history]
-#     n_nodes = history.shape[0]
-#     node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.integer)  # number of combinations
-#     for n1 in numba.prange(n_nodes):
-#         for n2 in numba.prange(n1, n_nodes - 1):
-#             # minus 1 because the history contain the padding node 0
-#             node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1)] = [
-#                 n1, n2 + 1, len(hist[n1] & hist[n2 + 1]) - 1
-#             ]
-#
-#     return node_node
-
-
 def get_node_node_graph_data(history):
-    n_nodes = history.shape[0]
-    combs = np.stack((np.repeat(np.arange(n_nodes), n_nodes), np.tile(np.arange(n_nodes), n_nodes)), axis=0)
-
-    return _get_node_node_graph_data(history, combs)
+    return _get_node_node_graph_data(history)
 
 
 @numba.jit(nopython=True, parallel=True)
-def _get_node_node_graph_data(history, combs):
+def _get_node_node_graph_data(history):
     hist = [set(h) for h in history]
     n_nodes = history.shape[0] - 1  # removed padding 0
     node_node = np.zeros((n_nodes * (n_nodes - 1) // 2, 3), dtype=np.int32)  # number of combinations
-    combs = combs[:, (combs[1] > combs[0]) & (combs[0] != 0) & (combs[1] != 0)]  # does not compute for padding node 0
 
-    for i in numba.prange(combs.shape[1]):
-        n1, n2 = combs[:, i]
-        # minus 1 because the history contain the padding node 0
-        if n1 < n2:  # only unique combinations
-            node_node[sum(range(n_nodes - n1, n_nodes)) + (n2 - n1 - 1)] = [
-                n1, n2, len(hist[n1] & hist[n2]) - 1
-            ]
+    for n1 in numba.prange(1, n_nodes + 1):
+        _inner_combinations(n1, n_nodes, hist, node_node)
 
     return node_node
+
+
+@numba.jit(nopython=True, parallel=True)
+def _inner_combinations(n1, n_nodes, hist, node_node):
+    for n2 in numba.prange(n1 + 1, n_nodes + 1):
+        node_node[sum(range(n_nodes - n1 + 1, n_nodes)) + (n2 - n1 - 1)] = [
+            n1, n2, len(hist[n1] & hist[n2]) - 1
+        ]
 
 
 def compute_metric(evaluator, dataset, pref_data, pred_col, metric):

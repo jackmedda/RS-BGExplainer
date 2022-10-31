@@ -336,7 +336,6 @@ def create_metric_access_over_del_edges_per_group(
     uid_list = next(pref_df.groupby('n_del_edges').__iter__())[1].user_id.to_numpy()
     joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
     joint_df[sens_attr] = joint_df[sens_attr].map(attr_map.__getitem__)
-    joint_df[sens_attr] = joint_df[sens_attr].map(real_group_map)
 
     plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
     if not os.path.exists(plots_path):
@@ -542,7 +541,8 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
 def create_bias_ratio_categories_over_groups_plot_per_del_edges(
     _pref_dfs,
     config_id,
-    hist_type="test"
+    hist_type="test",
+    n_bins=10
 ):
     def remove_pad_category(ratio):
         for attr in ratio:
@@ -551,13 +551,13 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
                     ratio[attr][gr] = ratio[attr][gr][1:]
 
     del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
-    item_categories_map = train_data.dataset.field2id_token['class']
+    item_categories_map = train_data.dataset.field2id_token['class'][1:]
 
     norm = mpl.colors.Normalize(vmin=0, vmax=del_edges_perc.max())
     cmap = sns.color_palette("Blues_d", as_cmap=True)
-    colors = cmap(norm(del_edges_perc))
+    colors = cmap(norm(np.concatenate(([0], del_edges_perc))))
 
-    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges']]
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges', 'cf_topk_pred']]
     pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
 
     orig_bias_ratio, orig_pref_ratio = utils.generate_bias_ratio(
@@ -569,6 +569,8 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
         mapped_keys=True
     )
 
+    sens_groups = [gr for gr in orig_bias_ratio[sens_attr] if orig_bias_ratio[sens_attr][gr] is not None]
+
     remove_pad_category(orig_bias_ratio)
 
     plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
@@ -577,21 +579,30 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
 
     plot_df_cols = ['Graph Type', 'Item-Item Homophily', pop_label, edges_ylabel]
 
-    plot_data_df = [[], []]
+    plot_data_df = dict.fromkeys(attr_map)
+    for gr in sens_groups:
+        if orig_bias_ratio[sens_attr][gr] is not None:
+            plot_data_df[gr] = list(zip(
+                orig_bias_ratio[sens_attr][gr][1:], item_categories_map, [0.] * len(item_categories_map)
+            ))
+
     pref_df_gr = pref_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
-        orig_bias_ratio, orig_pref_ratio = utils.generate_bias_ratio(
+        del_df = pref_df_gr.get_group(n_del)
+        pert_bias_ratio, pert_pref_ratio = utils.generate_bias_ratio(
             train_data,
             config,
             sensitive_attr=sens_attr,
-            history_matrix=best_test_pref_data[model_dp_s],
-            pred_col='topk_pred',
+            history_matrix=del_df,
+            pred_col='cf_topk_pred',
             mapped_keys=True
         )
 
-        for gr in pop_groups:
-            for gt_i, (gt, hom_data) in enumerate(zip(["Perturbed", "Original"], [pert_item_homophily[gr], orig_item_homophily[gr]])):
-                plot_data_df[gt_i].append((gt, hom_data, gr, n_del))
+        for gr in sens_groups:
+            if pert_bias_ratio[sens_attr][gr] is not None:
+                plot_data_df[gr].extend(list(zip(
+                    pert_bias_ratio[sens_attr][gr][1:], item_categories_map, [n_del] * len(item_categories_map)
+                )))
 
     for gt_i, gt in enumerate(["Perturbed", "Original"]):
         plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
