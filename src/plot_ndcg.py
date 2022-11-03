@@ -329,7 +329,8 @@ def create_metric_access_over_del_edges_per_group(
     orig_result,
     config_id,
     hist_type="test",
-    zerometric=False
+    zerometric=False,
+    n_bins=6
 ):
     pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges']]
 
@@ -381,6 +382,13 @@ def create_metric_access_over_del_edges_per_group(
 
             plot_df = pd.concat(plot_metric_df, ignore_index=True)
             plot_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+
+            del_edges_bins = np.array(list(del_edges_perc.values()))
+            bins = np.linspace(0, del_edges_bins.shape[0] - 1, n_bins, dtype=int)
+            del_edges_bins = del_edges_bins[bins]
+            plot_df_gr = plot_df.groupby(edges_ylabel)
+            plot_df = pd.concat([plot_df_gr.get_group(del_bin) for del_bin in del_edges_bins])
+
             if zerometric:
                 mask = plot_df.user_id.isin(zero_users)
                 plot_zero_df, plot_nonzero_df = plot_df[mask], plot_df[~mask]
@@ -542,23 +550,23 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
     _pref_dfs,
     config_id,
     hist_type="test",
-    n_bins=10
+    n_bins=6
 ):
-    def remove_pad_category(ratio):
-        for attr in ratio:
-            for gr in ratio[attr]:
-                if ratio[attr][gr] is not None:
-                    ratio[attr][gr] = ratio[attr][gr][1:]
-
     del_edges_perc = np.sort(_pref_dfs[model_dp_s]['n_del_edges'].unique())
+    bins = np.linspace(0, del_edges_perc.shape[0] - 1, n_bins, dtype=int)
+    del_edges_perc = del_edges_perc[bins]
+
     item_categories_map = train_data.dataset.field2id_token['class'][1:]
+    n_cats = len(item_categories_map)
 
     norm = mpl.colors.Normalize(vmin=0, vmax=del_edges_perc.max())
     cmap = sns.color_palette("Blues_d", as_cmap=True)
-    colors = cmap(norm(np.concatenate(([0], del_edges_perc))))
 
     pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'del_edges', 'cf_topk_pred']]
     pref_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
+
+    user_joint_df = user_df.join(pref_df.set_index("user_id"), on="user_id", how='right').reset_index(drop=True)
+    user_joint_df[sens_attr] = user_joint_df[sens_attr].map(attr_map.__getitem__)
 
     orig_bias_ratio, orig_pref_ratio = utils.generate_bias_ratio(
         train_data,
@@ -571,24 +579,48 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
 
     sens_groups = [gr for gr in orig_bias_ratio[sens_attr] if orig_bias_ratio[sens_attr][gr] is not None]
 
-    remove_pad_category(orig_bias_ratio)
+    item_df = pd.DataFrame({
+        'item_id': train_data.dataset.item_feat['item_id'].numpy(),
+        'class': item_class
+    })
+
+    train_df_joint = train_df.join(item_df.set_index('item_id'), on='item_id').join(user_df.set_index('user_id'), on='user_id')
+
+    class_counts = train_df_joint.groupby(sens_attr).apply(lambda x: x.explode('class').value_counts('class'))
+    class_counts.index = class_counts.index.map(lambda x: (x[0], item_categories_map[x[1] - 1]))
+    cats_inter_counts = class_counts.reset_index().groupby(sens_attr).apply(lambda x: x[['class', 0]].set_index('class').to_dict()[0])
+    cats_inter_counts.index = cats_inter_counts.index.map(attr_map.__getitem__)
+    cats_inter_counts = cats_inter_counts.to_dict()
+
+    order_cic, vals_cic = map(list, zip(*(sorted(cats_inter_counts[sens_groups[0]].items(), key=lambda x: x[1])[::-1])))
+    inter_bar_data_df = {
+        sens_groups[0]: pd.DataFrame(zip(order_cic, vals_cic), columns=['Category', '# Interactions']),
+        sens_groups[1]: pd.DataFrame(
+            zip(order_cic, [cats_inter_counts[sens_groups[1]][cat] for cat in order_cic]),
+            columns=['Category', '# Interactions']
+        )
+    }
+
+    order_cats = (item_categories_map[:, None] == np.array(order_cic)).nonzero()[1]
 
     plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", config_id, sens_attr)
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
-    plot_df_cols = ['Graph Type', 'Item-Item Homophily', pop_label, edges_ylabel]
+    plot_df_cols = ['Bias Ratio', 'Category', edges_ylabel, 'Group']
 
-    plot_data_df = dict.fromkeys(attr_map)
+    orig_plot_data_df = []
     for gr in sens_groups:
         if orig_bias_ratio[sens_attr][gr] is not None:
-            plot_data_df[gr] = list(zip(
-                orig_bias_ratio[sens_attr][gr][1:], item_categories_map, [0.] * len(item_categories_map)
-            ))
+            orig_plot_data_df += [*zip(
+                orig_bias_ratio[sens_attr][gr][1:][order_cats], range(n_cats), [0.] * n_cats, [gr] * n_cats
+            )]
+    orig_plot_df = pd.DataFrame(orig_plot_data_df, columns=plot_df_cols)
 
-    pref_df_gr = pref_df.groupby(edges_ylabel)
+    plot_data_df = []
+    user_joint_df_gr = user_joint_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
-        del_df = pref_df_gr.get_group(n_del)
+        del_df = user_joint_df_gr.get_group(n_del)
         pert_bias_ratio, pert_pref_ratio = utils.generate_bias_ratio(
             train_data,
             config,
@@ -600,26 +632,48 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
 
         for gr in sens_groups:
             if pert_bias_ratio[sens_attr][gr] is not None:
-                plot_data_df[gr].extend(list(zip(
-                    pert_bias_ratio[sens_attr][gr][1:], item_categories_map, [n_del] * len(item_categories_map)
-                )))
+                plot_data_df += [*zip(
+                    pert_bias_ratio[sens_attr][gr][1:][order_cats], range(n_cats), [n_del] * n_cats, [gr] * n_cats
+                )]
 
-    for gt_i, gt in enumerate(["Perturbed", "Original"]):
-        plot_data_df[gt_i] = pd.DataFrame(plot_data_df[gt_i], columns=plot_df_cols)
+    pert_plot_df = pd.DataFrame(plot_data_df, columns=plot_df_cols)
 
-    plot_df = pd.concat(plot_data_df, ignore_index=True)
+    fig = plt.figure(figsize=(20, 12))
+    gs = plt.GridSpec(1, 10)
+    ax_gr1 = fig.add_subplot(gs[:, :4])
+    ax_gr2 = fig.add_subplot(gs[:, 5:9], sharey=ax_gr1)
+    ax_bar_gr1 = fig.add_subplot(gs[:, 4], sharey=ax_gr1)
+    ax_bar_gr2 = fig.add_subplot(gs[:, 9], sharey=ax_gr1)
 
-    fig, axs = plt.subplots(1, len(pop_groups), figsize=(20, 12))
-    for i, gr in enumerate(pop_groups):
-        sns.lineplot(x=edges_ylabel, y="Item-Item Homophily", hue="Graph Type",
-                     data=plot_df[plot_df[pop_label] == gr], ax=axs[i], ci=None)
-        axs[i].set_title(f"{pop_label}: {gr}")
-        axs[i].xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / train_data.dataset.inter_num * 100:.2f}%"))
+    axs = [ax_gr1, ax_gr2]
+    axs_bar = [ax_bar_gr1, ax_bar_gr2]
+    orig_plot_df_gr = orig_plot_df.groupby("Group")
+    for i, (gr, plot_gr) in enumerate(pert_plot_df.groupby("Group")):
+        orig_gr = orig_plot_df_gr.get_group(gr)
+        sns.scatterplot(y="Category", x="Bias Ratio", hue=edges_ylabel, size=edges_ylabel, palette=cmap,
+                        sizes=(80, 250), hue_norm=norm, data=plot_gr, ax=axs[i])
+        sns.scatterplot(y="Category", x="Bias Ratio", marker='X', color='#780808', s=150, data=orig_gr, ax=axs[i])
+        axs[i].set_title(f"{sens_attr.title()}: {group_name_map[real_group_map[gr]]}")
+        axs[i].yaxis.set_major_locator(mpl_tick.FixedLocator(list(range(n_cats))))
+        axs[i].yaxis.set_major_formatter(mpl_tick.FixedFormatter([item_categories_map[x] for x in range(n_cats)]))
+        handles, labels = axs[i].get_legend_handles_labels()
+        axs[i].legend(
+            [Line2D([0], [0], marker='X', color='w', markerfacecolor='#780808', markersize=15)] + handles,
+            ["0.0%"] + [f"{int(x) / train_data.dataset.inter_num * 100:.2f}%" if x.isdigit() else x for x in labels]
+        )
+        axs[i].grid(axis='y', ls=':')
+        axs[i].plot([1, 1], axs[i].get_ylim(), 'k--')
+
+        sns.barplot(y="Category", x="# Interactions", data=inter_bar_data_df[gr], ax=axs_bar[i], color='black', order=order_cic)
+
+    plot_utils.off_margin_ticks(ax_gr2, *axs_bar, axis='y')
+    for _ax in [ax_gr2, *axs_bar]:
+        _ax.set_ylabel('', labelpad=None)
 
     fig.suptitle(title)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, f"{hist_type}_item_item_homophily_plot_over_edges_per_{sens_attr}_popularity.png"))
+    plt.savefig(os.path.join(plots_path, f"{hist_type}_bias_ratio_over_edges_per_{sens_attr}.png"))
     plt.close()
 
 
@@ -738,6 +792,7 @@ attr_map = dataset.field2id_token[sens_attr]
 f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 user_num, item_num = dataset.user_num, dataset.item_num
 uid_field, iid_field = dataset.uid_field, dataset.iid_field
+item_class = list(map(lambda x: [el for el in x if el != 0], train_data.dataset.item_feat['class'].numpy().tolist()))
 evaluator = Evaluator(config)
 
 metrics_names = evaluator.metrics
@@ -1005,4 +1060,19 @@ create_item_item_homophily_plot_over_del_edges_per_popularity(
     all_exp_test_dfs,
     args.load_config_id,
     hist_type="test"
+)
+
+if exp_rec_data != "test":
+    create_bias_ratio_categories_over_groups_plot_per_del_edges(
+        all_exp_rec_dfs,
+        args.load_config_id,
+        hist_type=exp_rec_data,
+        n_bins=6
+    )
+
+create_bias_ratio_categories_over_groups_plot_per_del_edges(
+    all_exp_test_dfs,
+    args.load_config_id,
+    hist_type="test",
+    n_bins=6
 )

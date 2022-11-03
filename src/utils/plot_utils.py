@@ -395,7 +395,7 @@ def get_item_item_data_pop_df(dataset, item_df, pop_attr):
 
 def get_node_node_data_feature_df(history, node_df, id_label, feat_attr, attr_map=None):
     graph = utils.get_node_node_graph_data(history)
-    graph = graph[(graph[:, 0] != 0) & (graph[:, 1] != 0), :]
+    graph = graph[graph[:, -1] > 0]
 
     graph_df = pd.DataFrame(graph, columns=[f'{id_label}_1', f'{id_label}_2', 'n_common_edges'])
     graph_df = graph_df.join(
@@ -429,8 +429,10 @@ def compute_homophily(graph_df, group_sizes, feat_attr):
     return homophily
 
 
-def off_margin_ticks(*axs):
+def off_margin_ticks(*axs, axis='x'):
     # Turn off tick visibility for the measure axis on the marginal plots
+    f = f"get_{axis}ticklabels"
+
     for ax in axs:
-        plt.setp(ax.get_xticklabels(), visible=False)
-        plt.setp(ax.get_xticklabels(minor=True), visible=False)
+        plt.setp(getattr(ax, f)(), visible=False)
+        plt.setp(getattr(ax, f)(minor=True), visible=False)
