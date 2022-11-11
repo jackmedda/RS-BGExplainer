@@ -1,11 +1,11 @@
 import os
 import copy
 import pickle
-import itertools
 from logging import getLogger
 from collections import defaultdict
 
 import yaml
+import wandb
 import torch
 import scipy
 import numba
@@ -31,6 +31,12 @@ EXPS_COLUMNS = [
     "nnz_sub_adj",
     "first_fair_loss"
 ]
+
+
+def wandb_init(config, **kwargs):
+    config['wandb_tags'] = [k for k in config['explainer_policies'] if config['explainer_policies'][k]]
+
+    wandb.init(**kwargs, tags=config['wandb_tags'])
 
 
 def load_data_and_model(model_file, explainer_config_file=None):
@@ -219,17 +225,19 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
 def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, metric="ndcg", raw=False):
     m_idx, f_idx = group_idxs
 
+    pref_data_user = pref_data.set_index('user_id')
+
     _m_ndcg = compute_metric(
         evaluator,
         data.dataset,
-        pref_data.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == m_idx, 'user_id']].reset_index(),
+        pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])].reset_index(),
         'topk_pred',
         metric
     )[:, -1]
     _f_ndcg = compute_metric(
         evaluator,
         data.dataset,
-        pref_data.set_index('user_id').loc[user_df.loc[user_df[sens_attr] == f_idx, 'user_id']].reset_index(),
+        pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])].reset_index(),
         'topk_pred',
         metric
     )[:, -1]
@@ -256,6 +264,32 @@ def chunk_categorize(array_1d, n_chunks=10):
         mapped_a[mask] = step * chunk
 
     return mapped_a
+
+
+def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batch_size=64, seed=124):
+    np.random.seed(seed)
+
+    groups = {}
+    for gr, gr_df in df.groupby(sens_attr):
+        groups[gr] = gr_df['user_id'].unique()
+    grs_names = list(groups.keys())
+
+    n_users = sum([x.shape[0] for x in groups.values()])
+    size_perc = {gr: gr_users.shape[0] / n_users for gr, gr_users in groups.items()}
+
+    out = []
+    for i in range(iterations):
+        samples = {}
+        for gr, gr_df in df.groupby(sens_attr):
+            sample_size = round(batch_size * size_perc[gr])
+            sample = np.random.choice(groups[gr], sample_size, replace=False)
+            samples[gr] = gr_df.set_index('user_id').loc[sample, metric].to_numpy()
+
+        out.append(
+            abs(samples[grs_names[0]].mean() - samples[grs_names[1]].mean())
+        )
+
+    return out
 
 
 def compute_uniform_categories_prob(_item_df, n_categories, raw=False):
@@ -394,6 +428,9 @@ def create_sparse_symm_matrix_from_vec(vector, idx, base_symm):
     if not edge_deletions:  # if pass is edge additions
         idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
         vector = torch.cat((symm_matrix_vals, vector, vector))
+    else:
+        vector = torch.cat((vector, vector))
+
     symm_matrix = torch.sparse.FloatTensor(idx, vector, symm_matrix.shape)
 
     return symm_matrix

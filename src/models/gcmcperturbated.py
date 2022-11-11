@@ -55,7 +55,7 @@ class GCMCPerturbated(GeneralRecommender):
     """
     input_type = InputType.PAIRWISE
 
-    def __init__(self, config, dataset, user_id):
+    def __init__(self, config, dataset):
         super(GCMCPerturbated, self).__init__(config, dataset)
 
         # load dataset info
@@ -110,6 +110,7 @@ class GCMCPerturbated(GeneralRecommender):
         self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
         self.support = [self.Graph]
 
+        self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
             self.mask_sub_adj = self.mask_sub_adj[:, (self.mask_sub_adj[0] != self.mask_sub_adj[1]) & (self.mask_sub_adj[0] != 0)]
@@ -118,8 +119,11 @@ class GCMCPerturbated(GeneralRecommender):
             # to get sigmoid closer to 0
             self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.mask_sub_adj.shape[1])) - 5)
         else:
-            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.sub_Graph.shape[1])))
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.sub_Graph.shape[1] // 2)))
             self.mask_sub_adj = self.sub_Graph
+
+            if config['force_removed_edges']:
+                self.force_removed_edges = torch.FloatTensor(torch.ones(self.sub_Graph.shape[1] // 2)).to(self.device)
 
         # self.reset_parameters()
 
@@ -149,6 +153,7 @@ class GCMCPerturbated(GeneralRecommender):
             edge_additions=self.edge_additions,
             mask_sub_adj=self.mask_sub_adj,
             only_subgraph=self.only_subgraph,
+            force_removed_edges=self.force_removed_edges,
             sparse_feature=self.sparse_feature,
         ).to(self.device)
         self.BiDecoder = BiDecoder(
@@ -259,6 +264,7 @@ class GcEncoder(nn.Module):
         edge_additions,
         mask_sub_adj,
         only_subgraph,
+        force_removed_edges,
         sparse_feature=True,
         act_dense=lambda x: x,
         share_user_item_weights=True,
@@ -298,6 +304,8 @@ class GcEncoder(nn.Module):
 
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
         self.only_subgraph = only_subgraph
+
+        self.force_removed_edges = force_removed_edges
 
         # gcn layer
         if self.accum == 'sum':
@@ -360,9 +368,14 @@ class GcEncoder(nn.Module):
                 self.dense_layer_v.bias.data.fill_(0)
 
     def perturbate_adj_matrix(self, i, pred=False):
+        P_symm = self.P_symm
+        if not self.edge_additions and self.force_removed_edges is not None:
+            self.force_removed_edges = (torch.sigmoid(self.P_symm.detach()) >= 0.5).float() * self.force_removed_edges
+            P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
+
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
             self.support[i],
-            self.P_symm,
+            P_symm,
             self.mask_sub_adj,
             self.num_all,
             self.D_indices,

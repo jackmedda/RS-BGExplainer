@@ -63,8 +63,7 @@ def get_base_exps_filepath(config, config_id=-1):
                     with open(config_path, 'rb') as f:
                         _c = pickle.load(f)
                     if config.final_config_dict == _c.final_config_dict:
-                        base_exps_file = os.path.join(base_exps_file, str(path_c))
-                        break
+                        return os.path.join(base_exps_file, str(path_c))
 
             config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
 
@@ -195,12 +194,6 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
     if not config["explain_fairness"]:
         kwargs['train_bias_ratio'], kwargs['train_pref_ratio'] = None, None
 
-    loaded_scores, field2token_id = None, None
-    loaded_scores_path = os.path.join(base_exps_file, os.path.splitext(args.model_file)[0] + '.pkl')
-    if os.path.exists(loaded_scores_path):
-        with open(loaded_scores_path, 'rb') as scores_file:
-            loaded_scores, field2id_token = pickle.load(scores_file)
-
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
 
@@ -218,8 +211,6 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
         if len(user_id) > 1:
             history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
             history_i = torch.cat(list(history_item))
-
-            loaded_scores, field2id_token = None, None  # not supported
         else:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
@@ -228,11 +219,8 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
 
         gc.collect()
         bge = BGExplainer(config, train_data.dataset, model, user_id, dist=config['cf_dist'], **kwargs)
-        exp, scores = bge.explain(batched_data, epochs, topk=topk, loaded_scores=loaded_scores, old_field2token_id=field2token_id)
+        exp = bge.explain(batched_data, epochs, topk=topk)
         del bge
-
-        if loaded_scores is None and len(user_id) == 1:
-            orig_scores[user_id[0].item()] = scores[0]
 
         if len(user_id) == 1:
             exps_file_user = os.path.join(base_exps_file, f"user_{user_id[0].item()}.pkl")
@@ -241,10 +229,6 @@ def explain(config, model, test_data, base_exps_file, **kwargs):
 
         with open(exps_file_user, 'wb') as f:
             pickle.dump(exp, f)
-
-    if loaded_scores is None:
-        with open(loaded_scores_path, 'wb') as scores_file:
-            pickle.dump((orig_scores, dataset.field2token_id[model.ITEM_ID_FIELD]), scores_file)
 
 
 def hops_analysis(config, model, topk=10, dist_type="damerau_levenshtein", diam=None):

@@ -39,7 +39,7 @@ class NGCFPerturbated(GeneralRecommender):
     """
     input_type = InputType.PAIRWISE
 
-    def __init__(self, config, dataset, user_id):
+    def __init__(self, config, dataset):
         super(NGCFPerturbated, self).__init__(config, dataset)
 
         # load dataset info
@@ -87,6 +87,7 @@ class NGCFPerturbated(GeneralRecommender):
 
         self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
 
+        self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
             self.mask_sub_adj = self.mask_sub_adj[:, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)]
@@ -95,8 +96,11 @@ class NGCFPerturbated(GeneralRecommender):
             # to get sigmoid closer to 0
             self.P_symm = nn.Parameter(torch.FloatTensor(torch.zeros(self.mask_sub_adj.shape[1])) - 5)
         else:
-            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.sub_Graph.shape[1])))
+            self.P_symm = nn.Parameter(torch.FloatTensor(torch.ones(self.sub_Graph.shape[1] // 2)))
             self.mask_sub_adj = self.sub_Graph
+
+            if config['force_removed_edges']:
+                self.force_removed_edges = torch.FloatTensor(torch.ones(self.sub_Graph.shape[1] // 2)).to(self.device)
 
         self.P_loss = None
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
@@ -109,7 +113,6 @@ class NGCFPerturbated(GeneralRecommender):
         self.restore_item_e = None
 
         # parameters initialization
-        self.apply(xavier_normal_initialization)
         self.other_parameter_name = ['restore_user_e', 'restore_item_e']
 
     def get_eye_mat(self):
@@ -135,9 +138,14 @@ class NGCFPerturbated(GeneralRecommender):
         return ego_embeddings
 
     def perturbate_adj_matrix(self, pred=False):
+        P_symm = self.P_symm
+        if not self.edge_additions and self.force_removed_edges is not None:
+            self.force_removed_edges = (torch.sigmoid(self.P_symm.detach()) >= 0.5).float() * self.force_removed_edges
+            P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
+
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
             self.Graph,
-            self.P_symm,
+            P_symm,
             self.mask_sub_adj,
             self.num_all,
             self.D_indices,

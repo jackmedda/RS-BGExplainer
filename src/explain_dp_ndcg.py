@@ -63,8 +63,7 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
                                                   "y/yes to confirm this outcome. Other inputs will assign a new id: ")
                             if check_perturb.lower() != "y" and check_perturb.lower() != "yes":
                                 continue
-                        base_exps_file = os.path.join(base_exps_file, str(path_c))
-                        break
+                        return os.path.join(base_exps_file, str(path_c))
 
             config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
 
@@ -101,7 +100,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     Function that explains, that is generates perturbed graphs.
     :param config:
     :param model:
-    :param _train_data:
+    :param _train_dataset:
     :param _rec_data:
     :param _test_data:
     :param base_exps_file:
@@ -111,7 +110,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     epochs = config['cf_epochs']
     topk = config['cf_topk']
     explainer_config_file = kwargs.get("explainer_config_file", None)
-    opt_loss_mem_usage = kwargs.get("optimized_loss_memory_usage", False)
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
@@ -127,8 +125,18 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
         except shutil.SameFileError as e:
             print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
-    bge = DPBGExplainer(config, _train_dataset, _rec_data, model, user_data, dist=config['cf_dist'], **kwargs)
-    exp, _ = bge.explain(user_data, _test_data, epochs, topk=topk, optimized_loss_memory_usage=opt_loss_mem_usage)
+    utils.wandb_init(
+        config,
+        project="B-GEM",
+        entity="fairrec",
+        name="Explanation",
+        job_type="train",
+        group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp={os.path.basename(base_exps_file)}",
+        # mode="disabled"
+    )
+
+    bge = DPBGExplainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
+    exp = bge.explain(user_data, _test_data, epochs, topk=topk)
     del bge
 
     exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
@@ -147,8 +155,6 @@ def execute_explanation(model_file,
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
                                                                                           explainer_config_file)
 
-    optimized_loss_memory_usage = config['optimized_loss_memory_usage'] or False
-
     if config['exp_rec_data'] is not None:
         if config['exp_rec_data'] != 'train+valid':
             rec_data = locals()[f"{config['exp_rec_data']}_data"]
@@ -164,8 +170,7 @@ def execute_explanation(model_file,
     if not load:
         kwargs = dict(
             verbose=verbose,
-            explainer_config_file=explainer_config_file,
-            optimized_loss_memory_usage=optimized_loss_memory_usage
+            explainer_config_file=explainer_config_file
         )
 
         explain(
