@@ -14,8 +14,8 @@ class EarlyStopping:
         self.history = []
         self.best_loss = 0
         self.methods = {
-            'slope' : self.check_slope,
-            'consistency' : self.check_consistency
+            'slope': self.check_slope,
+            'consistency': self.check_consistency
         }
     
     def check(self, loss):

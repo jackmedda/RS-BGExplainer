@@ -398,12 +398,9 @@ def create_metric_access_over_del_edges_per_group(
                 plot_zero_df, plot_nonzero_df = plot_df[mask], plot_df[~mask]
 
                 if not plot_zero_df.empty:
-                    try:
-                        sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_zero_df, fliersize=0, ax=axs[0, i])
-                        sns.lineplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type",
-                                     data=plot_zero_df[plot_zero_df["Graph Type"] == "Perturbed"], ax=axs[0, i])
-                    except:
-                        import pdb; pdb.set_trace()
+                    sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_zero_df, fliersize=0, ax=axs[0, i])
+                    sns.lineplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type",
+                                 data=plot_zero_df[plot_zero_df["Graph Type"] == "Perturbed"], ax=axs[0, i])
 
                 if not plot_nonzero_df.empty:
                     sns.boxplot(x=edges_ylabel, y=metric.upper(), hue="Graph Type", data=plot_nonzero_df, fliersize=0, ax=axs[1, i])

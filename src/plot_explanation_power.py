@@ -35,15 +35,14 @@ def get_plots_path(datasets_names, model_names):
 # %%
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
-parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
-parser.add_argument('--load_config_ids', nargs="+", type=str, required=True, help="ids of configurations/explanations")
+parser.add_argument('--explainer_config_files', required=True, nargs='+', type=str)
 parser.add_argument('--n_datasets', type=int, default=2)
 parser.add_argument('--th_edges_epochs', type=float, default=0.1)
 
 args = parser.parse_args()
 
-assert len(args.model_files) == len(args.load_config_ids), \
-    "Pass the same number of perturbed model files and configuration ids to be loaded"
+assert len(args.model_files) == len(args.explainer_config_files), \
+    "Pass the same number of perturbed model files and configuration files to be loaded"
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -57,9 +56,8 @@ model_files_names = []
 markers = ['*', 's']
 color_palette = sns.color_palette("colorblind")
 fig = plt.figure(figsize=(10, 6))
-for model_file, c_id in zip(args.model_files, args.load_config_ids):
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
-                                                                                          args.explainer_config_file)
+for model_file, exp_config_file in zip(args.model_files, args.explainer_config_files):
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, exp_config_file)
 
     if dataset.dataset_name not in axs:
         sub_kwargs = {'sharey': list(axs.values())[0]} if len(axs) > 0 else {}
@@ -85,10 +83,7 @@ for model_file, c_id in zip(args.model_files, args.load_config_ids):
     metrics_names = evaluator.metrics
     model_dp_s = f'{model_name}+FairDP'
 
-    exp_paths = {
-        model_dp_s: os.path.join(script_path, 'dp_ndcg_explanations', dataset.dataset_name, model_name, 'FairDP',
-                                 sens_attr, f"epochs_{epochs}", c_id)
-    }
+    exp_paths = {model_dp_s: exp_config_file}
 
     with open(os.path.join(exp_paths[model_dp_s], 'config.pkl'), 'rb') as f:
         exp_config = pickle.load(f)

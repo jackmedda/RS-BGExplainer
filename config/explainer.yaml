@@ -5,11 +5,11 @@ neighbors_hops: True
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 500 # 1200 for NDCGApprox
+cf_learning_rate: 3000 # 1200 for NDCGApprox
 
 momentum: 0.0
 # epochs to generate explanations
-cf_epochs: 400
+cf_epochs: 1000
 # how many users should be considered to explain?
 user_batch_exp: 64
 # not consider the prediction loss
@@ -76,13 +76,13 @@ eval_args:
     mode: 'full'
 
 # Early stopping parameters
-earlys_patience: 40  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
-earlys_ignore: 0
-earlys_method: 'consistency'
-earlys_fn: 'lt'
-earlys_delta: 0.0015  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
-
-earlys_pvalue:
+early_stopping:
+    patience: 40  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
+    ignore: 0
+    method: 'consistency'
+    mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
+    delta: 0.0015  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
+    pvalue:
 
 previous_ndcg: False
 previous_batch_LR_scaling: False

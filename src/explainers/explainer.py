@@ -17,7 +17,7 @@ from torchviz import make_dot
 sys.path.append('..')
 
 import src.utils as utils
-from src.models import GCMCPerturbated
+import src.models as exp_models
 
 import subprocess
 
@@ -51,7 +51,7 @@ class BGExplainer:
         self.test_batch_size = self.tot_item_num
 
         # Instantiate CF model class, load weights from original model
-        self.cf_model = GCMCPerturbated(config, dataset, self.user_id)
+        self.cf_model = getattr(exp_models, f"{self.model.__class__.__name__}Perturbated")(config, dataset, self.user_id)
 
         self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
 

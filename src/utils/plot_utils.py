@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import src.utils as utils
 
 
-def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data):
+def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None):
     result_all = {}
     pref_data_all = {}
 
@@ -21,10 +21,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data):
         model_name = e_type.replace('+FairDP', '')
         exps_data = utils.load_dp_exps_file(e_path)
 
-        if isinstance(best_exp_col, dict):
-            bec = best_exp_col[e_type]
-        else:
-            bec = best_exp_col
+        bec = best_exp_col[e_type] if isinstance(best_exp_col, dict) else best_exp_col
 
         if not isinstance(bec, list):
             bec = bec.lower() if isinstance(bec, str) else bec
@@ -33,16 +30,21 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data):
         top_exp_func = None
         if isinstance(bec, int):
             def top_exp_func(exp): return exp[bec]
-        elif bec not in ["first", "last", "mid"] and not isinstance(bec, list):
-            top_exp_col = utils.EXPS_COLUMNS.index(bec) if bec is not None else None
-            if top_exp_col is not None:
-                def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
         elif bec == "first":
             def top_exp_func(exp): return exp[0]
         elif bec == "last":
             def top_exp_func(exp): return exp[-1]
         elif bec == "mid":
             def top_exp_func(exp): return exp[len(exp) // 2]
+        elif isinstance(bec, list):
+            top_exp_col = utils.EXPS_COLUMNS.index(bec) if bec is not None else None
+            if top_exp_col is not None:
+                def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
+        elif bec == "auto":
+            assert config is not None, "`auto` mode can be used only with config"
+            best_epoch = utils.get_best_exp_early_stopping(exps_data[0], config)
+            epoch_idx = utils.EXPS_COLUMNS.index('epoch')
+            def top_exp_func(exp): return [e for e in exp if e[epoch_idx] == best_epoch][0]
         elif isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec[0])
             def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
@@ -54,7 +56,9 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data):
             else:
                 _exp = exp_entry[0]
 
-            pref_data.extend(list(zip(_exp[0], _exp[1], _exp[3])))
+            idxs = [utils.EXPS_COLUMNS.index(col) for col in ['user_id', 'rec_topk', 'rec_cf_topk']]
+
+            pref_data.extend(list(zip(*[_exp[idx] for idx in idxs])))
 
         pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
         pref_data_all[e_type] = pref_data

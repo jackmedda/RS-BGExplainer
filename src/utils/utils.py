@@ -20,15 +20,17 @@ from recbole.data.interaction import Interaction
 
 EXPS_COLUMNS = [
     "user_id",
-    "topk",
-    "cf_topk",
-    "dist",
+    "rec_topk",
+    "test_topk",
+    "rec_cf_topk",
+    "test_cf_topk",
+    "rec_cf_dist",
+    "test_cf_dist",
     "loss_total",
-    "loss_pred",
     "loss_graph_dist",
     "fair_loss",
     "del_edges",
-    "nnz_sub_adj",
+    "epoch",
     "first_fair_loss"
 ]
 
@@ -134,6 +136,15 @@ def get_dataset_with_perturbed_edges(df, train_data):
     return train_data.dataset.copy(Interaction(pert_inter_feat))
 
 
+def get_best_exp_early_stopping(exps, config_dict):
+    try:
+        patience = config_dict['early_stopping']['patience']
+    except TypeError as e:
+        patience = config_dict['earlys_patience']
+
+    return len(exps) - patience + 1  # len(exps) = len(history) registered in the early stopping object
+
+
 def get_adj_from_inter_matrix(inter_matrix, num_all, n_users):
     A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
     inter_M = inter_matrix
@@ -153,9 +164,9 @@ def get_adj_matrix(interaction_matrix,
     i = torch.LongTensor(np.stack([row, col], axis=0))
     data = torch.FloatTensor(A.data)
     adj = torch.sparse.FloatTensor(i, data, torch.Size(A.shape))
-    edge_subset = [torch.LongTensor(i)]
+    edge_subset = torch.LongTensor(i)
 
-    return adj, edge_subset[0]
+    return adj, edge_subset
 
 
 def get_nx_adj_matrix(config, dataset):
@@ -222,7 +233,7 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
     return result
 
 
-def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, metric="ndcg", raw=False):
+def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, col='topk_pred', metric="ndcg", raw=False):
     m_idx, f_idx = group_idxs
 
     pref_data_user = pref_data.set_index('user_id')
@@ -231,14 +242,14 @@ def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, gro
         evaluator,
         data.dataset,
         pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])].reset_index(),
-        'topk_pred',
+        col,
         metric
     )[:, -1]
     _f_ndcg = compute_metric(
         evaluator,
         data.dataset,
         pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])].reset_index(),
-        'topk_pred',
+        col,
         metric
     )[:, -1]
 
@@ -401,6 +412,20 @@ def get_neighbourhood(node_idx,
     return edge_subset
 
 
+def is_symmetrically_sorted(idxs: torch.Tensor):
+    assert idxs.shape[0] == 2
+    symm_offset = idxs.shape[1] // 2
+    return (idxs[:, :symm_offset] == idxs[[1, 0], symm_offset:]).all()
+
+
+def get_sorter_indices(base_idxs, to_sort_idxs):
+    unique, inverse = torch.cat((base_idxs, to_sort_idxs), dim=1).unique(dim=1, return_inverse=True)
+    inv_base, inv_to_sort = torch.split(inverse, to_sort_idxs.shape[1])
+    sorter = torch.arange(to_sort_idxs.shape[1], device=inv_to_sort.device)[torch.argsort(inv_to_sort)]
+
+    return sorter, inv_base
+
+
 def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
     if isinstance(base_symm, str):
         symm_matrix = getattr(torch, base_symm)(n_rows, n_rows).to(vector.device)
@@ -415,34 +440,36 @@ def create_symm_matrix_from_vec(vector, n_rows, idx=None, base_symm='zeros'):
     return symm_matrix
 
 
-def create_sparse_symm_matrix_from_vec(vector, idx, base_symm):
+def create_sparse_symm_matrix_from_vec(vector, idx, base_symm, edge_deletions=False, mask_filter=None):
     symm_matrix = copy.deepcopy(base_symm)
     if not symm_matrix.is_coalesced():
         symm_matrix = symm_matrix.coalesce()
     symm_matrix_idxs, symm_matrix_vals = symm_matrix.indices(), symm_matrix.values()
-
-    edge_deletions = False
-    if idx.shape[1] == symm_matrix_idxs.shape[1]:
-        edge_deletions = (idx.sort(dim=1).values == symm_matrix_idxs.sort(dim=1).values).all()
 
     if not edge_deletions:  # if pass is edge additions
         idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
         vector = torch.cat((symm_matrix_vals, vector, vector))
     else:
         vector = torch.cat((vector, vector))
+        if mask_filter is not None:
+            sorter, idx_inverse = get_sorter_indices(idx, symm_matrix_idxs)
+            symm_matrix_vals = symm_matrix_vals[sorter][idx_inverse]
+            assert is_symmetrically_sorted(symm_matrix_idxs[:, sorter][:, idx_inverse])
+            symm_matrix_vals[mask_filter] = vector
+            vector = symm_matrix_vals
 
     symm_matrix = torch.sparse.FloatTensor(idx, vector, symm_matrix.shape)
 
     return symm_matrix
 
 
-def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False):
+def perturbate_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False, edge_deletions=False, mask_filter=None):
     if pred:
         P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
-        P = create_sparse_symm_matrix_from_vec(P_hat_symm, mask_sub_adj, graph_A)
+        P = create_sparse_symm_matrix_from_vec(P_hat_symm, mask_sub_adj, graph_A, edge_deletions=edge_deletions, mask_filter=mask_filter)
         P_loss = P
     else:
-        P = create_sparse_symm_matrix_from_vec(torch.sigmoid(P_symm), mask_sub_adj, graph_A)
+        P = create_sparse_symm_matrix_from_vec(torch.sigmoid(P_symm), mask_sub_adj, graph_A, edge_deletions=edge_deletions, mask_filter=mask_filter)
         P_loss = None
 
     # Don't need gradient of this if pred is False

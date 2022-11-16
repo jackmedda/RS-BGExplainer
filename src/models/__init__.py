@@ -1,3 +1,4 @@
-from .gcmcperturbated import GCMCPerturbated
-from .lightgcnpertubated import LightGCNPerturbated
-from .ngcfperturbated import NGCFPerturbated
+from .perturbed_model import PerturbedModel
+from .gcmcperturbed import GCMCPerturbed
+from .lightgcnperturbed import LightGCNPerturbed
+from .ngcfperturbed import NGCFPerturbed

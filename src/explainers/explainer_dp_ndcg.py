@@ -32,11 +32,18 @@ class DPBGExplainer:
 
     def __init__(self, config, dataset, rec_data, model, dist="damerau_levenshtein", **kwargs):
         super(DPBGExplainer, self).__init__()
+        self.config = config
+
+        # self.cf_model = None
         self.model = model
         self.model.eval()
+        self._cf_model = None
+
         self.dataset = dataset
         self.rec_data_loader = rec_data
         self.rec_data = rec_data.dataset
+
+        self.cf_optimizer = None
 
         self.beta = config['cf_beta']
         self.device = config['device']
@@ -46,31 +53,6 @@ class DPBGExplainer:
         self.tot_item_num = dataset.item_num
         self.item_tensor = dataset.get_item_feature().to(model.device)
         self.test_batch_size = self.tot_item_num
-
-        # TODO: create a PerturbedModel wrapper around each model (it is necessary only to instantiate P inside
-        #       __init__ and define "loss"). get_adj_matrix needs to be overloaded to return the perturbed version
-        #       instead. This also solves the problem of calling "GcEncoder.P_loss" for GCMC
-        # Instantiate CF model class, load weights from original model
-        self.cf_model = getattr(exp_models, f"{model.__class__.__name__}Perturbated")(config, dataset).to(model.device)
-
-        self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
-
-        # Freeze weights from original model in cf_model
-        for name, param in self.cf_model.named_parameters():
-            if name != "P_symm":
-                param.requires_grad = False
-
-        lr = config['cf_learning_rate']
-        momentum = config["momentum"] or 0.0
-        sgd_kwargs = {'momentum': momentum, 'nesterov': True if momentum > 0 else False}
-        if config["cf_optimizer"] == "SGD":
-            self.cf_optimizer = torch.optim.SGD(self.cf_model.parameters(), lr=lr, **sgd_kwargs)
-        elif config["cf_optimizer"] == "Adadelta":
-            self.cf_optimizer = torch.optim.Adadelta(self.cf_model.parameters(), lr=lr)
-        elif config["cf_optimizer"] == "AdamW":
-            self.cf_optimizer = torch.optim.AdamW(self.cf_model.parameters(), lr=lr)
-        else:
-            raise NotImplementedError("CF Optimizer not implemented")
 
         if dist == "set":
             self.dist = lambda topk_idx, cf_topk_idx: len(topk_idx) - (len(set(topk_idx) & set(cf_topk_idx)))
@@ -93,49 +75,67 @@ class DPBGExplainer:
 
         self.evaluator = Evaluator(config)
 
-        trainer = get_trainer(config['MODEL_TYPE'], config['model'])(config, model)
-
         attr_map = dataset.field2id_token[self.sensitive_attribute]
-        f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
+        self.f_idx, self.m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 
-        f_group = rec_data.dataset.user_feat[self.sensitive_attribute] == f_idx
-        m_group = rec_data.dataset.user_feat[self.sensitive_attribute] == m_idx
-        rec_data_f, rec_data_m = copy.deepcopy(rec_data), copy.deepcopy(rec_data)
-
-        rec_data_f.user_df = Interaction({k: v[f_group] for k, v in rec_data_f.dataset.user_feat.interaction.items()})
-        rec_data_f.uid_list = rec_data_f.user_df['user_id']
-
-        self.f_result = trainer.evaluate(rec_data_f, load_best_model=False, show_progress=config['show_progress'])
-        self.logger.info(self.f_result)
-
-        rec_data_m.user_df = Interaction({k: v[m_group] for k, v in rec_data_m.dataset.user_feat.interaction.items()})
-        rec_data_m.uid_list = rec_data_m.user_df['user_id']
-        self.m_result = trainer.evaluate(rec_data_m, load_best_model=False, show_progress=config['show_progress'])
-        self.logger.info(self.m_result)
-
-        check_func = "__ge__" if config['delete_adv_group'] else "__lt__"
-
-        self.adv_group = m_idx if getattr(self.m_result['ndcg@10'], check_func)(self.f_result['ndcg@10']) else f_idx
-        self.disadv_group = f_idx if self.adv_group == m_idx else m_idx
-        self.results = dict(zip([m_idx, f_idx], [self.m_result, self.f_result]))
+        self.results = None
+        self.adv_group, self.disadv_group = None, None
 
         self.earlys = EarlyStopping(
-            config['earlys_patience'],
-            config['earlys_ignore'],
-            method=config['earlys_method'],
-            fn=config['earlys_fn'],
-            delta=config['earlys_delta']
+            config['early_stopping']['patience'],
+            config['early_stopping']['ignore'],
+            method=config['early_stopping']['method'],
+            fn=config['early_stopping']['mode'],
+            delta=config['early_stopping']['delta']
         )
 
-        self.earlys_pvalue = config['earlys_pvalue']
+        self.earlys_pvalue = config['early_stopping']['pvalue']
 
         self.previous_ndcg = config['previous_ndcg']
         self.previous_batch_LR_scaling = config['previous_batch_LR_scaling']
 
-        self.increase_disparity = config['increase_disparity']
+        self.increase_disparity = config['explainer_policies']['increase_disparity']
+        self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
 
         wandb.config.update(config.final_config_dict)
         # wandb.watch(self.cf_model)
+
+    @property
+    def cf_model(self):
+        if self._cf_model is None:
+            print("Counterfactual Model Explainer is not initalized yet. Execute 'explain' to initialize it.")
+        else:
+            return self._cf_model
+
+    @cf_model.setter
+    def cf_model(self, value):
+        self._cf_model = value
+
+    def initialize_cf_model(self, **kwargs):
+        # Instantiate CF model class, load weights from original model
+        self.cf_model = getattr(
+            exp_models,
+            f"{self.model.__class__.__name__}Perturbed"
+        )(self.config, self.dataset, **kwargs).to(self.model.device)
+
+        self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
+
+        # Freeze weights from original model in cf_model
+        for name, param in self.cf_model.named_parameters():
+            if name != "P_symm":
+                param.requires_grad = False
+
+        lr = self.config['cf_learning_rate']
+        momentum = self.config["momentum"] or 0.0
+        sgd_kwargs = {'momentum': momentum, 'nesterov': True if momentum > 0 else False}
+        if self.config["cf_optimizer"] == "SGD":
+            self.cf_optimizer = torch.optim.SGD(self.cf_model.parameters(), lr=lr, **sgd_kwargs)
+        elif self.config["cf_optimizer"] == "Adadelta":
+            self.cf_optimizer = torch.optim.Adadelta(self.cf_model.parameters(), lr=lr)
+        elif self.config["cf_optimizer"] == "AdamW":
+            self.cf_optimizer = torch.optim.AdamW(self.cf_model.parameters(), lr=lr)
+        else:
+            raise NotImplementedError("CF Optimizer not implemented")
 
     def compute_model_predictions(self, scores_args, topk):
         """
@@ -177,16 +177,16 @@ class DPBGExplainer:
                 cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
 
                 user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-                attr_map = self.dataset.field2id_token[self.sensitive_attribute]
-                f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 
-                m_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == m_idx]
-                f_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == f_idx]
+                m_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == self.m_idx]
+                f_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == self.f_idx]
 
                 orig_f, orig_m = np.mean(orig_res[f_users, -1]), np.mean(orig_res[m_users, -1])
                 cf_f, cf_m = np.mean(cf_res[f_users, -1]), np.mean(cf_res[m_users, -1])
                 self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
                                  f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+
+                import pdb; pdb.set_trace()
 
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
@@ -302,6 +302,102 @@ class DPBGExplainer:
 
         return iter_data
 
+    @staticmethod
+    def _verbose_plot(fair_losses, epoch):
+        if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
+            os.remove(f'loss_trend_epoch{epoch}.png')
+        sns.lineplot(
+            x='epoch',
+            y='fair loss',
+            data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
+        )
+        plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
+        plt.close()
+
+    def _earlys_pvalue_check(self, new_example):
+        pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
+        cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+
+        user_feat = Interaction(
+            {k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+
+        m_users = user_feat[self.sensitive_attribute] == self.m_idx
+        f_users = user_feat[self.sensitive_attribute] == self.f_idx
+
+        cf_f, cf_m = cf_res[f_users, -1], cf_res[m_users, -1]
+
+        stat = stats.f_oneway(cf_f, cf_m)
+        check = stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore
+        if check:
+            self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
+
+        return check
+
+    def determine_adv_group(self, batched_data, rec_model_topk):
+        pref_users = batched_data.numpy()
+        pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
+
+        orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+
+        pref_users_sens_attr = self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
+
+        f_result = orig_res[pref_users_sens_attr == self.f_idx, -1].mean()
+        m_result = orig_res[pref_users_sens_attr == self.m_idx, -1].mean()
+
+        check_func = "__ge__" if self.config['delete_adv_group'] else "__lt__"
+
+        self.adv_group = self.m_idx if getattr(m_result, check_func)(f_result) else self.f_idx
+        self.disadv_group = self.f_idx if self.adv_group == self.m_idx else self.m_idx
+        self.results = dict(zip([self.m_idx, self.f_idx], [m_result, self]))
+
+    def increase_dataset_unfairness(self, batched_data, test_data, rec_model_topk, topk=10):
+        pref_users = batched_data.numpy()
+        pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
+
+        orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+
+        m_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.m_idx
+        f_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.f_idx
+
+        m_size, f_size = m_users_mask.nonzero().shape[0], f_users_mask.nonzero().shape[0]
+        if m_size >= f_size:
+            gr_to_reduce, gr_fixed = self.m_idx, self.f_idx
+            steps = np.linspace(f_size, m_size, 10, dtype=int)[::-1]
+        else:
+            gr_to_reduce, gr_fixed = self.f_idx, self.m_idx
+            steps = np.linspace(m_size, f_size, 10, dtype=int)[::-1]
+
+        df_res = pd.DataFrame(zip(
+            pref_users,
+            orig_res[:, - 1],
+            self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
+        ), columns=['user_id', 'result', self.sensitive_attribute])
+
+        for step in steps:
+            step_df = df_res.groupby(self.sensitive_attribute).apply(
+                lambda x: x.sort_values('result', ascending=False)[:step]
+            ).reset_index(drop=True)
+            mean_metric = step_df.groupby(self.sensitive_attribute).mean()
+
+            batched_data = torch.tensor(step_df['user_id'].to_numpy())
+
+            if mean_metric.loc[gr_to_reduce, 'result'] <= mean_metric.loc[gr_fixed, 'result'] / 2:
+                print(mean_metric)
+                break
+
+        # recompute recommendations of original model
+        test_batch_data = DPBGExplainer.prepare_batched_data(batched_data, test_data)
+        test_scores_args = [test_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
+        self.compute_model_predictions(test_scores_args, topk)
+        test_model_topk = self.model_topk_idx.detach().cpu().numpy()
+
+        rec_batch_data = DPBGExplainer.prepare_batched_data(batched_data, self.rec_data_loader)
+        rec_scores_args = [rec_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
+        self.compute_model_predictions(rec_scores_args, topk)
+        rec_model_topk = self.model_topk_idx.detach().cpu().numpy()
+
+        return batched_data, test_model_topk, rec_model_topk
+
     def explain(self, batched_data, test_data, epochs, topk=10):
         """
         The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
@@ -313,15 +409,6 @@ class DPBGExplainer:
         """
         best_cf_example = []
         best_loss = np.inf
-        orig_ndcg_loss = np.abs(self.m_result['ndcg@10'] - self.f_result['ndcg@10'])
-        self.logger.info(f"Original Fair Loss: {orig_ndcg_loss}")
-
-        iter_epochs = tqdm.tqdm(
-            range(epochs),
-            total=epochs,
-            ncols=100,
-            desc=set_color(f"Epochs   ", 'blue'),
-        )
 
         cwd_files = [f for f in os.listdir() if f.startswith('loss_trend_epoch')]
         if len(cwd_files) > 0 and os.path.isfile(cwd_files[0]):
@@ -337,52 +424,36 @@ class DPBGExplainer:
         self.compute_model_predictions(rec_scores_args, topk)
         rec_model_topk = self.model_topk_idx.detach().cpu().numpy()
 
+        filtered_users = None
         if self.increase_disparity:
-            pref_users = batched_data.numpy()
-            pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
+            batched_data, test_model_topk, rec_model_topk = self.increase_dataset_unfairness(
+                batched_data,
+                test_data,
+                rec_model_topk,
+                topk=topk
+            )
 
-            orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+            filtered_users = batched_data
 
-            attr_map = self.dataset.field2id_token[self.sensitive_attribute]
-            f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
-            m_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == m_idx
-            f_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == f_idx
+        self.determine_adv_group(batched_data, rec_model_topk)
 
-            m_size, f_size = m_users_mask.nonzero().shape[0], f_users_mask.nonzero().shape[0]
-            if m_size >= f_size:
-                gr_to_reduce, gr_fixed = m_idx, f_idx
-                steps = np.linspace(f_size, m_size, 10, dtype=int)[::-1]
-            else:
-                gr_to_reduce, gr_fixed = f_idx, m_idx
-                steps = np.linspace(m_size, f_size, 10, dtype=int)[::-1]
+        if self.group_deletion_constraint:
+            if filtered_users is None:
+                filtered_users = batched_data
 
-            df_res = pd.DataFrame(zip(
-                pref_users,
-                orig_res[:, - 1],
-                self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
-            ), columns=['user_id', 'result', self.sensitive_attribute])
+            filtered_users = filtered_users[self.dataset.user_feat[self.sensitive_attribute][filtered_users] == self.adv_group]
 
-            for step in steps:
-                step_df = df_res.groupby(self.sensitive_attribute).apply(
-                    lambda x: x.sort_values('result', ascending=True)[:step]
-                ).reset_index(drop=True)
-                mean_metric = step_df.groupby(self.sensitive_attribute).mean()
+        self.initialize_cf_model(filtered_users=filtered_users)
 
-                batched_data = torch.tensor(step_df['user_id'].to_numpy())
+        orig_ndcg_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
+        self.logger.info(f"Original Fair Loss: {orig_ndcg_loss}")
 
-                if mean_metric.loc[gr_fixed, 'result'] <= mean_metric.loc[gr_to_reduce, 'result'] / 2:
-                    print(mean_metric)
-                    break
-
-            test_batch_data = DPBGExplainer.prepare_batched_data(batched_data, test_data)
-            test_scores_args = [test_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
-            self.compute_model_predictions(test_scores_args, topk)
-            test_model_topk = self.model_topk_idx.detach().cpu().numpy()
-
-            rec_batch_data = DPBGExplainer.prepare_batched_data(batched_data, self.rec_data_loader)
-            rec_scores_args = [rec_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
-            self.compute_model_predictions(rec_scores_args, topk)
-            rec_model_topk = self.model_topk_idx.detach().cpu().numpy()
+        iter_epochs = tqdm.tqdm(
+            range(epochs),
+            total=epochs,
+            ncols=100,
+            desc=set_color(f"Epochs   ", 'blue'),
+        )
 
         new_example = None
         fair_losses = []
@@ -422,15 +493,7 @@ class DPBGExplainer:
             fair_losses.append(epoch_fair_loss)
 
             if self.verbose:
-                if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
-                    os.remove(f'loss_trend_epoch{epoch}.png')
-                sns.lineplot(
-                    x='epoch',
-                    y='fair loss',
-                    data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
-                )
-                plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
-                plt.close()
+                DPBGExplainer._verbose_plot(fair_losses, epoch)
 
             if new_example is not None:
                 new_example[6] = epoch_fair_loss
@@ -468,27 +531,13 @@ class DPBGExplainer:
 
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
-                    self.logger.info(f"Early Stopping: best epoch {epoch + 1 - len(self.earlys.history) + self.earlys.best_loss}")
-                    if self.earlys_pvalue is None:
-                        break
+                    best_epoch = epoch + 1 - len(self.earlys.history) + self.earlys.best_loss
+                    self.logger.info(f"Early Stopping: best epoch {best_epoch}")
+
+                    break
 
                 if self.earlys_pvalue is not None:
-                    pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
-                    cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
-
-                    user_feat = Interaction(
-                        {k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-                    attr_map = self.dataset.field2id_token[self.sensitive_attribute]
-                    f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
-
-                    m_users = user_feat[self.sensitive_attribute] == m_idx
-                    f_users = user_feat[self.sensitive_attribute] == f_idx
-
-                    cf_f, cf_m = cf_res[f_users, -1], cf_res[m_users, -1]
-
-                    stat = stats.f_oneway(cf_f, cf_m)
-                    if stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore:
-                        self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
+                    if self._earlys_pvalue_check(new_example):
                         break
 
                 best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss)
