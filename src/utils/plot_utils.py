@@ -440,3 +440,10 @@ def off_margin_ticks(*axs, axis='x'):
     for ax in axs:
         plt.setp(getattr(ax, f)(), visible=False)
         plt.setp(getattr(ax, f)(minor=True), visible=False)
+
+
+def make_patch_spines_invisible(ax):
+    ax.set_frame_on(True)
+    ax.patch.set_visible(False)
+    for sp in ax.spines.values():
+        sp.set_visible(False)

@@ -1,5 +1,8 @@
+import scipy.signal as sp_signal
+
+
 class EarlyStopping:
-    def __init__(self, patience, ignore, method='consistency', delta=1e-4, fn='lt'):
+    def __init__(self, patience, ignore, method='consistency', delta=1e-4, fn='lt', **kwargs):
         '''
         Args:
             patience : Integer, number of previous loss values stored at one time
@@ -15,8 +18,13 @@ class EarlyStopping:
         self.best_loss = 0
         self.methods = {
             'slope': self.check_slope,
-            'consistency': self.check_consistency
+            'consistency': self.check_consistency,
+            'savgol': self.check_savinsky_golay_consistency
         }
+
+        self._min_epochs = kwargs.get('min_epochs', 10)
+        self._window_length = kwargs.get('window_length', lambda x: len(x) // 2)
+        self._polyorder = kwargs.get('polyorder', 2)
     
     def check(self, loss):
         '''
@@ -54,6 +62,22 @@ class EarlyStopping:
         if getattr(last, self.fn)(self.history[self.best_loss]) and abs(last - self.history[self.best_loss]) > self.delta:
             self.best_loss = len(self.history) - 1
             return False
+        return len(self.history) - 1 - self.best_loss >= self.patience
+
+    def check_savinsky_golay_consistency(self):
+        if len(self.history) >= self._min_epochs:
+            history_smoothed = sp_signal.savgol_filter(self.history, self._window_length(self.history), self._polyorder)
+            last = history_smoothed[-1]
+            if getattr(last, self.fn)(history_smoothed[self.best_loss]) and abs(last - history_smoothed[self.best_loss]) > self.delta:
+                import sys
+                import seaborn as sns; import matplotlib.pyplot as plt
+                ax = sns.lineplot(x=range(1, len(history_smoothed) + 1), y=history_smoothed)
+                sns.scatterplot(x=[self.best_loss], y=[history_smoothed[self.best_loss]], marker='*', size=20, ax=ax)
+                plt.savefig(f"check_savinsky_golay_early_stopping_best_{sys.argv[sys.argv.index('--model') + 1]}_{self.best_loss}_epoch{len(history_smoothed)}.png")
+                plt.close()
+
+                self.best_loss = len(self.history) - 1
+                return False
         return len(self.history) - 1 - self.best_loss >= self.patience
     
     def reset(self):

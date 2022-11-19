@@ -4,7 +4,6 @@ import os
 import sys
 import time
 import math
-import copy
 from logging import getLogger
 from typing import Tuple, Callable, Dict
 
@@ -15,10 +14,11 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import scipy.stats as stats
+import scipy.stats as sp_stats
+import scipy.signal as sp_signal
 import matplotlib.pyplot as plt
 from recbole.evaluator import Evaluator
-from recbole.utils import get_trainer, set_color
+from recbole.utils import set_color
 from recbole.data.interaction import Interaction
 
 sys.path.append('..')
@@ -151,6 +151,22 @@ class DPBGExplainer:
         # topk_idx contains the ids of the topk items
         self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
 
+    def logging_exp_ndcg_per_group(self, new_example):
+        pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]),
+                                 columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+        orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+        cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+
+        user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
+
+        m_users = user_feat[self.sensitive_attribute] == self.m_idx
+        f_users = user_feat[self.sensitive_attribute] == self.f_idx
+
+        orig_f, orig_m = np.mean(orig_res[f_users, -1]), np.mean(orig_res[m_users, -1])
+        cf_f, cf_m = np.mean(cf_res[f_users, -1]), np.mean(cf_res[m_users, -1])
+        self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
+                         f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+
     def update_best_cf_example(self, best_cf_example, new_example, loss_total, best_loss, first_fair_loss):
         """
         Updates the explanations with new explanation (if not None) depending on new loss value
@@ -172,21 +188,7 @@ class DPBGExplainer:
             self.old_graph_dist = new_example[-4]
 
             if self.verbose:
-                pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]), columns=['user_id', 'topk_pred', 'cf_topk_pred'])
-                orig_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
-                cf_res = utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
-
-                user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-
-                m_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == self.m_idx]
-                f_users = user_feat['user_id'][user_feat[self.sensitive_attribute] == self.f_idx]
-
-                orig_f, orig_m = np.mean(orig_res[f_users, -1]), np.mean(orig_res[m_users, -1])
-                cf_f, cf_m = np.mean(cf_res[f_users, -1]), np.mean(cf_res[m_users, -1])
-                self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
-                                 f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
-
-                import pdb; pdb.set_trace()
+                self.logging_exp_ndcg_per_group(new_example)
 
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
@@ -306,11 +308,17 @@ class DPBGExplainer:
     def _verbose_plot(fair_losses, epoch):
         if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
             os.remove(f'loss_trend_epoch{epoch}.png')
-        sns.lineplot(
+        ax = sns.lineplot(
             x='epoch',
             y='fair loss',
-            data=pd.DataFrame(zip(np.arange(epoch + 1), fair_losses), columns=['epoch', 'fair loss'])
+            data=pd.DataFrame(zip(np.arange(1, epoch + 2), fair_losses), columns=['epoch', 'fair loss'])
         )
+        if len(fair_losses) > 20:
+            sns.lineplot(
+                x=np.arange(1, epoch + 2),
+                y=sp_signal.savgol_filter(fair_losses, window_length=len(fair_losses) // 2, polyorder=2),
+                ax=ax
+            )
         plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
         plt.close()
 
@@ -326,7 +334,7 @@ class DPBGExplainer:
 
         cf_f, cf_m = cf_res[f_users, -1], cf_res[m_users, -1]
 
-        stat = stats.f_oneway(cf_f, cf_m)
+        stat = sp_stats.f_oneway(cf_f, cf_m)
         check = stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore
         if check:
             self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
@@ -348,7 +356,7 @@ class DPBGExplainer:
 
         self.adv_group = self.m_idx if getattr(m_result, check_func)(f_result) else self.f_idx
         self.disadv_group = self.f_idx if self.adv_group == self.m_idx else self.m_idx
-        self.results = dict(zip([self.m_idx, self.f_idx], [m_result, self]))
+        self.results = dict(zip([self.m_idx, self.f_idx], [m_result, f_result]))
 
     def increase_dataset_unfairness(self, batched_data, test_data, rec_model_topk, topk=10):
         pref_users = batched_data.numpy()
@@ -381,7 +389,7 @@ class DPBGExplainer:
 
             batched_data = torch.tensor(step_df['user_id'].to_numpy())
 
-            if mean_metric.loc[gr_to_reduce, 'result'] <= mean_metric.loc[gr_fixed, 'result'] / 2:
+            if mean_metric.loc[gr_to_reduce, 'result'] / 2 >= mean_metric.loc[gr_fixed, 'result']:
                 print(mean_metric)
                 break
 
@@ -396,7 +404,7 @@ class DPBGExplainer:
         self.compute_model_predictions(rec_scores_args, topk)
         rec_model_topk = self.model_topk_idx.detach().cpu().numpy()
 
-        return batched_data, test_model_topk, rec_model_topk
+        return batched_data, test_model_topk, test_scores_args, rec_model_topk, rec_scores_args
 
     def explain(self, batched_data, test_data, epochs, topk=10):
         """
@@ -426,7 +434,7 @@ class DPBGExplainer:
 
         filtered_users = None
         if self.increase_disparity:
-            batched_data, test_model_topk, rec_model_topk = self.increase_dataset_unfairness(
+            batched_data, test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = self.increase_dataset_unfairness(
                 batched_data,
                 test_data,
                 rec_model_topk,
@@ -588,7 +596,7 @@ class DPBGExplainer:
                 self.sensitive_attribute,
                 user_feat,
                 topk=topk,
-                adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]['ndcg@10']),
+                adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]),
                 previous_ndcg=previous_ndcg
             ),
             target

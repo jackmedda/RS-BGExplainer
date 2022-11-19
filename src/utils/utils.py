@@ -38,7 +38,12 @@ EXPS_COLUMNS = [
 def wandb_init(config, **kwargs):
     config['wandb_tags'] = [k for k in config['explainer_policies'] if config['explainer_policies'][k]]
 
-    wandb.init(**kwargs, tags=config['wandb_tags'])
+    wandb.init(
+        project="B-GEM",
+        entity="fairrec",
+        tags=config['wandb_tags'],
+        **kwargs
+    )
 
 
 def load_data_and_model(model_file, explainer_config_file=None):
@@ -236,24 +241,20 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
 def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, col='topk_pred', metric="ndcg", raw=False):
     m_idx, f_idx = group_idxs
 
-    pref_data_user = pref_data.set_index('user_id')
+    m_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])
+    f_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])
 
-    _m_ndcg = compute_metric(
+    metric_result = compute_metric(
         evaluator,
         data.dataset,
-        pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])].reset_index(),
-        col,
-        metric
-    )[:, -1]
-    _f_ndcg = compute_metric(
-        evaluator,
-        data.dataset,
-        pref_data_user.loc[np.intersect1d(pref_data_user.index, user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])].reset_index(),
+        pref_data,
         col,
         metric
     )[:, -1]
 
-    return (_m_ndcg, _f_ndcg) if raw else (_m_ndcg.mean(), _f_ndcg.mean())
+    _m_result, _f_result = metric_result[m_group_mask], metric_result[f_group_mask]
+
+    return (_m_result, _f_result) if raw else (_m_result.mean(), _f_result.mean())
 
 
 def chunk_categorize(array_1d, n_chunks=10):

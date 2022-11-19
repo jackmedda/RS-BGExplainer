@@ -81,7 +81,7 @@ early_stopping:
     ignore: 0
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
-    delta: 0.0015  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
+    delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
     pvalue:
 
 previous_ndcg: False
@@ -91,4 +91,4 @@ previous_batch_LR_scaling: False
 explainer_policies:
     increase_disparity: True
     force_removed_edges: True
-    group_deletion_constraint: False
+    group_deletion_constraint: True

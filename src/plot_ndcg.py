@@ -47,17 +47,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                                       test_orig_ndcg=None,
                                       data_info="test"):
     columns = ["Epoch", "Group", "metric", "value"]
-    edges_ylabel = "# Del Edges" if not edge_additions else "# Added Edges"
-    title = "Edge Additions " if edge_additions else "Edge Deletions "
-    if sens_attr == "gender":
-        title += "of Males " if group_edge_del == m_idx else "of Females "
-        real_group_map = None
-        m_label, f_label = "M", "F"
-    else:
-        title += "of Younger " if group_edge_del == m_idx else "of Older "
-        real_group_map = {'M': 'Y', 'F': 'O'}
-        m_label, f_label = "Y", "O"
-    title += "Optimized on " + f"{exp_rec_data.title()} Data"
 
     df_test_result = None
     orig_m_ndcg, orig_f_ndcg = orig_ndcg
@@ -67,8 +56,14 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             os.makedirs(plots_path)
 
         group_map = train_data.dataset.field2id_token[sens_attr]
-        df_data = []
-        del_edge_data = []
+        df_data = [
+            [0, m_idx, 'ndcg', orig_m_ndcg],
+            [0, f_idx, 'ndcg', orig_f_ndcg]
+        ]
+        del_edge_data = [
+            [0, m_idx, np.array([[]])],
+            [0, f_idx, np.array([[]])]
+        ]
         for epoch in res_epoch_group[e_type]:
             for gr, gr_res in res_epoch_group[e_type][epoch].items():
                 for metric in gr_res:
@@ -81,7 +76,11 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
             df["Group"] = df["Group"].map(real_group_map.__getitem__)
 
         if data_info != "test":
-            df_test_result_data = []
+            _test_orig_m_ndcg, _test_orig_f_ndcg = test_orig_ndcg
+            df_test_result_data = [
+                [0, m_idx, 'ndcg', _test_orig_m_ndcg],
+                [0, f_idx, 'ndcg', _test_orig_f_ndcg]
+            ]
             for epoch in test_result_per_epoch_per_group[e_type]:
                 for gr, gr_res in test_result_per_epoch_per_group[e_type][epoch].items():
                     for metric in gr_res:
@@ -181,23 +180,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                     ax_lines = sns.lineplot(x="Epoch", y=metr_str, data=data_df, hue="Group", palette=colors, hue_order=[m_label, f_label], ax=ax)
                     lines.append(ax_lines)
 
-                    title_proxy = Rectangle((0, 0), 0, 0, color='w')
-                    ls_legend_handles = [
-                        Line2D([0], [0], ls='-', color='k'),
-                        Line2D([0], [0], ls='--', color='k')
-                    ]
-
-                    ls_legend_labels = [
-                        data_type,
-                        f"{data_type} Original"
-                    ]
-
-                    handles, labels = ax.get_legend_handles_labels()
-                    ax.legend(
-                        [title_proxy] + handles + [title_proxy] + ls_legend_handles,
-                        ["Group"] + labels + ["Source Eval Data"] + ls_legend_labels
-                    )
-
             diff_groups = df_diff.groupby("Source Eval Data")
             # diff_colors = sns.color_palette("colorblind")[::-1][:diff_groups.ngroups]
             diff_colors = sns.color_palette("colorblind6", n_colors=diff_groups.ngroups)
@@ -243,10 +225,6 @@ def plot_lineplot_per_epoch_per_group(res_epoch_group,
                         ax.scatter(x_intersects, y_scatter, marker="X", c="k")
 
             if metric == "ndcg":
-                x_lim = [plot_df["Epoch"].min(), plot_df["Epoch"].max()]
-                ax_rec.plot(x_lim, [orig_m_ndcg, orig_m_ndcg], c=colors[0], ls='--')
-                ax_rec.plot(x_lim, [orig_f_ndcg, orig_f_ndcg], c=colors[1], ls='--')
-
                 if test_orig_ndcg is not None:
                     _test_orig_m_ndcg, _test_orig_f_ndcg = test_orig_ndcg
                     x_lim = [plot_test_df["Epoch"].min(), plot_test_df["Epoch"].max()]
@@ -691,6 +669,7 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
     plt.close()
 
 
+# %%
 def create_distribution_diff_metric_random_groups(
     _result_all_data,
     _pref_dfs,
@@ -700,7 +679,7 @@ def create_distribution_diff_metric_random_groups(
     iterations=100,
     n_bins=6
 ):
-    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges']]
+    pref_df = _pref_dfs[model_dp_s][['user_id', 'n_del_edges', 'epoch']]
 
     uid_list = next(pref_df.groupby('n_del_edges').__iter__())[1].user_id.to_numpy()
     u_sens_df = user_df.copy()
@@ -718,6 +697,9 @@ def create_distribution_diff_metric_random_groups(
             del_edges_perc,
             [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
         ))
+
+        del_edges_perc_inv = {v: k for k, v in del_edges_perc.items()}
+        assert len(del_edges_perc) == len(del_edges_perc_inv), "the inverse mapping is not consistent with the original one"
 
         plot_metric_df = [[], []]
         for n_del in _result_all_data[model_dp_s]:
@@ -753,15 +735,27 @@ def create_distribution_diff_metric_random_groups(
 
         for n_del in del_edges_bins:
             n_del_df = plot_df_gr.get_group(n_del)
+            n_del_epoch = pref_df.loc[pref_df['n_del_edges'] == del_edges_perc_inv[n_del], 'epoch'].iloc[0] if n_del != f"{0.0:.2f}%" else 0
             dp_samples.extend(list(zip(
                 [n_del] * iterations,
+                [n_del_epoch] * iterations,
                 utils.compute_DP_across_random_samples(n_del_df, sens_attr, metric.upper(), batch_size=batch_exp, iterations=iterations)
             )))
 
-        dp_samples_df = pd.DataFrame(dp_samples, columns=[edges_ylabel, f"{metric.upper()} DP"])
+        dp_samples_df = pd.DataFrame(dp_samples, columns=[edges_ylabel, "Epoch", f"{metric.upper()} DP"])
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         sns.lineplot(x=edges_ylabel, y=f"{metric.upper()} DP", data=dp_samples_df, ax=ax)
+
+        twiny = ax.twiny()
+        sns.lineplot(x="Epoch", y=f"{metric.upper()} DP", data=dp_samples_df, ax=twiny)
+        twiny.spines["bottom"].set_position(("outward", 40))
+        plot_utils.make_patch_spines_invisible(twiny)
+
+        twiny.spines["bottom"].set_visible(True)
+        twiny.xaxis.set_label_position('bottom')
+        twiny.xaxis.set_ticks_position('bottom')
+        twiny.set_xlabel('Epochs')
 
         ax.set_title(f"{sens_attr.title()} {metric.upper()} DP Across {iterations} Random Samples")
 
@@ -872,7 +866,7 @@ parser.add_argument('--model_file', required=True)
 parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args()  # r"--model_file saved\LightGCN-ML-100K-Oct-04-2022_19-50-30.pth --explainer_config_file config\explainer.yaml --load_config_id 14".split())
+args = parser.parse_args(r"--model_file saved\GCMC-ML-100K-Oct-02-2022_19-24-04.pth --explainer_config_file src\dp_ndcg_explanations\ml-100k\GCMC\FairDP\gender\epochs_1000\3\config.yaml".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -899,8 +893,6 @@ evaluator = Evaluator(config)
 
 utils.wandb_init(
     config,
-    project="B-GEM",
-    entity="fairrec",
     job_type="eval",
     name="Plots",
     group=f"{model_name}_{config['dataset']}_{sens_attr.title()}_epochs{config['cf_epochs']}_exp={load_config_id}",
@@ -1031,9 +1023,11 @@ title = "Edge Additions " if edge_additions else "Edge Deletions "
 if sens_attr == "gender":
     title += "of Males " if group_edge_del == m_idx else "of Females "
     real_group_map = {'M': 'M', 'F': 'F'}
+    m_label, f_label = "M", "F"
 else:
     title += "of Younger " if group_edge_del == m_idx else "of Older "
     real_group_map = {'M': 'Y', 'F': 'O'}
+    m_label, f_label = "Y", "O"
 title += "Optimized on " + f"{exp_rec_data.title()} Data"
 
 group_name_map = {
@@ -1174,6 +1168,7 @@ create_item_item_homophily_plot_over_del_edges_per_popularity(
     hist_type="test"
 )
 
+# %%
 if exp_rec_data != "test":
     create_bias_ratio_categories_over_groups_plot_per_del_edges(
         all_exp_rec_dfs,
@@ -1189,6 +1184,7 @@ create_bias_ratio_categories_over_groups_plot_per_del_edges(
     n_bins=6
 )
 
+# %%
 if exp_rec_data != "test":
     create_distribution_diff_metric_random_groups(
         rec_result_all_data,

@@ -127,8 +127,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
     utils.wandb_init(
         config,
-        project="B-GEM",
-        entity="fairrec",
         name="Explanation",
         job_type="train",
         group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp={os.path.basename(base_exps_file)}",
