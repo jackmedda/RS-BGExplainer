@@ -135,9 +135,6 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
         on=['n_del_edges', 'user_id']
     ).join(user_df.set_index('user_id'), on='user_id')
 
-    exp_test_df["% Del Edges"] = exp_test_df['n_del_edges'].map(lambda x: f"{x / train_data.dataset.inter_num * 100:.2f}%")
-    exp_rec_df["% Del Edges"] = exp_rec_df['n_del_edges'].map(lambda x: f"{x / train_data.dataset.inter_num * 100:.2f}%")
-
     _test_result = exp_test_df.pop("Value")
     _rec_result = exp_rec_df.pop("Value")
 
@@ -213,10 +210,13 @@ policy_map = {
 
 # %%
 axs = {}
+datasets_train_inter_sizes = {}
 test_df_data, rec_df_data = [], []
 test_del_df_data, rec_del_df_data = [], []
 for model_file, exp_config_file in zip(args.model_files, args.explainer_config_files):
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, exp_config_file)
+
+    datasets_train_inter_sizes[dataset.dataset_name] = train_data.dataset.inter_num
 
     model_name = model.__class__.__name__
     sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
@@ -286,7 +286,7 @@ cols = ['user_id', sens_attr.title(), 'Model', 'Dataset', 'Metric', 'Value', 'Po
 test_df = pd.DataFrame(test_df_data, columns=cols)
 rec_df = pd.DataFrame(rec_df_data, columns=cols)
 
-del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric', sens_attr.title(), '% Del Edges', 'Model', 'Dataset', 'Value', 'Policy']
+del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric', sens_attr.title(), 'Model', 'Dataset', 'Value', 'Policy']
 test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols)
 rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols)
 
@@ -338,8 +338,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 dp_samples
             )))
 
-            n_del_df_gby = sub_del_df.groupby("% Del Edges")
-            sorted_del_edges = sub_del_df.sort_values("# Del Edges")["% Del Edges"].unique()
+            n_del_df_gby = sub_del_df.groupby("# Del Edges")
+            sorted_del_edges = sub_del_df.sort_values("# Del Edges")["# Del Edges"].unique()
             for n_del in sorted_del_edges:
                 n_del_df = n_del_df_gby.get_group(n_del)
                 del_dp_samples = utils.compute_DP_across_random_samples(
@@ -374,9 +374,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
             for m, ax_line in zip(models_list, axs_line):
                 dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
-                sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
+                sns.lineplot(x="# Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
                 ax_line.set_title(dset.upper())
-                ax_line.xaxis.set_major_locator(mpl_tick.MaxNLocator('auto'))
+                ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
         fig_line.suptitle(sens_attr.title())
         fig_line.tight_layout()

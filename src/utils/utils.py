@@ -9,6 +9,7 @@ import wandb
 import torch
 import scipy
 import numba
+import numba.typed as nmb_typed
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -287,8 +288,8 @@ def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batc
 
     n_users = sum([x.shape[0] for x in groups.values()])
     size_perc = np.array([gr_users.shape[0] / n_users for gr, gr_users in groups.items()])
-    gr_data = np.array([gr_df.set_index('user_id').loc[:, metric].to_numpy() for gr, gr_df in df.groupby(sens_attr)])
-    groups = np.array([np.arange(gr.shape[0]) for gr in groups.values()])
+    gr_data = nmb_typed.List([gr_df.set_index('user_id').loc[:, metric].to_numpy() for gr, gr_df in df.groupby(sens_attr)])
+    groups = nmb_typed.List([np.arange(gr.shape[0]) for gr in groups.values()])
 
     return _compute_DP_random_samples(gr_data, groups, size_perc, batch_size=batch_size, iterations=iterations)
 
