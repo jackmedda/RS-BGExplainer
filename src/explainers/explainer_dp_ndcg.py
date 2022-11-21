@@ -381,15 +381,22 @@ class DPBGExplainer:
             self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
         ), columns=['user_id', 'result', self.sensitive_attribute])
 
+        if self.dataset.dataset_name == "lastfm-1k":
+            ascending = True
+            def check_func(gr_red_res, gr_fix_res): return gr_red_res <= gr_fix_res / 2
+        else:
+            ascending = False
+            def check_func(gr_red_res, gr_fix_res): return gr_red_res <= gr_fix_res / 2
+
         for step in steps:
             step_df = df_res.groupby(self.sensitive_attribute).apply(
-                lambda x: x.sort_values('result', ascending=False)[:step]
+                lambda x: x.sort_values('result', ascending=ascending)[:step]
             ).reset_index(drop=True)
             mean_metric = step_df.groupby(self.sensitive_attribute).mean()
 
             batched_data = torch.tensor(step_df['user_id'].to_numpy())
 
-            if mean_metric.loc[gr_to_reduce, 'result'] / 2 >= mean_metric.loc[gr_fixed, 'result']:
+            if check_func(mean_metric.loc[gr_to_reduce, 'result'], mean_metric.loc[gr_fixed, 'result']):
                 print(mean_metric)
                 break
 

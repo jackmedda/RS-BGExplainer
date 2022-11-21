@@ -1,3 +1,4 @@
+import numpy as np
 import scipy.signal as sp_signal
 
 
@@ -69,14 +70,7 @@ class EarlyStopping:
             history_smoothed = sp_signal.savgol_filter(self.history, self._window_length(self.history), self._polyorder)
             last = history_smoothed[-1]
             if getattr(last, self.fn)(history_smoothed[self.best_loss]) and abs(last - history_smoothed[self.best_loss]) > self.delta:
-                import sys
-                import seaborn as sns; import matplotlib.pyplot as plt
-                ax = sns.lineplot(x=range(1, len(history_smoothed) + 1), y=history_smoothed)
-                sns.scatterplot(x=[self.best_loss], y=[history_smoothed[self.best_loss]], marker='*', size=20, ax=ax)
-                plt.savefig(f"check_savinsky_golay_early_stopping_best_{sys.argv[sys.argv.index('--model') + 1]}_{self.best_loss}_epoch{len(history_smoothed)}.png")
-                plt.close()
-
-                self.best_loss = len(self.history) - 1
+                self.best_loss = np.argmin(history_smoothed)
                 return False
         return len(self.history) - 1 - self.best_loss >= self.patience
     

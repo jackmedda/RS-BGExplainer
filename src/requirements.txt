@@ -16,3 +16,4 @@ torch-sparse==0.6.14
 torchviz==0.0.2
 tqdm==4.64.0
 numba
+wandb

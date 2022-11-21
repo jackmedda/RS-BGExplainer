@@ -284,22 +284,26 @@ def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batc
     groups = {}
     for gr, gr_df in df.groupby(sens_attr):
         groups[gr] = gr_df['user_id'].unique()
-    grs_names = list(groups.keys())
 
     n_users = sum([x.shape[0] for x in groups.values()])
-    size_perc = {gr: gr_users.shape[0] / n_users for gr, gr_users in groups.items()}
+    size_perc = np.array([gr_users.shape[0] / n_users for gr, gr_users in groups.items()])
+    gr_data = np.array([gr_df.set_index('user_id').loc[:, metric].to_numpy() for gr, gr_df in df.groupby(sens_attr)])
+    groups = np.array([np.arange(gr.shape[0]) for gr in groups.values()])
 
-    out = []
-    for i in range(iterations):
-        samples = {}
-        for gr, gr_df in df.groupby(sens_attr):
-            sample_size = round(batch_size * size_perc[gr])
-            sample = np.random.choice(groups[gr], sample_size, replace=False)
-            samples[gr] = gr_df.set_index('user_id').loc[sample, metric].to_numpy()
+    return _compute_DP_random_samples(gr_data, groups, size_perc, batch_size=batch_size, iterations=iterations)
 
-        out.append(
-            abs(samples[grs_names[0]].mean() - samples[grs_names[1]].mean())
-        )
+
+@numba.jit(nopython=True, parallel=True)
+def _compute_DP_random_samples(group_data, groups, size_perc, batch_size=64, iterations=100):
+    out = np.empty((iterations,), dtype=np.float32)
+    for i in numba.prange(iterations):
+        samples = np.empty((2, ), dtype=np.float32)
+        for gr_i, gr_data in enumerate(group_data):
+            sample_size = round(batch_size * size_perc[gr_i])
+            sample = np.random.choice(groups[gr_i], sample_size, replace=False)
+            samples[gr_i] = gr_data[sample].mean()
+
+        out[i] = np.abs(samples[0] - samples[1])
 
     return out
 

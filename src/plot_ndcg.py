@@ -692,27 +692,18 @@ def create_distribution_diff_metric_random_groups(
     for metric in metrics_names:
         metric_df_cols = ['user_id', metric.upper(), 'n_del_edges', 'Graph Type']
 
-        del_edges_perc = np.concatenate([[0], np.sort(np.fromiter(_result_all_data[model_dp_s].keys(), int))])
-        del_edges_perc = dict(zip(
-            del_edges_perc,
-            [f"{x / train_data.dataset.inter_num * 100:.2f}%" for x in del_edges_perc]
-        ))
-
-        del_edges_perc_inv = {v: k for k, v in del_edges_perc.items()}
-        assert len(del_edges_perc) == len(del_edges_perc_inv), "the inverse mapping is not consistent with the original one"
-
         plot_metric_df = [[], []]
         for n_del in _result_all_data[model_dp_s]:
             plot_metric_df[0].extend(list(zip(
                 uid_list,
                 _result_all_data[model_dp_s][n_del][metric][:, -1].tolist(),
-                [del_edges_perc[n_del]] * len(uid_list),
+                [n_del] * len(uid_list),
                 ["Perturbed"] * len(uid_list)
             )))
         plot_metric_df[1].extend(list(zip(
             uid_list,
             orig_result[metric][:, -1].tolist(),
-            [del_edges_perc[0]] * len(uid_list),
+            [0] * len(uid_list),
             ["Original"] * len(uid_list)
         )))
 
@@ -726,7 +717,7 @@ def create_distribution_diff_metric_random_groups(
         plot_df = pd.concat(plot_metric_df, ignore_index=True)
         plot_df.rename(columns={'n_del_edges': edges_ylabel}, inplace=True)
 
-        del_edges_bins = np.array(list(del_edges_perc.values()))
+        del_edges_bins = np.sort(plot_df[edges_ylabel].unique())
         bins = np.linspace(0, del_edges_bins.shape[0] - 1, n_bins, dtype=int)
         del_edges_bins = del_edges_bins[bins]
 
@@ -735,7 +726,7 @@ def create_distribution_diff_metric_random_groups(
 
         for n_del in del_edges_bins:
             n_del_df = plot_df_gr.get_group(n_del)
-            n_del_epoch = pref_df.loc[pref_df['n_del_edges'] == del_edges_perc_inv[n_del], 'epoch'].iloc[0] if n_del != f"{0.0:.2f}%" else 0
+            n_del_epoch = pref_df.loc[pref_df['n_del_edges'] == n_del, 'epoch'].iloc[0] if n_del > 0 else 0
             dp_samples.extend(list(zip(
                 [n_del] * iterations,
                 [n_del_epoch] * iterations,
@@ -743,6 +734,9 @@ def create_distribution_diff_metric_random_groups(
             )))
 
         dp_samples_df = pd.DataFrame(dp_samples, columns=[edges_ylabel, "Epoch", f"{metric.upper()} DP"])
+        dp_samples_df[edges_ylabel] = dp_samples_df[edges_ylabel].map(
+            lambda x: f"{x / train_data.dataset.inter_num * 100:.2f}%"
+        )
 
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         sns.lineplot(x=edges_ylabel, y=f"{metric.upper()} DP", data=dp_samples_df, ax=ax)
@@ -866,7 +860,7 @@ parser.add_argument('--model_file', required=True)
 parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
 parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
 
-args = parser.parse_args(r"--model_file saved\GCMC-ML-100K-Oct-02-2022_19-24-04.pth --explainer_config_file src\dp_ndcg_explanations\ml-100k\GCMC\FairDP\gender\epochs_1000\3\config.yaml".split())
+args = parser.parse_args()  # r"--model_file saved\GCMC-ML-100K-Oct-02-2022_19-24-04.pth --explainer_config_file src\dp_ndcg_explanations\ml-100k\GCMC\FairDP\gender\epochs_1000\3\config.yaml".split())
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -1056,133 +1050,133 @@ if exp_rec_data != "test":
     )
 else:
     rec_result_per_epoch_per_group, rec_del_edges_per_epoch, rec_fair_loss_per_epoch = [None] * 3
-
-# %%
-plot_lineplot_per_epoch_per_group(
-    test_result_per_epoch_per_group,
-    test_del_edges_per_epoch,
-    test_fair_loss_per_epoch,
-    (test_orig_m_ndcg, test_orig_f_ndcg),
-    data_info="test"
-)
-
-if exp_rec_data != "test":
-    plot_lineplot_per_epoch_per_group(
-        rec_result_per_epoch_per_group,
-        rec_del_edges_per_epoch,
-        rec_fair_loss_per_epoch,
-        (rec_orig_m_ndcg, rec_orig_f_ndcg),
-        test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
-        data_info=exp_rec_data
-    )
-
-# %%
-create_table_metrics_over_del_edges(
-    test_result_all_data,
-    all_exp_test_dfs,
-    best_test_result[model_name],
-    load_config_id,
-    n_bins=100,
-    hist_type="test",
-    test_f="f_oneway"
-)
-
-if exp_rec_data != "test":
-    create_table_metrics_over_del_edges(
-        rec_result_all_data,
-        all_exp_rec_dfs,
-        best_rec_result[model_name],
-        load_config_id,
-        n_bins=10,
-        hist_type=exp_rec_data,
-        test_f="f_oneway"
-    )
-
-if exp_rec_data != "test":
-    create_lineplot_metrics_over_del_edges(
-        rec_result_all_data,
-        all_exp_rec_dfs,
-        best_rec_result[model_name],
-        load_config_id,
-        n_bins=10,
-        hist_type=exp_rec_data,
-        test_f="f_oneway"
-    )
-
-create_lineplot_metrics_over_del_edges(
-    test_result_all_data,
-    all_exp_test_dfs,
-    best_test_result[model_name],
-    load_config_id,
-    n_bins=10,
-    hist_type="test",
-    test_f="f_oneway"
-)
-
-
-# %%
-if exp_rec_data != "test":
-    create_metric_access_over_del_edges_per_group(
-        rec_result_all_data,
-        all_exp_rec_dfs,
-        best_rec_result[model_name],
-        load_config_id,
-        hist_type=exp_rec_data,
-        zerometric=True
-    )
-
-create_metric_access_over_del_edges_per_group(
-    test_result_all_data,
-    all_exp_test_dfs,
-    best_test_result[model_name],
-    load_config_id,
-    hist_type="test",
-    zerometric=True
-)
-
-# %%
-if exp_rec_data != "test":
-    create_user_user_homophily_plot_over_del_edges_per_group(
-        all_exp_rec_dfs,
-        load_config_id,
-        hist_type=exp_rec_data
-    )
-
-create_user_user_homophily_plot_over_del_edges_per_group(
-    all_exp_test_dfs,
-    load_config_id,
-    hist_type="test"
-)
-
-# %%
-if exp_rec_data != "test":
-    create_item_item_homophily_plot_over_del_edges_per_popularity(
-        all_exp_rec_dfs,
-        load_config_id,
-        hist_type=exp_rec_data
-    )
-
-create_item_item_homophily_plot_over_del_edges_per_popularity(
-    all_exp_test_dfs,
-    load_config_id,
-    hist_type="test"
-)
-
-# %%
-if exp_rec_data != "test":
-    create_bias_ratio_categories_over_groups_plot_per_del_edges(
-        all_exp_rec_dfs,
-        load_config_id,
-        hist_type=exp_rec_data,
-        n_bins=6
-    )
-
-create_bias_ratio_categories_over_groups_plot_per_del_edges(
-    all_exp_test_dfs,
-    load_config_id,
-    hist_type="test",
-    n_bins=6
-)
+#
+# # %%
+# plot_lineplot_per_epoch_per_group(
+#     test_result_per_epoch_per_group,
+#     test_del_edges_per_epoch,
+#     test_fair_loss_per_epoch,
+#     (test_orig_m_ndcg, test_orig_f_ndcg),
+#     data_info="test"
+# )
+#
+# if exp_rec_data != "test":
+#     plot_lineplot_per_epoch_per_group(
+#         rec_result_per_epoch_per_group,
+#         rec_del_edges_per_epoch,
+#         rec_fair_loss_per_epoch,
+#         (rec_orig_m_ndcg, rec_orig_f_ndcg),
+#         test_orig_ndcg=(test_orig_m_ndcg, test_orig_f_ndcg),
+#         data_info=exp_rec_data
+#     )
+#
+# # %%
+# create_table_metrics_over_del_edges(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     load_config_id,
+#     n_bins=100,
+#     hist_type="test",
+#     test_f="f_oneway"
+# )
+#
+# if exp_rec_data != "test":
+#     create_table_metrics_over_del_edges(
+#         rec_result_all_data,
+#         all_exp_rec_dfs,
+#         best_rec_result[model_name],
+#         load_config_id,
+#         n_bins=10,
+#         hist_type=exp_rec_data,
+#         test_f="f_oneway"
+#     )
+#
+# if exp_rec_data != "test":
+#     create_lineplot_metrics_over_del_edges(
+#         rec_result_all_data,
+#         all_exp_rec_dfs,
+#         best_rec_result[model_name],
+#         load_config_id,
+#         n_bins=10,
+#         hist_type=exp_rec_data,
+#         test_f="f_oneway"
+#     )
+#
+# create_lineplot_metrics_over_del_edges(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     load_config_id,
+#     n_bins=10,
+#     hist_type="test",
+#     test_f="f_oneway"
+# )
+#
+#
+# # %%
+# if exp_rec_data != "test":
+#     create_metric_access_over_del_edges_per_group(
+#         rec_result_all_data,
+#         all_exp_rec_dfs,
+#         best_rec_result[model_name],
+#         load_config_id,
+#         hist_type=exp_rec_data,
+#         zerometric=True
+#     )
+#
+# create_metric_access_over_del_edges_per_group(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     load_config_id,
+#     hist_type="test",
+#     zerometric=True
+# )
+#
+# # %%
+# if exp_rec_data != "test":
+#     create_user_user_homophily_plot_over_del_edges_per_group(
+#         all_exp_rec_dfs,
+#         load_config_id,
+#         hist_type=exp_rec_data
+#     )
+#
+# create_user_user_homophily_plot_over_del_edges_per_group(
+#     all_exp_test_dfs,
+#     load_config_id,
+#     hist_type="test"
+# )
+#
+# # %%
+# if exp_rec_data != "test":
+#     create_item_item_homophily_plot_over_del_edges_per_popularity(
+#         all_exp_rec_dfs,
+#         load_config_id,
+#         hist_type=exp_rec_data
+#     )
+#
+# create_item_item_homophily_plot_over_del_edges_per_popularity(
+#     all_exp_test_dfs,
+#     load_config_id,
+#     hist_type="test"
+# )
+#
+# # %%
+# if exp_rec_data != "test":
+#     create_bias_ratio_categories_over_groups_plot_per_del_edges(
+#         all_exp_rec_dfs,
+#         load_config_id,
+#         hist_type=exp_rec_data,
+#         n_bins=6
+#     )
+#
+# create_bias_ratio_categories_over_groups_plot_per_del_edges(
+#     all_exp_test_dfs,
+#     load_config_id,
+#     hist_type="test",
+#     n_bins=6
+# )
 
 # %%
 if exp_rec_data != "test":

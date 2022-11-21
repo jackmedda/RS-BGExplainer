@@ -3,10 +3,12 @@ import os
 import argparse
 import inspect
 
+import tqdm
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mpl_tick
 from recbole.evaluator import Evaluator
 
 import src.utils as utils
@@ -30,14 +32,14 @@ def get_plots_path(datasets_names, model_names):
 
 
 def update_plot_data(_test_df_data, _rec_df_data):
-    test_orig_total_metric = best_test_exp_result[model_name]
-    rec_orig_total_metric = best_rec_exp_result[model_name]
+    test_orig_total_metric = best_test_exp_result[model_name][metric]
+    rec_orig_total_metric = best_rec_exp_result[model_name][metric]
 
-    test_pert_total_metric = best_test_exp_result[model_dp_s]
-    rec_pert_total_metric = best_rec_exp_result[model_dp_s]
+    test_pert_total_metric = best_test_exp_result[model_dp_s][metric]
+    rec_pert_total_metric = best_rec_exp_result[model_dp_s][metric]
 
-    m_group_mask = best_rec_exp_df[model_name].user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])
-    f_group_mask = best_rec_exp_df[model_name].user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])
+    m_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])
+    f_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])
 
     rec_orig_m_metric = rec_orig_total_metric[m_group_mask, -1].mean()
     rec_orig_f_metric = rec_orig_total_metric[f_group_mask, -1].mean()
@@ -96,6 +98,94 @@ def update_plot_data(_test_df_data, _rec_df_data):
     return _group_edge_del
 
 
+def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
+    filter_cols = ['user_id', 'epoch', 'n_del_edges', 'fair_loss']
+
+    exp_test_df = all_exp_test_dfs[model_dp_s][filter_cols]
+    exp_rec_df = all_exp_rec_dfs[model_dp_s][filter_cols]
+    uid_list_test = next(exp_test_df.groupby('n_del_edges').__iter__())[1].user_id
+    uid_list_rec = next(exp_rec_df.groupby('n_del_edges').__iter__())[1].user_id
+
+    result_test_df_data, result_rec_df_data = [], []
+    for n_del, res in test_result_all_data[model_dp_s].items():
+        result_test_df_data.extend(list(zip(
+            [n_del] * len(uid_list_test),
+            uid_list_test,
+            res[metric][:, -1],
+            [metric.upper()] * len(uid_list_test)
+        )))
+    for n_del, res in rec_result_all_data[model_dp_s].items():
+        result_rec_df_data.extend(list(zip(
+            [n_del] * len(uid_list_rec),
+            uid_list_rec,
+            res[metric][:, -1],
+            [metric.upper()] * len(uid_list_rec)
+        )))
+
+    exp_test_df = exp_test_df.join(
+        pd.DataFrame(
+            result_test_df_data, columns=['n_del_edges', 'user_id', 'Value', 'Metric']
+        ).set_index(['n_del_edges', 'user_id']),
+        on=['n_del_edges', 'user_id']
+    ).join(user_df.set_index('user_id'), on='user_id')
+    exp_rec_df = exp_rec_df.join(
+        pd.DataFrame(
+            result_rec_df_data, columns=['n_del_edges', 'user_id', 'Value', 'Metric']
+        ).set_index(['n_del_edges', 'user_id']),
+        on=['n_del_edges', 'user_id']
+    ).join(user_df.set_index('user_id'), on='user_id')
+
+    exp_test_df["% Del Edges"] = exp_test_df['n_del_edges'].map(lambda x: f"{x / train_data.dataset.inter_num * 100:.2f}%")
+    exp_rec_df["% Del Edges"] = exp_rec_df['n_del_edges'].map(lambda x: f"{x / train_data.dataset.inter_num * 100:.2f}%")
+
+    _test_result = exp_test_df.pop("Value")
+    _rec_result = exp_rec_df.pop("Value")
+
+    test_orig_total_metric = best_test_exp_result[model_name][metric][:, -1]
+    rec_orig_total_metric = best_rec_exp_result[model_name][metric][:, -1]
+
+    unique_test_del_edges = len(test_result_all_data[model_dp_s])
+    unique_rec_del_edges = len(rec_result_all_data[model_dp_s])
+
+    _test_df_del_data.extend(
+        np.c_[
+            exp_test_df.values,
+            [model_name] * len(exp_test_df),
+            [dataset.dataset_name] * len(exp_test_df),
+            np.tile(test_orig_total_metric, unique_test_del_edges),
+            ["NoPolicy"] * len(exp_test_df)
+        ].tolist()
+    )
+    _test_df_del_data.extend(
+        np.c_[
+            exp_test_df.values,
+            [model_name] * len(exp_test_df),
+            [dataset.dataset_name] * len(exp_test_df),
+            _test_result.to_numpy(),
+            [policy] * len(exp_test_df)
+        ].tolist()
+    )
+
+    _rec_df_del_data.extend(
+        np.c_[
+            exp_rec_df.values,
+            [model_name] * len(exp_rec_df),
+            [dataset.dataset_name] * len(exp_rec_df),
+            np.tile(rec_orig_total_metric, unique_rec_del_edges),
+            ["NoPolicy"] * len(exp_rec_df)
+        ].tolist()
+    )
+    _rec_df_del_data.extend(
+        np.c_[
+            exp_rec_df.values,
+            [model_name] * len(exp_rec_df),
+            [dataset.dataset_name] * len(exp_rec_df),
+            _rec_result.to_numpy(),
+            [policy] * len(exp_rec_df)
+        ].tolist()
+    )
+
+
 # %%
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
@@ -130,7 +220,7 @@ for model_file, exp_config_file in zip(args.model_files, args.explainer_config_f
 
     model_name = model.__class__.__name__
     sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
-    policy = '+'.join([pm for p, pm in policy_map.items() if config[p]])
+    policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'][p]])
 
     edge_additions = config['edge_additions']
     exp_rec_data = config['exp_rec_data']
@@ -188,18 +278,17 @@ for model_file, exp_config_file in zip(args.model_files, args.explainer_config_f
         rec=True
     )
 
-    import pdb; pdb.set_trace()
-
     for metric in metrics:
         group_edge_del = update_plot_data(test_df_data, rec_df_data)
-
+        update_plot_del_data(test_del_df_data, rec_del_df_data)
 
 cols = ['user_id', sens_attr.title(), 'Model', 'Dataset', 'Metric', 'Value', 'Policy']
 test_df = pd.DataFrame(test_df_data, columns=cols)
 rec_df = pd.DataFrame(rec_df_data, columns=cols)
 
-print(test_df)
-print(rec_df)
+del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric', sens_attr.title(), '% Del Edges', 'Model', 'Dataset', 'Value', 'Policy']
+test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols)
+rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols)
 
 datasets_list, models_list = test_df['Dataset'].unique().tolist(), test_df['Model'].unique().tolist()
 plots_path = os.path.join(get_plots_path('_'.join(datasets_list), '_'.join(models_list)), '_'.join(config_ids), sens_attr)
@@ -215,13 +304,29 @@ with open(os.path.join(plots_path, 'rec_df.csv'), 'w') as f:
     f.write(f'# explainer_config_files {" ".join(args.explainer_config_files)}\n')
     rec_df.to_csv(f)
 
-for df, exp_data_name in zip([test_df, rec_df], ["test", exp_rec_data]):
-    for metric, metric_df in df.groupby("Metric"):
+for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
+    _metr_df_gby = df.groupby("Metric")
+    _metr_del_df_gby = del_df.groupby("Metric")
+
+    _metrics = list(_metr_df_gby.groups.keys())
+    for metric in _metrics:
+        metric_df = _metr_df_gby.get_group(metric)
+        metric_del_df = _metr_del_df_gby.get_group(metric)
+
         plot_df_data = []
+        plot_del_df_data = []
         y_col = f"{metric.upper()} DP"
         plot_columns = ["Model", "Dataset", "Policy", y_col]
+        plot_del_columns = ["Model", "Dataset", "Policy", "% Del Edges", y_col]
         palette = dict(zip(np.concatenate([["NoPolicy"], df["Policy"].unique()]), sns.color_palette("colorblind")))
-        for (_model, _dataset, _policy), sub_df in metric_df.groupby(["Model", "Dataset", "Policy"]):
+        _m_dset_pol_df = metric_df.groupby(["Model", "Dataset", "Policy"])
+        _m_dset_pol_del_df = metric_del_df.groupby(["Model", "Dataset", "Policy"])
+
+        m_dset_pol = list(_m_dset_pol_df.groups.keys())
+        for (_model, _dataset, _policy) in tqdm.tqdm(m_dset_pol, desc="Extracting DP across random samples"):
+            sub_df = _m_dset_pol_df.get_group((_model, _dataset, _policy))
+            sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy))
+
             dp_samples = utils.compute_DP_across_random_samples(
                 sub_df, sens_attr.title(), 'Value', batch_size=batch_exp, iterations=args.iterations
             )
@@ -233,9 +338,27 @@ for df, exp_data_name in zip([test_df, rec_df], ["test", exp_rec_data]):
                 dp_samples
             )))
 
-        plot_df_line_gby = metric_df.groupby(["Dataset", "Model"])
+            n_del_df_gby = sub_del_df.groupby("% Del Edges")
+            sorted_del_edges = sub_del_df.sort_values("# Del Edges")["% Del Edges"].unique()
+            for n_del in sorted_del_edges:
+                n_del_df = n_del_df_gby.get_group(n_del)
+                del_dp_samples = utils.compute_DP_across_random_samples(
+                    n_del_df, sens_attr.title(), 'Value', batch_size=batch_exp, iterations=args.iterations
+                )
+
+                plot_del_df_data.extend(list(zip(
+                    [_model] * args.iterations,
+                    [_dataset] * args.iterations,
+                    [_policy] * args.iterations,
+                    [n_del] * args.iterations,
+                    del_dp_samples
+                )))
+
+        plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
+        plot_del_df_line_gby = plot_del_df_line.groupby(["Dataset", "Model"])
         fig_line = plt.figure(figsize=(15, 15), constrained_layout=True)
         subfigs = fig_line.subfigures(len(datasets_list), 1)
+        subfigs = [subfigs] if not isinstance(subfigs, np.ndarray) else subfigs
 
         plot_df_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
         plot_df_bar_gby = plot_df_bar.groupby("Dataset")
@@ -246,12 +369,14 @@ for df, exp_data_name in zip([test_df, rec_df], ["test", exp_rec_data]):
             sns.barplot(x="Model", y=y_col, data=dset_bar_df, hue="Policy", ax=ax_bar, palette=palette)
             ax_bar.set_title(dset.upper())
 
-            subfigs[i].set_title(dset.upper())
+            subfigs[i].suptitle(dset.upper())
             axs_line = subfigs[i].subplots(1, len(models_list))
+            axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
             for m, ax_line in zip(models_list, axs_line):
-                dset_model_line_df = plot_df_line_gby.get_group((dset, m))
-                sns.barplot(x="DEL EDGES", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette)
-                ax_bar.set_title(dset.upper())
+                dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
+                sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
+                ax_line.set_title(dset.upper())
+                ax_line.xaxis.set_major_locator(mpl_tick.MaxNLocator('auto'))
 
         fig_line.suptitle(sens_attr.title())
         fig_line.tight_layout()
