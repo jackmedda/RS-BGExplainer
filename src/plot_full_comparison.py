@@ -291,8 +291,6 @@ for model_file, exp_config_file in zip(args.model_files, args.explainer_config_f
     )
 
     for metric in metrics:
-        # TODO: Per ogni dataset la label del genere o età potrebbe essere diversa quindi per ciascun dataset vanno
-        #       mappati gli id come M o F così sono consistenti fra diversi dataset e poi mappati come Males, Females ecc
         group_edge_del = update_plot_data(test_df_data, rec_df_data)
         update_plot_del_data(test_del_df_data, rec_del_df_data)
 
