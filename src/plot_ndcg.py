@@ -892,6 +892,7 @@ utils.wandb_init(
     group=f"{model_name}_{config['dataset']}_{sens_attr.title()}_epochs{config['cf_epochs']}_exp={load_config_id}",
     mode="disabled"
 )
+wandb.config.update({"exp": load_config_id, **config.final_config_dict})
 
 metrics_names = evaluator.metrics
 model_dp_s = f'{model_name}+FairDP'

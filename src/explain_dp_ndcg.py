@@ -6,6 +6,7 @@ import logging
 import inspect
 import argparse
 
+import wandb
 import torch
 import pandas as pd
 
@@ -132,6 +133,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
         group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp={os.path.basename(base_exps_file)}",
         mode="disabled"
     )
+    wandb.config.update({"exp": os.path.basename(base_exps_file)})
 
     bge = DPBGExplainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
     exp = bge.explain(user_data, _test_data, epochs, topk=topk)

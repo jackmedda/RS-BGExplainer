@@ -55,9 +55,14 @@ def update_plot_data(_test_df_data, _rec_df_data):
         else:
             _group_edge_del = f_idx
 
+    if sens_attr == "gender":
+        real_group_map = {'M': 'M', 'F': 'F'}
+    else:
+        real_group_map = {'M': 'Y', 'F': 'O'}
+
     _test_df_data.extend(list(zip(
         test_uid,
-        user_df.set_index('user_id').loc[test_uid, sens_attr],
+        user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map),
         [model_name] * len(test_uid),
         [dataset.dataset_name] * len(test_uid),
         [metric.upper()] * len(test_uid),
@@ -67,7 +72,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
 
     _test_df_data.extend(list(zip(
         test_uid,
-        user_df.set_index('user_id').loc[test_uid, sens_attr],
+        user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map),
         [model_name] * len(test_uid),
         [dataset.dataset_name] * len(test_uid),
         [metric.upper()] * len(test_uid),
@@ -77,7 +82,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
 
     _rec_df_data.extend(list(zip(
         rec_uid,
-        user_df.set_index('user_id').loc[rec_uid, sens_attr],
+        user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map),
         [model_name] * len(rec_uid),
         [dataset.dataset_name] * len(rec_uid),
         [metric.upper()] * len(rec_uid),
@@ -87,7 +92,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
 
     _rec_df_data.extend(list(zip(
         rec_uid,
-        user_df.set_index('user_id').loc[rec_uid, sens_attr],
+        user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map),
         [model_name] * len(rec_uid),
         [dataset.dataset_name] * len(rec_uid),
         [metric.upper()] * len(rec_uid),
@@ -208,6 +213,13 @@ policy_map = {
     'group_deletion_constraint': 'DelCons'  # Deletion Constraint
 }
 
+group_name_map = {
+    "M": "Males",
+    "F": "Females",
+    "Y": "Younger",
+    "O": "Older"
+}
+
 # %%
 axs = {}
 datasets_train_inter_sizes = {}
@@ -279,6 +291,8 @@ for model_file, exp_config_file in zip(args.model_files, args.explainer_config_f
     )
 
     for metric in metrics:
+        # TODO: Per ogni dataset la label del genere o età potrebbe essere diversa quindi per ciascun dataset vanno
+        #       mappati gli id come M o F così sono consistenti fra diversi dataset e poi mappati come Males, Females ecc
         group_edge_del = update_plot_data(test_df_data, rec_df_data)
         update_plot_del_data(test_del_df_data, rec_del_df_data)
 
@@ -312,6 +326,50 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     for metric in _metrics:
         metric_df = _metr_df_gby.get_group(metric)
         metric_del_df = _metr_del_df_gby.get_group(metric)
+
+        nop_mask = metric_df["Policy"] == "NoPolicy"
+        metr_df_nop = metric_df[nop_mask].copy()
+        metr_df_p = metric_df[~nop_mask].copy()
+
+        metr_df_nop["State"] = "Before"
+        metr_df_p["State"] = "After"
+
+        metr_df = pd.concat(
+            [metr_df_p] + [metr_df_nop.copy().replace('NoPolicy', p) for p in metr_df_p.Policy.unique()],
+            ignore_index=True
+        )
+
+        metr_df = pd.melt(
+            metr_df, metr_df.columns[~metr_df.columns.isin(["Gender", "Age"])],
+            var_name="Sens Attr",
+            value_name="Demo Group"
+        )
+
+        metr_df_mean = metr_df.groupby(
+            ["Dataset", "Model", "Policy", "State", "Sens Attr", "Demo Group"]
+        ).mean().reset_index()
+        metr_df_pivot = metr_df_mean.pivot(
+            index=["Dataset", "Model", "Policy"],
+            columns=["Sens Attr", "Demo Group", "State"],
+            values="Value"
+        )
+        table_df = metr_df_pivot.reindex(
+            ["Gender", "Age"], axis=1, level=0
+        ).reindex(
+            ["M", "F", "Y", "O"], axis=1, level=1
+        ).reindex(
+            ['Before', 'After'], axis=1, level=2
+        )
+        for level_attr, demo_groups in zip(["Gender", "Age"], [["M", "F"], ["Y", "O"]]):
+            if level_attr in table_df:
+                table_dp_df = (table_df[(level_attr, demo_groups[0])] - table_df[(level_attr, demo_groups[1])]).abs()
+                table_dp_df.columns = pd.MultiIndex.from_product([[level_attr], ["DP"], ["Before", "After"]])
+                table_df = pd.concat([table_df, table_dp_df], axis=1)
+        table_df.columns.names = [''] * len(table_df.columns.names)
+        table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1]), x[2]))
+        table_df.to_latex(
+            os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.tex")
+        )
 
         plot_df_data = []
         plot_del_df_data = []
@@ -363,7 +421,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_df_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
         plot_df_bar_gby = plot_df_bar.groupby("Dataset")
         fig_bar, axs_bar = plt.subplots(1, len(datasets_list), figsize=(10, 6))
-        axs_bar = [axs_bar] if not isinstance(axs_bar, list) else axs_bar
+        axs_bar = [axs_bar] if not isinstance(axs_bar, np.ndarray) else axs_bar
         for i, (dset, ax_bar) in enumerate(zip(datasets_list, axs_bar)):
             dset_bar_df = plot_df_bar_gby.get_group(dset)
             sns.barplot(x="Model", y=y_col, data=dset_bar_df, hue="Policy", ax=ax_bar, palette=palette)
@@ -374,8 +432,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
             for m, ax_line in zip(models_list, axs_line):
                 dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
-                sns.lineplot(x="# Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
-                ax_line.set_title(dset.upper())
+                sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
+                ax_line.set_title(m.upper())
                 ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
         fig_line.suptitle(sens_attr.title())
