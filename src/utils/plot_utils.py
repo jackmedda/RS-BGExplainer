@@ -1,3 +1,5 @@
+import os
+import pickle
 import itertools
 
 import tqdm
@@ -44,7 +46,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None)
             assert config is not None, "`auto` mode can be used only with config"
             best_epoch = utils.get_best_exp_early_stopping(exps_data[0], config)
             epoch_idx = utils.EXPS_COLUMNS.index('epoch')
-            def top_exp_func(exp): return [e for e in exp if e[epoch_idx] == best_epoch][0]
+            def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch   ][0]
         elif isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec[0])
             def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
@@ -110,6 +112,14 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
     for e_type, e_path in _exp_paths.items():
         if e_path is None:
             continue
+        if len(_exp_paths) == 1:
+            saved_path = os.path.join(os.path.dirname(e_path), 'extracted_exp_data.pkl')
+            if os.path.exists(saved_path):
+                with open(saved_path, 'rb') as saved_file:
+                    saved_data = pickle.load(saved_file)
+                for s_data, curr_data in zip(saved_data, [exp_dfs, result_data, n_users_data, topk_dist]):
+                    curr_data.update(s_data)
+                break
         exps_data = utils.load_dp_exps_file(e_path)
 
         exp_data = []
@@ -128,12 +138,12 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
                 exp_data.extend(list(zip(*exp_row_data)))
 
         data_df = pd.DataFrame(exp_data, columns=col_names)
-        data_df['n_del_edges'] = data_df['del_edges'].map(lambda x: x.shape[1])
-        exp_dfs[e_type] = data_df
-
         if data_df.empty:
             print(f"User explanations are empty for {e_type}")
             continue
+
+        data_df['n_del_edges'] = data_df['del_edges'].map(lambda x: x.shape[1])
+        exp_dfs[e_type] = data_df
 
         result_data[e_type] = {}
         n_users_data[e_type] = {}
@@ -152,6 +162,12 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
             n_users_data[e_type][n_del] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
             n_users_del = n_users_data[e_type][n_del][sens_attr]
             n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
+
+        if len(_exp_paths) == 1:
+            saved_path = os.path.join(os.path.dirname(e_path), 'extracted_exp_data.pkl')
+            if not os.path.exists(saved_path):
+                with open(saved_path, 'wb') as saved_file:
+                    pickle.dump((exp_dfs, result_data, n_users_data, topk_dist), saved_file)
 
     return exp_dfs, result_data, n_users_data, topk_dist
 

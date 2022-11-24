@@ -148,7 +148,7 @@ def get_best_exp_early_stopping(exps, config_dict):
     except TypeError as e:
         patience = config_dict['earlys_patience']
 
-    return len(exps) - patience + 1  # len(exps) = len(history) registered in the early stopping object
+    return max([e[EXPS_COLUMNS.index('epoch')] for e in exps]) - patience
 
 
 def get_adj_from_inter_matrix(inter_matrix, num_all, n_users):

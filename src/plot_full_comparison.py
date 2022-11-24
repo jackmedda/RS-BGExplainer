@@ -213,6 +213,12 @@ policy_map = {
     'group_deletion_constraint': 'DelCons'  # Deletion Constraint
 }
 
+dataset_map = {
+    "ml-100k": "ML 100K",
+    "ml-1m": "ML 1M",
+    "lastfm-1k": "Last.FM 1K"
+}
+
 group_name_map = {
     "M": "Males",
     "F": "Females",
@@ -365,7 +371,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 table_df = pd.concat([table_df, table_dp_df], axis=1)
         table_df.columns.names = [''] * len(table_df.columns.names)
         table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1]), x[2]))
-        table_df.to_latex(
+        table_df.round(3).to_latex(
             os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.tex")
         )
 
@@ -421,18 +427,20 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         fig_bar, axs_bar = plt.subplots(1, len(datasets_list), figsize=(10, 6))
         axs_bar = [axs_bar] if not isinstance(axs_bar, np.ndarray) else axs_bar
         for i, (dset, ax_bar) in enumerate(zip(datasets_list, axs_bar)):
-            dset_bar_df = plot_df_bar_gby.get_group(dset)
-            sns.barplot(x="Model", y=y_col, data=dset_bar_df, hue="Policy", ax=ax_bar, palette=palette)
-            ax_bar.set_title(dset.upper())
+            if dset in plot_df_bar_gby.groups:
+                dset_bar_df = plot_df_bar_gby.get_group(dset)
+                sns.barplot(x="Model", y=y_col, data=dset_bar_df, hue="Policy", ax=ax_bar, palette=palette)
+                ax_bar.set_title(dset.upper())
 
             subfigs[i].suptitle(dset.upper())
             axs_line = subfigs[i].subplots(1, len(models_list))
             axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
             for m, ax_line in zip(models_list, axs_line):
-                dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
-                sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
-                ax_line.set_title(m.upper())
-                ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
+                if (dset, m) in plot_del_df_line_gby.groups:
+                    dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
+                    sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
+                    ax_line.set_title(m.upper())
+                    ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
         fig_line.suptitle(sens_attr.title())
         fig_line.tight_layout()
