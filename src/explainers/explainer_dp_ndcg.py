@@ -386,7 +386,7 @@ class DPBGExplainer:
             def check_func(gr_red_res, gr_fix_res): return gr_red_res <= gr_fix_res / 2
         else:
             ascending = False
-            def check_func(gr_red_res, gr_fix_res): return gr_red_res <= gr_fix_res / 2
+            def check_func(gr_red_res, gr_fix_res): return gr_fix_res <= gr_red_res / 2
 
         for step in steps:
             step_df = df_res.groupby(self.sensitive_attribute).apply(
