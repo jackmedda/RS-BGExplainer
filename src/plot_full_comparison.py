@@ -443,7 +443,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
         fig_line.suptitle(sens_attr.title())
-        fig_line.tight_layout()
         fig_line.savefig(os.path.join(plots_path, f"lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
         fig_bar.suptitle(sens_attr.title())
