@@ -395,12 +395,14 @@ else:
             update_plot_del_data(test_del_df_data, rec_del_df_data)
 
     cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy']
-    test_df = pd.DataFrame(test_df_data, columns=cols)
-    rec_df = pd.DataFrame(rec_df_data, columns=cols)
+    duplicated_cols_subset = [c for c in cols if c not in ['Value']]
+    test_df = pd.DataFrame(test_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
+    rec_df = pd.DataFrame(rec_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
 
     del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric', 'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
-    test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols)
-    rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols)
+    duplicated_cols_subset = [c for c in cols if c not in ['Value', 'Fair Loss']]
+    test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
+    rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
 
     with open(os.path.join(plots_path, 'test_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
@@ -467,7 +469,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             qnt = np.linspace(0.01, 1., 100)
             s_attr_colors = dict(zip(np.sort(sub_df["Demo Group"].unique()), sns.color_palette("colorblind", n_colors=2)))
-            for s_attr_i, (dg, dg_df) in enumerate(sub_df.groupby("Demo Group")):
+            for dg_i, (dg, dg_df) in enumerate(sub_df.groupby("Demo Group")):
                 ax = fig_qnt[_policy].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
 
                 if default_quantiles[_dataset] is None:
@@ -485,7 +487,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         height = dg_df.loc[(dg_df.Value >= qnt_values.iloc[i]) & (dg_df.Value < qnt_values.iloc[i + 1]), "Value"].mean()
 
                     bar_widths[i] = qnt_values.index[i + 1] - qnt_values.index[i]
-                    bar_heights[i] = height if s_attr_i == 0 else -height
+                    bar_heights[i] = height if dg_i == 0 else -height
 
                 mask = bar_heights != 0
                 color = [x for i, x in enumerate([s_attr_colors[dg]] * n_bars) if mask[i]]
