@@ -113,7 +113,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
         if e_path is None:
             continue
         if len(_exp_paths) == 1:
-            saved_path = os.path.join(os.path.dirname(e_path), 'extracted_exp_data.pkl')
+            saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
             if os.path.exists(saved_path):
                 with open(saved_path, 'rb') as saved_file:
                     saved_data = pickle.load(saved_file)
@@ -164,7 +164,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
             n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
 
         if len(_exp_paths) == 1:
-            saved_path = os.path.join(os.path.dirname(e_path), 'extracted_exp_data.pkl')
+            saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
             if not os.path.exists(saved_path):
                 with open(saved_path, 'wb') as saved_file:
                     pickle.dump((exp_dfs, result_data, n_users_data, topk_dist), saved_file)
@@ -463,3 +463,45 @@ def make_patch_spines_invisible(ax):
     ax.patch.set_visible(False)
     for sp in ax.spines.values():
         sp.set_visible(False)
+
+
+def add_bar_value_labels(ax, spacing=5, format='.2f', **kwargs):
+    """Add labels to the end of each bar in a bar chart.
+    https://stackoverflow.com/a/48372659
+    Arguments:
+        ax (matplotlib.axes.Axes): The matplotlib object containing the axes
+            of the plot to annotate.
+        spacing (int): The distance between the labels and the bars.
+        format (str): format of the value of the bars.
+    """
+
+    # For each bar: Place a label
+    for rect in ax.patches:
+        # Get X and Y placement of label from rect.
+        y_value = rect.get_height()
+        x_value = rect.get_x() + rect.get_width() / 2
+
+        # Number of points between bar and label. Change to your liking.
+        space = spacing
+        # Vertical alignment for positive values
+        va = 'bottom'
+
+        # If value of bar is negative: Place label below bar
+        if y_value < 0:
+            # Invert space to place label below
+            space *= -1
+            # Vertically align label at top
+            va = 'top'
+
+        # Use Y value as label and format number with one decimal place
+        label = ("{:" + format + "}").format(y_value)
+
+        # Create annotation
+        ax.annotate(
+            label,                       # Use `label` as label
+            (x_value, y_value),          # Place label at end of the bar
+            xytext=(0, space),           # Vertically shift label by `space`
+            textcoords="offset points",  # Interpret `xytext` as offset in points
+            ha='center',                 # Horizontally center label
+            va=va,                       # Vertically align label differently for
+            **kwargs)                    # positive and negative values.

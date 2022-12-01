@@ -282,29 +282,54 @@ def chunk_categorize(array_1d, n_chunks=10):
 def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batch_size=64, seed=124):
     np.random.seed(seed)
 
-    groups = {}
-    for gr, gr_df in df.groupby(sens_attr):
-        groups[gr] = gr_df['user_id'].unique()
+    if not hasattr(compute_DP_across_random_samples, "generated_groups"):
+        compute_DP_across_random_samples.generated_groups = {}
 
-    n_users = sum([x.shape[0] for x in groups.values()])
-    size_perc = np.array([gr_users.shape[0] / n_users for gr, gr_users in groups.items()])
-    gr_data = nmb_typed.List([gr_df.set_index('user_id').loc[:, metric].to_numpy() for gr, gr_df in df.groupby(sens_attr)])
-    groups = nmb_typed.List([np.arange(gr.shape[0]) for gr in groups.values()])
+    df = df.sort_values(sens_attr)
+    max_user = df['user_id'].max() + 1
 
-    return _compute_DP_random_samples(gr_data, groups, size_perc, batch_size=batch_size, iterations=iterations)
+    n_users = 0
+    size_perc = np.zeros((2,), dtype=float)
+    groups = np.zeros((2, max_user), dtype=int)
+    for i, (_, gr_df) in enumerate(df.groupby(sens_attr)):
+        gr_users = gr_df['user_id'].unique()
+        groups[i, gr_users] = 1
+        n_users += gr_users.shape[0]
+        size_perc[i] = gr_users.shape[0]
+    size_perc /= n_users
+
+    gr_data = np.zeros(max_user)
+    for gr_users in groups:
+        pos = gr_users.nonzero()[0]
+        gr_data[pos] = df.set_index('user_id').loc[pos, metric].to_numpy()
+
+    if sens_attr not in compute_DP_across_random_samples.generated_groups:
+        compute_DP_across_random_samples.generated_groups[sens_attr] = np.zeros((iterations, 2, max_user), dtype=np.bool_)
+
+    return _compute_DP_random_samples(
+        gr_data,
+        groups,
+        size_perc,
+        compute_DP_across_random_samples.generated_groups[sens_attr],
+        batch_size=batch_size,
+        iterations=iterations,
+        n_users=max_user
+    )
 
 
 @numba.jit(nopython=True, parallel=True)
-def _compute_DP_random_samples(group_data, groups, size_perc, batch_size=64, iterations=100):
+def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch_size=64, iterations=100, n_users=0):
     out = np.empty((iterations,), dtype=np.float32)
+    check = out_samples.nonzero()[0].shape[0] == 0
     for i in numba.prange(iterations):
-        samples = np.empty((2, ), dtype=np.float32)
-        for gr_i, gr_data in enumerate(group_data):
-            sample_size = round(batch_size * size_perc[gr_i])
-            sample = np.random.choice(groups[gr_i], sample_size, replace=False)
-            samples[gr_i] = gr_data[sample].mean()
+        if check:
+            samples = np.zeros((2, n_users), dtype=np.bool_)
+            for gr_i in range(len(groups)):
+                sample_size = round(batch_size * size_perc[gr_i])
+                samples[gr_i][np.random.choice(groups[gr_i].nonzero()[0], sample_size, replace=False)] = True
+            out_samples[i] = samples
 
-        out[i] = np.abs(samples[0] - samples[1])
+        out[i] = np.abs(group_data[out_samples[i, 0]].mean() - group_data[out_samples[i, 1]].mean())
 
     return out
 

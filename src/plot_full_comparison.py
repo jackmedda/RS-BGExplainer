@@ -192,7 +192,6 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
 parser.add_argument('--explainer_config_files', required=True, nargs='+', type=str)
-parser.add_argument('--th_edges_epochs', type=float, default=0.1)
 parser.add_argument('--iterations', default=100)
 
 args = parser.parse_args()
@@ -205,10 +204,10 @@ script_path = os.path.join(script_path, 'src') if 'src' not in script_path else 
 
 print(args)
 
+exp_epochs = []
 config_ids = [os.path.basename(os.path.dirname(p)) for p in args.explainer_config_files]
 
 policy_map = {
-    'increase_disparity': 'IncDisp',  # Increase Disparity
     'force_removed_edges': 'MonDel',   # Monotonic Deletions
     'group_deletion_constraint': 'DelCons'  # Deletion Constraint
 }
@@ -228,6 +227,7 @@ group_name_map = {
 
 # %%
 axs = {}
+incdisp = {}
 datasets_train_inter_sizes = {}
 test_df_data, rec_df_data = [], []
 test_del_df_data, rec_del_df_data = [], []
@@ -239,6 +239,9 @@ for model_file, exp_config_file in zip(args.model_files, args.explainer_config_f
     model_name = model.__class__.__name__
     sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
     policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'][p]])
+    incdisp[(dataset.dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
+
+    exp_epochs.append(epochs)
 
     edge_additions = config['edge_additions']
     exp_rec_data = config['exp_rec_data']
@@ -309,7 +312,15 @@ test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols)
 rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols)
 
 datasets_list, models_list = test_df['Dataset'].unique().tolist(), test_df['Model'].unique().tolist()
-plots_path = os.path.join(get_plots_path('_'.join(datasets_list), '_'.join(models_list)), '_'.join(config_ids), sens_attr)
+datasets_list = sorted(datasets_list)
+models_order = np.argsort(models_list)
+models_list = sorted(models_list)
+plots_path = os.path.join(
+    get_plots_path('_'.join(datasets_list), '_'.join(models_list)),
+    '_'.join(np.array(config_ids)[models_order]),
+    '_'.join(np.array(exp_epochs)[models_order]),
+    sens_attr
+)
 if not os.path.exists(plots_path):
     os.makedirs(plots_path)
 
@@ -335,8 +346,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         metr_df_nop = metric_df[nop_mask].copy()
         metr_df_p = metric_df[~nop_mask].copy()
 
-        metr_df_nop["State"] = "Before"
-        metr_df_p["State"] = "After"
+        metr_df_nop["Status"] = "Before"
+        metr_df_p["Status"] = "After"
 
         metr_df = pd.concat(
             [metr_df_p] + [metr_df_nop.copy().replace('NoPolicy', p) for p in metr_df_p.Policy.unique()],
@@ -350,11 +361,11 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         )
 
         metr_df_mean = metr_df.groupby(
-            ["Dataset", "Model", "Policy", "State", "Sens Attr", "Demo Group"]
+            ["Dataset", "Model", "Policy", "Status", "Sens Attr", "Demo Group"]
         ).mean().reset_index()
         metr_df_pivot = metr_df_mean.pivot(
             index=["Dataset", "Model", "Policy"],
-            columns=["Sens Attr", "Demo Group", "State"],
+            columns=["Sens Attr", "Demo Group", "Status"],
             values="Value"
         )
         table_df = metr_df_pivot.reindex(
@@ -367,27 +378,74 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         for level_attr, demo_groups in zip(["Gender", "Age"], [["M", "F"], ["Y", "O"]]):
             if level_attr in table_df:
                 table_dp_df = (table_df[(level_attr, demo_groups[0])] - table_df[(level_attr, demo_groups[1])]).abs()
-                table_dp_df.columns = pd.MultiIndex.from_product([[level_attr], ["DP"], ["Before", "After"]])
+                table_dp_df.columns = pd.MultiIndex.from_product([[level_attr], ["$\Delta$"], ["Before", "After"]])
                 table_df = pd.concat([table_df, table_dp_df], axis=1)
-        table_df.columns.names = [''] * len(table_df.columns.names)
         table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1]), x[2]))
+        table_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
+        table_df.columns.names = [''] * len(table_df.columns.names)
         table_df.round(3).to_latex(
             os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.tex")
         )
 
         plot_df_data = []
         plot_del_df_data = []
-        y_col = f"{metric.upper()} DP"
+        y_col = f"$\Delta$ {metric.upper()}"
         plot_columns = ["Model", "Dataset", "Policy", y_col]
         plot_del_columns = ["Model", "Dataset", "Policy", "% Del Edges", y_col]
         palette = dict(zip(np.concatenate([["NoPolicy"], df["Policy"].unique()]), sns.color_palette("colorblind")))
         _m_dset_pol_df = metric_df.groupby(["Model", "Dataset", "Policy"])
         _m_dset_pol_del_df = metric_del_df.groupby(["Model", "Dataset", "Policy"])
 
+        default_quantiles = dict.fromkeys(datasets_list, None)
+        fig_qnt, axs_qnt = {}, {}
+        for pol in metric_df["Policy"].unique():
+            fig_qnt[pol] = plt.figure(figsize=(15, 15), constrained_layout=True)
+            fig_qnt[pol].subfigures(len(datasets_list), 1)
+            for dset, subfig in zip(datasets_list, fig_qnt[pol].subfigs):
+                subfig.suptitle(dataset_map[dset])
+                subfig.subplots(1, len(models_list))
+
         m_dset_pol = list(_m_dset_pol_df.groups.keys())
         for (_model, _dataset, _policy) in tqdm.tqdm(m_dset_pol, desc="Extracting DP across random samples"):
             sub_df = _m_dset_pol_df.get_group((_model, _dataset, _policy))
             sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy))
+
+            qnt = np.linspace(0.01, 1., 100)
+            s_attr_colors = dict(zip(np.sort(sub_df[sens_attr.title()].unique()), sns.color_palette("colorblind", n_colors=2)))
+            for s_attr_i, (dg, dg_df) in enumerate(sub_df.groupby(sens_attr.title())):
+                ax = fig_qnt[_policy].subfigs[datasets_list.index(_dataset)].axes[models_list.index(_model)]
+
+                if default_quantiles[_dataset] is None:
+                    qnt_values = dg_df['Value'].quantile(qnt).drop_duplicates()
+                    default_quantiles[_dataset] = qnt_values
+                else:
+                    qnt_values = default_quantiles[_dataset]
+
+                n_bars = len(qnt_values) - 1
+                bar_heights, bar_widths = np.empty((n_bars,)), np.empty((n_bars,))
+                for i in range(qnt_values.shape[0] - 1):
+                    if i == qnt_values.shape[0] - 2:
+                        height = dg_df.loc[(dg_df.Value >= qnt_values.iloc[i]) & (dg_df.Value <= qnt_values.iloc[i + 1]), "Value"].mean()
+                    else:
+                        height = dg_df.loc[(dg_df.Value >= qnt_values.iloc[i]) & (dg_df.Value < qnt_values.iloc[i + 1]), "Value"].mean()
+
+                    bar_widths[i] = qnt_values.index[i + 1] - qnt_values.index[i]
+                    bar_heights[i] = height if s_attr_i == 0 else -height
+
+                mask = bar_heights != 0
+                color = [x for i, x in enumerate([s_attr_colors[dg]] * n_bars) if mask[i]]
+
+                ax.bar(
+                    default_quantiles[_dataset].iloc[:-1].index[mask],
+                    bar_heights[mask],
+                    width=bar_widths[mask],
+                    color=color,
+                    align='edge',
+                    label=dg
+                )
+
+                ax.set_title(_model)
+                plot_utils.add_bar_value_labels(ax, format='.2f', fontsize=8)
 
             dp_samples = utils.compute_DP_across_random_samples(
                 sub_df, sens_attr.title(), 'Value', batch_size=batch_exp, iterations=args.iterations
@@ -416,6 +474,14 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     del_dp_samples
                 )))
 
+        for pol in fig_qnt:
+            for subfig in fig_qnt[pol].subfigs:
+                for ax in subfig.axes:
+                    ax.invert_xaxis()
+                    ax.legend(loc='upper right')
+            fig_qnt[pol].savefig(os.path.join(plots_path, f'percentile_plot_{exp_data_name}_{metric}_{pol}.png'))
+        plt.close("all")
+
         plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
         plot_del_df_line_gby = plot_del_df_line.groupby(["Dataset", "Model"])
         fig_line = plt.figure(figsize=(15, 15), constrained_layout=True)
@@ -426,11 +492,25 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_df_bar_gby = plot_df_bar.groupby("Dataset")
         fig_bar, axs_bar = plt.subplots(1, len(datasets_list), figsize=(10, 6))
         axs_bar = [axs_bar] if not isinstance(axs_bar, np.ndarray) else axs_bar
+
+        table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = "NoPolicy"
+        table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
+        plot_table_df_bar_gby = table_bar_df.groupby("Dataset")
+        fig_bar2, axs_bar2 = plt.subplots(len(table_bar_df["Sens Attr"].unique()), len(datasets_list), figsize=(10, 6))
+        axs_bar2 = [axs_bar2] if not isinstance(axs_bar2, np.ndarray) else axs_bar2
         for i, (dset, ax_bar) in enumerate(zip(datasets_list, axs_bar)):
             if dset in plot_df_bar_gby.groups:
                 dset_bar_df = plot_df_bar_gby.get_group(dset)
                 sns.barplot(x="Model", y=y_col, data=dset_bar_df, hue="Policy", ax=ax_bar, palette=palette)
-                ax_bar.set_title(dset.upper())
+                ax_bar.set_title(dataset_map[dset])
+
+            if dset in plot_table_df_bar_gby.groups:
+                plot_tdf_bar_sattr_gby = plot_table_df_bar_gby.get_group(dset).groupby("Sens Attr")
+                for attr_i, (s_attr, s_attr_df) in enumerate(plot_tdf_bar_sattr_gby):
+                    _ax = axs_bar2[attr_i, i] if len(plot_tdf_bar_sattr_gby.groups) > 1 else axs_bar2[i]
+                    for (dg, dg_df), hatch in zip(s_attr_df.groupby("Demo Group"), ['//', 'o']):
+                        sns.barplot(x="Model", y=y_col, data=dg_df, hue="Policy", ax=_ax, palette=palette, edgecolor='black', alpha=0.6, hatch=hatch)
+                        _ax.set_title(dataset_map[dset])
 
             subfigs[i].suptitle(dset.upper())
             axs_line = subfigs[i].subplots(1, len(models_list))
@@ -439,7 +519,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 if (dset, m) in plot_del_df_line_gby.groups:
                     dset_model_line_df = plot_del_df_line_gby.get_group((dset, m))
                     sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
-                    ax_line.set_title(m.upper())
+                    ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp else ''))
                     ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
         fig_line.suptitle(sens_attr.title())
@@ -448,4 +528,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         fig_bar.suptitle(sens_attr.title())
         fig_bar.tight_layout()
         fig_bar.savefig(os.path.join(plots_path, f"barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+
+        fig_bar2.tight_layout()
+        fig_bar2.savefig(os.path.join(plots_path, f"overlapping_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
         plt.close("all")

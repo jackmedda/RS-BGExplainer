@@ -51,7 +51,7 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
-            paths_c_ids = sorted(os.listdir(base_exps_file), key=int)
+            paths_c_ids = sorted(filter(str.isdigit, os.listdir(base_exps_file)), key=int)
             for path_c in paths_c_ids:
                 config_path = os.path.join(base_exps_file, path_c, 'config.pkl')
                 if os.path.exists(config_path):

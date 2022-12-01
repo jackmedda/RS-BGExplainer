@@ -742,7 +742,7 @@ def create_distribution_diff_metric_random_groups(
         sns.lineplot(x=edges_ylabel, y=f"{metric.upper()} DP", data=dp_samples_df, ax=ax)
 
         twiny = ax.twiny()
-        sns.lineplot(x="Epoch", y=f"{metric.upper()} DP", data=dp_samples_df, ax=twiny)
+        sns.lineplot(x="Epoch", y=f"{metric.upper()} DP", data=dp_samples_df, ax=twiny, c='white')
         twiny.spines["bottom"].set_position(("outward", 40))
         plot_utils.make_patch_spines_invisible(twiny)
 
