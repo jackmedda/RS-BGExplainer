@@ -279,19 +279,19 @@ def chunk_categorize(array_1d, n_chunks=10):
     return mapped_a
 
 
-def compute_DP_across_random_samples(df, sens_attr, dataset, metric, iterations=100, batch_size=64, seed=124):
+def compute_DP_across_random_samples(df, sens_attr, demo_group_field, dataset, metric, iterations=100, batch_size=64, seed=124):
     np.random.seed(seed)
 
     if not hasattr(compute_DP_across_random_samples, "generated_groups"):
         compute_DP_across_random_samples.generated_groups = {}
 
-    df = df.sort_values(sens_attr)
+    df = df.sort_values(demo_group_field)
     max_user = df['user_id'].max() + 1
 
     n_users = 0
     size_perc = np.zeros((2,), dtype=float)
     groups = np.zeros((2, max_user), dtype=int)
-    for i, (_, gr_df) in enumerate(df.groupby(sens_attr)):
+    for i, (_, gr_df) in enumerate(df.groupby(demo_group_field)):
         gr_users = gr_df['user_id'].unique()
         groups[i, gr_users] = 1
         n_users += gr_users.shape[0]
@@ -303,7 +303,7 @@ def compute_DP_across_random_samples(df, sens_attr, dataset, metric, iterations=
         pos = gr_users.nonzero()[0]
         gr_data[pos] = df.set_index('user_id').loc[pos, metric].to_numpy()
 
-    if sens_attr not in compute_DP_across_random_samples.generated_groups:
+    if (dataset, sens_attr) not in compute_DP_across_random_samples.generated_groups:
         compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)] = np.zeros((iterations, 2, max_user), dtype=np.bool_)
 
     return _compute_DP_random_samples(
