@@ -279,7 +279,7 @@ def chunk_categorize(array_1d, n_chunks=10):
     return mapped_a
 
 
-def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batch_size=64, seed=124):
+def compute_DP_across_random_samples(df, sens_attr, dataset, metric, iterations=100, batch_size=64, seed=124):
     np.random.seed(seed)
 
     if not hasattr(compute_DP_across_random_samples, "generated_groups"):
@@ -304,13 +304,13 @@ def compute_DP_across_random_samples(df, sens_attr, metric, iterations=100, batc
         gr_data[pos] = df.set_index('user_id').loc[pos, metric].to_numpy()
 
     if sens_attr not in compute_DP_across_random_samples.generated_groups:
-        compute_DP_across_random_samples.generated_groups[sens_attr] = np.zeros((iterations, 2, max_user), dtype=np.bool_)
+        compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)] = np.zeros((iterations, 2, max_user), dtype=np.bool_)
 
     return _compute_DP_random_samples(
         gr_data,
         groups,
         size_perc,
-        compute_DP_across_random_samples.generated_groups[sens_attr],
+        compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)],
         batch_size=batch_size,
         iterations=iterations,
         n_users=max_user

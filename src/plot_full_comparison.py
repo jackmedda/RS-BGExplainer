@@ -448,7 +448,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 plot_utils.add_bar_value_labels(ax, format='.2f', fontsize=8)
 
             dp_samples = utils.compute_DP_across_random_samples(
-                sub_df, sens_attr.title(), 'Value', batch_size=batch_exp, iterations=args.iterations
+                sub_df, sens_attr.title(), _dataset, 'Value', batch_size=batch_exp, iterations=args.iterations
             )
 
             plot_df_data.extend(list(zip(
@@ -463,7 +463,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             for n_del in sorted_del_edges:
                 n_del_df = n_del_df_gby.get_group(n_del)
                 del_dp_samples = utils.compute_DP_across_random_samples(
-                    n_del_df, sens_attr.title(), 'Value', batch_size=batch_exp, iterations=args.iterations
+                    n_del_df, sens_attr.title(), _dataset, 'Value', batch_size=batch_exp, iterations=args.iterations
                 )
 
                 plot_del_df_data.extend(list(zip(
