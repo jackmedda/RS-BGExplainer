@@ -317,8 +317,8 @@ models_order = np.argsort(models_list)
 models_list = sorted(models_list)
 plots_path = os.path.join(
     get_plots_path('_'.join(datasets_list), '_'.join(models_list)),
-    '_'.join(np.array(config_ids)[models_order]),
-    '_'.join(np.array(exp_epochs)[models_order]),
+    '_'.join(map(str, np.array(config_ids)[models_order])),
+    '_'.join(map(str, np.array(exp_epochs)[models_order])),
     sens_attr
 )
 if not os.path.exists(plots_path):
