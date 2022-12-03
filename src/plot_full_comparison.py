@@ -400,9 +400,9 @@ else:
     rec_df = pd.DataFrame(rec_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
 
     del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric', 'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
-    duplicated_cols_subset = [c for c in cols if c not in ['Value', 'Fair Loss']]
-    test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
-    rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
+    duplicated_del_cols_subset = [c for c in del_cols if c not in ['Value', 'Fair Loss', 'Epoch']]
+    test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_del_cols_subset, ignore_index=True)
+    rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols).drop_duplicates(subset=duplicated_del_cols_subset, ignore_index=True)
 
     with open(os.path.join(plots_path, 'test_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
@@ -453,7 +453,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         _m_dset_pol_df = metric_df.groupby(["Model", "Dataset", "Policy", "Sens Attr"])
         _m_dset_pol_del_df = metric_del_df.groupby(["Model", "Dataset", "Policy", "Sens Attr"])
 
-        default_quantiles = dict.fromkeys(unique_datasets, None)
         fig_qnt, axs_qnt = {}, {}
         for pol in metric_df["Policy"].unique():
             fig_qnt[pol] = plt.figure(figsize=(15, 15), constrained_layout=True)
@@ -462,47 +461,31 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 subfig.suptitle(dataset_map[dset])
                 subfig.subplots(1, len(unique_models))
 
+        qnt_size = 100
         m_dset_pol = list(_m_dset_pol_df.groups.keys())
         for (_model, _dataset, _policy, _s_attr) in tqdm.tqdm(m_dset_pol, desc="Extracting DP across random samples"):
             sub_df = _m_dset_pol_df.get_group((_model, _dataset, _policy, _s_attr))
             sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
 
-            qnt = np.linspace(0.01, 1., 100)
             s_attr_colors = dict(zip(np.sort(sub_df["Demo Group"].unique()), sns.color_palette("colorblind", n_colors=2)))
             for dg_i, (dg, dg_df) in enumerate(sub_df.groupby("Demo Group")):
                 ax = fig_qnt[_policy].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
 
-                if default_quantiles[_dataset] is None:
-                    qnt_values = dg_df['Value'].quantile(qnt).drop_duplicates()
-                    default_quantiles[_dataset] = qnt_values
-                else:
-                    qnt_values = default_quantiles[_dataset]
+                qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
+                qnt_values = [pct.mean() for pct in np.array_split(qnt_values, qnt_size)]
 
-                n_bars = len(qnt_values) - 1
-                bar_heights, bar_widths = np.empty((n_bars,)), np.empty((n_bars,))
-                for i in range(qnt_values.shape[0] - 1):
-                    if i == qnt_values.shape[0] - 2:
-                        height = dg_df.loc[(dg_df.Value >= qnt_values.iloc[i]) & (dg_df.Value <= qnt_values.iloc[i + 1]), "Value"].mean()
-                    else:
-                        height = dg_df.loc[(dg_df.Value >= qnt_values.iloc[i]) & (dg_df.Value < qnt_values.iloc[i + 1]), "Value"].mean()
-
-                    bar_widths[i] = qnt_values.index[i + 1] - qnt_values.index[i]
-                    bar_heights[i] = height if dg_i == 0 else -height
-
-                mask = bar_heights != 0
-                color = [x for i, x in enumerate([s_attr_colors[dg]] * n_bars) if mask[i]]
+                color = [s_attr_colors[dg]] * qnt_size
 
                 ax.bar(
-                    default_quantiles[_dataset].iloc[:-1].index[mask],
-                    bar_heights[mask],
-                    width=bar_widths[mask],
+                    np.arange(qnt_size),
+                    qnt_values,
                     color=color,
                     align='edge',
                     label=dg
                 )
 
+                ax.xaxis.set_visible(False)
                 ax.set_title(_model)
-                plot_utils.add_bar_value_labels(ax, format='.2f', fontsize=8)
 
             dp_samples = utils.compute_DP_across_random_samples(
                 sub_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
@@ -581,7 +564,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     if (sens_attr, dset, m) in plot_del_df_line_gby.groups:
                         dset_model_line_df = plot_del_df_line_gby.get_group((sens_attr, dset, m))
                         sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
-                        ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp else ''))
+                        ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
                         ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
             fig_line.suptitle(sens_attr.title())
