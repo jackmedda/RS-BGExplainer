@@ -274,6 +274,11 @@ group_name_map = {
     "O": "Older"
 }
 
+colors = {
+    "Gender": {"M": "#0173b2", "F": "#de8f05"},
+    "Age": {"Y": "#0173b2", "O": "#de8f05"}
+}
+
 exp_epochs, config_ids, datasets_list, models_list, sens_attrs = [], [], [], [], []
 for exp_config_file in args.explainer_config_files:
     _, dset, model, _, s_attr, eps, cid, _ = exp_config_file.split('dp_ndcg_explanations')[1].split(os.sep)
@@ -467,14 +472,13 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             sub_df = _m_dset_pol_df.get_group((_model, _dataset, _policy, _s_attr))
             sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
 
-            s_attr_colors = dict(zip(np.sort(sub_df["Demo Group"].unique()), sns.color_palette("colorblind", n_colors=2)))
             for dg_i, (dg, dg_df) in enumerate(sub_df.groupby("Demo Group")):
                 ax = fig_qnt[_policy].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
 
                 qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
-                qnt_values = [pct.mean() for pct in np.array_split(qnt_values, qnt_size)]
+                qnt_values = [pct.mean() * (1 if dg_i == 0 else -1) for pct in np.array_split(qnt_values, qnt_size)]
 
-                color = [s_attr_colors[dg]] * qnt_size
+                color = [colors[_s_attr][dg]] * qnt_size
 
                 ax.bar(
                     np.arange(qnt_size),
@@ -519,7 +523,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         for pol in fig_qnt:
             for subfig in fig_qnt[pol].subfigs:
                 for ax in subfig.axes:
-                    ax.invert_xaxis()
                     ax.legend(loc='upper right')
             fig_qnt[pol].savefig(os.path.join(plots_path, f'percentile_plot_{exp_data_name}_{metric}_{pol}.png'))
         plt.close("all")
