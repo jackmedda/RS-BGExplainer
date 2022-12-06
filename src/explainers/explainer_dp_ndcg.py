@@ -167,7 +167,7 @@ class DPBGExplainer:
         self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
                          f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
 
-    def update_best_cf_example(self, best_cf_example, new_example, loss_total, best_loss, first_fair_loss):
+    def update_best_cf_example(self, best_cf_example, new_example, loss_total, best_loss, first_fair_loss, force_update=False):
         """
         Updates the explanations with new explanation (if not None) depending on new loss value
         :param best_cf_example:
@@ -177,8 +177,8 @@ class DPBGExplainer:
         :param first_fair_loss:
         :return:
         """
-        if new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss):
-            if self.unique_graph_dist_loss and len(best_cf_example) > 0:
+        if force_update or (new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss)):
+            if not force_update or (self.unique_graph_dist_loss and len(best_cf_example) > 0):
                 self.old_graph_dist = best_cf_example[-1][-5]
                 new_graph_dist = new_example[-4]
                 if not (self.old_graph_dist != new_graph_dist):
@@ -546,8 +546,11 @@ class DPBGExplainer:
 
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
-                    best_epoch = epoch + 1 - len(self.earlys.history) + self.earlys.best_loss
+                    best_epoch = epoch + 1 - self.earlys.patience
                     self.logger.info(f"Early Stopping: best epoch {best_epoch}")
+
+                    # stub exampled added to find again the best epoch when explanations are loaded
+                    best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss, force_update=True)
 
                     break
 

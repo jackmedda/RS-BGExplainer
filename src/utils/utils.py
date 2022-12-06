@@ -9,7 +9,6 @@ import wandb
 import torch
 import scipy
 import numba
-import numba.typed as nmb_typed
 import numpy as np
 import pandas as pd
 import networkx as nx

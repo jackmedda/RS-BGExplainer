@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mpl_tick
 from adjustText import adjust_text
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
 from recbole.evaluator import Evaluator
 
 import src.utils.utils as utils

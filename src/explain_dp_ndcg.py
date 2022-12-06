@@ -137,7 +137,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
     bge = DPBGExplainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
     exp = bge.explain(user_data, _test_data, epochs, topk=topk)
-    del bge
 
     exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
 

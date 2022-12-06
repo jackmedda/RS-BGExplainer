@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.text as mtext
 
 import src.utils as utils
 
@@ -46,7 +47,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None)
             assert config is not None, "`auto` mode can be used only with config"
             best_epoch = utils.get_best_exp_early_stopping(exps_data[0], config)
             epoch_idx = utils.EXPS_COLUMNS.index('epoch')
-            def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch   ][0]
+            def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
         elif isinstance(bec, list):
             top_exp_col = utils.EXPS_COLUMNS.index(bec[0])
             def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
