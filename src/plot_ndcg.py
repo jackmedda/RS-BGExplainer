@@ -15,6 +15,7 @@ import matplotlib.ticker as mpl_tick
 from adjustText import adjust_text
 from matplotlib.lines import Line2D
 from recbole.evaluator import Evaluator
+from sklearn.decomposition import PCA
 
 import src.utils.utils as utils
 import src.utils.plot_utils as plot_utils
@@ -729,7 +730,7 @@ def create_distribution_diff_metric_random_groups(
             dp_samples.extend(list(zip(
                 [n_del] * iterations,
                 [n_del_epoch] * iterations,
-                utils.compute_DP_across_random_samples(n_del_df, sens_attr, metric.upper(), batch_size=batch_exp, iterations=iterations)
+                utils.compute_DP_across_random_samples(n_del_df, sens_attr, sens_attr, dataset.dataset_name, metric.upper(), batch_size=batch_exp, iterations=iterations)
             )))
 
         dp_samples_df = pd.DataFrame(dp_samples, columns=[edges_ylabel, "Epoch", f"{metric.upper()} DP"])
@@ -741,7 +742,7 @@ def create_distribution_diff_metric_random_groups(
         sns.lineplot(x=edges_ylabel, y=f"{metric.upper()} DP", data=dp_samples_df, ax=ax)
 
         twiny = ax.twiny()
-        sns.lineplot(x="Epoch", y=f"{metric.upper()} DP", data=dp_samples_df, ax=twiny, c='white')
+        sns.lineplot(x="Epoch", y=f"{metric.upper()} DP", data=dp_samples_df, ax=twiny, alpha=0)
         twiny.spines["bottom"].set_position(("outward", 40))
         plot_utils.make_patch_spines_invisible(twiny)
 
@@ -759,6 +760,34 @@ def create_distribution_diff_metric_random_groups(
         plt.savefig(final_plot_path)
         wandb.log({f'DP Across {iterations} Random Samples ({sens_attr} {hist_type} {metric})': wandb.Image(final_plot_path)})
         plt.close()
+
+
+# %%
+def plot_decomposition_perturbed(pref_df, tr_data):
+    plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", load_config_id, sens_attr)
+    if not os.path.exists(plots_path):
+        os.makedirs(plots_path)
+
+    pert_train_dataset = utils.get_dataset_with_perturbed_edges(pref_df, tr_data)
+    train_adj = train_data.dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
+    pert_train_adj = pert_train_dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
+
+    pca = PCA(n_components=2)
+    train_pca = pca.fit_transform(train_adj)
+    pert_train_pca = pca.fit_transform(pert_train_adj)
+
+    sens_data = tr_data.dataset.user_feat[sens_attr].numpy()[1:]
+    sens_data = [group_name_map[real_group_map['F' if idx == f_idx else 'M']] for idx in sens_data]
+
+    fig, axs = plt.subplots(1, 2)
+    for ax, data, ax_title, marker in zip(axs, [train_pca, pert_train_pca], ['NoPolicy', policy], ['o', 'X']):
+        sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=sens_data, marker=marker, ax=ax)
+        ax.set_title(ax_title)
+
+    plt.tight_layout()
+    final_plot_path = os.path.join(plots_path, f"{sens_attr}_adjacency_matrix_decomposition.png")
+    plt.savefig(final_plot_path)
+    wandb.log({f'PCA Decomposition of Adjacency Matrix ({sens_attr})': wandb.Image(final_plot_path)})
 
 
 # %%
@@ -857,7 +886,7 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_id, max_del_edges=80
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_file', required=True)
 parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
-parser.add_argument('--best_exp_col', nargs='+', default=["loss_total"])
+parser.add_argument('--best_exp_col', nargs='+', default=["auto"])
 
 args = parser.parse_args()  # r"--model_file saved\GCMC-ML-100K-Oct-02-2022_19-24-04.pth --explainer_config_file src\dp_ndcg_explanations\ml-100k\GCMC\FairDP\gender\epochs_1000\3\config.yaml".split())
 
@@ -873,6 +902,11 @@ config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_
                                                                                       args.explainer_config_file)
 
 load_config_id = os.path.basename(os.path.dirname(args.explainer_config_file))
+
+policy_map = {
+    'force_removed_edges': 'MonDel',   # Monotonic Deletions
+    'group_deletion_constraint': 'DelCons'  # Deletion Constraint
+}
 
 model_name = model.__class__.__name__
 sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
@@ -908,6 +942,7 @@ edge_additions = exp_config['edge_additions']
 exp_rec_data = exp_config['exp_rec_data']
 delete_adv_group = exp_config['delete_adv_group']
 rec_data = locals()[f"{exp_rec_data}_data"]
+policy = '+'.join([pm for p, pm in policy_map.items() if exp_config['explainer_policies'][p]])
 
 user_df = pd.DataFrame({
     'user_id': train_data.dataset.user_feat['user_id'].numpy(),
@@ -928,7 +963,8 @@ best_test_pref_data, best_test_result = plot_utils.extract_best_metrics(
     exp_paths,
     args.best_exp_col,
     evaluator,
-    test_data.dataset
+    test_data.dataset,
+    config=config
 )
 
 if exp_rec_data != "test":
@@ -936,7 +972,8 @@ if exp_rec_data != "test":
         exp_paths,
         args.best_exp_col,
         evaluator,
-        rec_data.dataset
+        rec_data.dataset,
+        config=config
     )
 else:
     best_rec_pref_data, best_rec_result = None, None
@@ -1177,6 +1214,9 @@ else:
 #     hist_type="test",
 #     n_bins=6
 # )
+
+# %%
+plot_decomposition_perturbed(best_test_pref_data[model_dp_s], train_data)
 
 # %%
 if exp_rec_data != "test":

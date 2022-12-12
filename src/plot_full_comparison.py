@@ -244,11 +244,11 @@ def create_table_best_explanations(_metric_df):
 def create_fig_bar2_legend(fig, _palette, _hatches, demo_groups, loc="upper left"):
     policies, pol_colors = zip(*_palette.items())
     fig.legend(
-        [mpatches.Rectangle([0], [0], width=0, height=0)] +
-        [mpatches.Rectangle([0], [0], width=2, height=0.7, edgecolor=c, facecolor=c) for c in pol_colors] +
-        [mpatches.Rectangle([0], [0], width=0, height=0)] +
-        [mpatches.Patch(facecolor='w', alpha=0, hatch=h) for h in _hatches]
-        ['Policy'] + policies + ['Demographic Groups'] + demo_groups,
+        [mpatches.Rectangle((0, 0), width=0, height=0)] +
+        [mpatches.Rectangle((0, 0), width=2, height=0.7, edgecolor=c, facecolor=c) for c in pol_colors] +
+        [mpatches.Rectangle((0, 0), width=0, height=0)] +
+        [mpatches.Patch(facecolor='w', alpha=0, hatch=h) for h in _hatches],
+        ['Policy'] + list(policies) + ['Demographic Groups'] + demo_groups,
         # bbox_to_anchor=(1, 1)
         loc=loc
     )
@@ -572,17 +572,18 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
                     if i == len(axs_bar) - 1:
                         handles, labels = ax_bar.get_legend_handles_labels()
-                        fig_bar.legend(handles, labels, loc='upper center')
+                        fig_bar.legend(handles, labels, loc='upper center', ncol=len(labels))
                     ax_bar.get_legend().remove()
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
                     plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
                     _ax = axs_bar2[s_attr_i, i] if len(unique_sens_attrs) > 1 else axs_bar2[i]
                     dg_df_gby = plot_tdf_bar_sattr_df.groupby("Demo Group")
-                    s_attr_dgs = sorted(dg_df_gby.groups)
+                    s_attr_dgs = [x for x in sorted(dg_df_gby.groups) if 'Delta' not in x]
                     for dg, hatch in zip(s_attr_dgs, hatches):
                         dg_df = dg_df_gby.get_group(dg)
-                        sns.barplot(x="Model", y=y_col, data=dg_df, hue="Policy", ax=_ax, palette=palette, edgecolor='black', alpha=0.6, hatch=hatch, legend=None)
+                        sns.barplot(x="Model", y=y_col, data=dg_df, hue="Policy", ax=_ax, palette=palette, edgecolor='black', alpha=0.6, hatch=hatch)
+                        _ax.get_legend().remove()
                         _ax.set_title(dataset_map[dset])
 
                 subfigs[i].suptitle(dset.upper())
@@ -595,7 +596,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
                         ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
-            create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper_left")
+            create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
             fig_line.suptitle(sens_attr.title())
             fig_line.savefig(os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))

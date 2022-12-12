@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.text as mtext
 
 import src.utils as utils
 
@@ -60,10 +59,12 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None)
                 _exp = exp_entry[0]
 
             idxs = [utils.EXPS_COLUMNS.index(col) for col in ['user_id', 'rec_topk', 'rec_cf_topk']]
+            del_edges_idx = utils.EXPS_COLUMNS.index('del_edges')
+            del_edges_data = [_exp[del_edges_idx]] * len(_exp[idxs[0]])
 
-            pref_data.extend(list(zip(*[_exp[idx] for idx in idxs])))
+            pref_data.extend(list(zip(*[*[_exp[idx] for idx in idxs], del_edges_data])))
 
-        pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred'])
+        pref_data = pd.DataFrame(pref_data, columns=['user_id', 'topk_pred', 'cf_topk_pred', 'del_edges'])
         pref_data_all[e_type] = pref_data
 
         if not pref_data.empty:

@@ -1461,14 +1461,14 @@ class Dataset:
                     split_data: dict = pickle.load(split_file)
 
                 split_keys = list(split_data.keys())
-                if not self.uid_field in split_keys or not self.iid_field in split_keys or len(split_keys) != 2:
+                if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
                     raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
                                      f'`{self.uid_field}` and `{self.iid_field}`.')
 
                 for field in [self.uid_field, self.iid_field]:
-                    split_data[field] = torch.LongTensor(
-                        [self.field2token_id[field][val] for val in split_data[field].numpy().astype(str)]
-                    )
+                    data = split_data[field]
+                    data = data.numpy() if isinstance(data, torch.Tensor) else data
+                    split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
 
                 next_df.append(Interaction(split_data))
 

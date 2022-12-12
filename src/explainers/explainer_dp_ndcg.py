@@ -178,10 +178,10 @@ class DPBGExplainer:
         :return:
         """
         if force_update or (new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss)):
-            if not force_update or (self.unique_graph_dist_loss and len(best_cf_example) > 0):
+            if self.unique_graph_dist_loss and len(best_cf_example) > 0:
                 self.old_graph_dist = best_cf_example[-1][-5]
                 new_graph_dist = new_example[-4]
-                if not (self.old_graph_dist != new_graph_dist):
+                if not force_update and not (self.old_graph_dist != new_graph_dist):
                     return best_loss
 
             best_cf_example.append(new_example + [first_fair_loss])
