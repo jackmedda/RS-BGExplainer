@@ -15,7 +15,6 @@ import matplotlib.ticker as mpl_tick
 from adjustText import adjust_text
 from matplotlib.lines import Line2D
 from recbole.evaluator import Evaluator
-from sklearn.decomposition import PCA
 
 import src.utils.utils as utils
 import src.utils.plot_utils as plot_utils
@@ -586,7 +585,7 @@ def create_bias_ratio_categories_over_groups_plot_per_del_edges(
     inter_bar_data_df = {
         sens_groups[0]: pd.DataFrame(zip(order_cic, vals_cic), columns=['Category', '# Interactions']),
         sens_groups[1]: pd.DataFrame(
-            zip(order_cic, [cats_inter_counts[sens_groups[1]][cat] for cat in order_cic]),
+            zip(order_cic, [cats_inter_counts[sens_groups[1]][cat] if cat in cats_inter_counts[sens_groups[1]] else 0 for cat in order_cic]),
             columns=['Category', '# Interactions']
         )
     }
@@ -768,20 +767,14 @@ def plot_decomposition_perturbed(pref_df, tr_data):
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
-    pert_train_dataset = utils.get_dataset_with_perturbed_edges(pref_df, tr_data)
-    train_adj = train_data.dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
-    pert_train_adj = pert_train_dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
-
-    pca = PCA(n_components=2)
-    train_pca = pca.fit_transform(train_adj)
-    pert_train_pca = pca.fit_transform(pert_train_adj)
-
-    sens_data = tr_data.dataset.user_feat[sens_attr].numpy()[1:]
+    train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(pref_df, tr_data)
+    sens_data = train_data.dataset.user_feat[sens_attr].numpy()[1:]
     sens_data = [group_name_map[real_group_map['F' if idx == f_idx else 'M']] for idx in sens_data]
 
-    fig, axs = plt.subplots(1, 2)
-    for ax, data, ax_title, marker in zip(axs, [train_pca, pert_train_pca], ['NoPolicy', policy], ['o', 'X']):
-        sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=sens_data, marker=marker, ax=ax)
+    fig, axs = plt.subplots(1, 2, sharex=True, sharey=True)
+    import pdb; pdb.set_trace()
+    for ax, data, ax_title in zip(axs, [train_pca, pert_train_pca], ['NoPolicy', policy]):
+        sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=sens_data, marker='o', ax=ax)
         ax.set_title(ax_title)
 
     plt.tight_layout()

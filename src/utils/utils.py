@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import recbole.evaluator.collector as recb_collector
+from sklearn.decomposition import PCA
 from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
@@ -196,6 +197,22 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
 
 def get_node_node_graph_data(history):
     return _get_node_node_graph_data(history)
+
+
+def get_decomposed_adj_matrix(pref_df, train_data, method='PCA'):
+    pert_train_dataset = get_dataset_with_perturbed_edges(pref_df, train_data)
+    train_adj = train_data.dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
+    pert_train_adj = pert_train_dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
+
+    if method.upper() == "PCA":
+        decomposer = PCA(n_components=2)
+    else:
+        raise NotImplementedError("Only PCA is a supported decomposer")
+
+    train_pca = decomposer.fit_transform(train_adj)
+    pert_train_pca = decomposer.fit_transform(pert_train_adj)
+
+    return train_pca, pert_train_pca
 
 
 @numba.jit(nopython=True, parallel=True)
