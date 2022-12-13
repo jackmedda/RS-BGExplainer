@@ -762,7 +762,7 @@ def create_distribution_diff_metric_random_groups(
 
 
 # %%
-def plot_decomposition_perturbed(pref_df, tr_data):
+def plot_decomposition_perturbed(pref_df, tr_data, th=1e-5):
     plots_path = os.path.join(get_plots_path(), 'comparison', f"epochs_{epochs}", load_config_id, sens_attr)
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
@@ -772,9 +772,16 @@ def plot_decomposition_perturbed(pref_df, tr_data):
     sens_data = [group_name_map[real_group_map['F' if idx == f_idx else 'M']] for idx in sens_data]
 
     fig, axs = plt.subplots(1, 2, sharex=True, sharey=True)
-    import pdb; pdb.set_trace()
     for ax, data, ax_title in zip(axs, [train_pca, pert_train_pca], ['NoPolicy', policy]):
-        sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=sens_data, marker='o', ax=ax)
+        if ax_title != 'NoPolicy':
+            changes = np.abs(train_pca - pert_train_pca)
+            mask = changes > th
+            rel_chs, = np.bitwise_or.reduce(mask, axis=1).nonzero()
+            irrel_chs, = np.bitwise_or.reduce(~mask, axis=1).nonzero()
+            sns.scatterplot(x=data[irrel_chs, 0], y=data[irrel_chs, 1], hue=sens_data[irrel_chs], marker='o', ax=ax, alpha=0.2)
+            sns.scatterplot(x=data[rel_chs, 0], y=data[rel_chs, 1], hue=sens_data[rel_chs], marker='o', ax=ax)
+        else:
+            sns.scatterplot(x=data[:, 0], y=data[:, 1], hue=sens_data, marker='o', ax=ax)
         ax.set_title(ax_title)
 
     plt.tight_layout()

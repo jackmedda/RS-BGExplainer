@@ -122,11 +122,11 @@ def load_dp_exps_file(base_exps_file):
     return exps
 
 
-def get_dataset_with_perturbed_edges(df, train_data):
+def get_dataset_with_perturbed_edges(df, train_data, del_edges_col='del_edges'):
     user_num = train_data.dataset.user_num
     uid_field, iid_field = train_data.dataset.uid_field, train_data.dataset.iid_field
 
-    del_edges = torch.tensor(df['del_edges'].iloc[0].copy())
+    del_edges = torch.tensor(copy.deepcopy(df[del_edges_col].iloc[0]))
     del_edges[1] -= user_num  # remap items in range [0, user_num)
 
     orig_inter_feat = train_data.dataset.inter_feat
@@ -199,8 +199,8 @@ def get_node_node_graph_data(history):
     return _get_node_node_graph_data(history)
 
 
-def get_decomposed_adj_matrix(pref_df, train_data, method='PCA'):
-    pert_train_dataset = get_dataset_with_perturbed_edges(pref_df, train_data)
+def get_decomposed_adj_matrix(pref_df, train_data, method='PCA', **kwargs):
+    pert_train_dataset = get_dataset_with_perturbed_edges(pref_df, train_data, **kwargs)
     train_adj = train_data.dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
     pert_train_adj = pert_train_dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
 
