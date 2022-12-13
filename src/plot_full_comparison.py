@@ -362,7 +362,7 @@ else:
     for model_file, exp_config_file in zip(args.model_files, args.explainer_config_files):
         config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, exp_config_file)
 
-        train_datasets[dataset.dataset_name] = train_data
+        train_datasets[dataset.dataset_name] = train_data.dataset
         datasets_train_inter_sizes[dataset.dataset_name] = train_data.dataset.inter_num
 
         model_name = model.__class__.__name__
@@ -528,8 +528,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(sub_df, train_datasets[_dataset], del_edges_col='Del Edges')
 
-            f_idx = (train_datasets[_dataset].dataset.field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
-            sens_data = train_datasets[_dataset].dataset.user_feat[_s_attr.lower()].numpy()[1:]
+            f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
+            sens_data = train_datasets[_dataset].user_feat[_s_attr.lower()].numpy()[1:]
             sens_data = np.array([group_name_map[real_group_map[_s_attr.lower()]['F' if idx == f_idx else 'M']] for idx in sens_data])
 
             if _policy != 'NoPolicy':
