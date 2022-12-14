@@ -61,17 +61,18 @@ def update_plot_data(_test_df_data, _rec_df_data):
         else:
             _group_edge_del = f_idx
 
-    _test_df_data.extend(list(zip(
-        test_uid,
-        [sens_attr.title()] * len(test_uid),
-        user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-        test_del_edges,
-        [model_name] * len(test_uid),
-        [dataset.dataset_name] * len(test_uid),
-        [metric.upper()] * len(test_uid),
-        test_orig_total_metric[:, -1],
-        ["NoPolicy"] * len(test_uid)
-    )))
+    if (dataset_name, model_name, sens_attr) not in no_policies:
+        _test_df_data.extend(list(zip(
+            test_uid,
+            [sens_attr.title()] * len(test_uid),
+            user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+            test_del_edges,
+            [model_name] * len(test_uid),
+            [dataset_name] * len(test_uid),
+            [metric.upper()] * len(test_uid),
+            test_orig_total_metric[:, -1],
+            ["NoPolicy"] * len(test_uid)
+        )))
 
     _test_df_data.extend(list(zip(
         test_uid,
@@ -79,23 +80,24 @@ def update_plot_data(_test_df_data, _rec_df_data):
         user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         test_del_edges,
         [model_name] * len(test_uid),
-        [dataset.dataset_name] * len(test_uid),
+        [dataset_name] * len(test_uid),
         [metric.upper()] * len(test_uid),
         test_pert_total_metric[:, -1],
         [policy] * len(test_uid)
     )))
 
-    _rec_df_data.extend(list(zip(
-        rec_uid,
-        [sens_attr.title()] * len(rec_uid),
-        user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-        rec_del_edges,
-        [model_name] * len(rec_uid),
-        [dataset.dataset_name] * len(rec_uid),
-        [metric.upper()] * len(rec_uid),
-        rec_orig_total_metric[:, -1],
-        ["NoPolicy"] * len(rec_uid)
-    )))
+    if (dataset_name, model_name, sens_attr) not in no_policies:
+        _rec_df_data.extend(list(zip(
+            rec_uid,
+            [sens_attr.title()] * len(rec_uid),
+            user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+            rec_del_edges,
+            [model_name] * len(rec_uid),
+            [dataset_name] * len(rec_uid),
+            [metric.upper()] * len(rec_uid),
+            rec_orig_total_metric[:, -1],
+            ["NoPolicy"] * len(rec_uid)
+        )))
 
     _rec_df_data.extend(list(zip(
         rec_uid,
@@ -103,7 +105,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
         user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         rec_del_edges,
         [model_name] * len(rec_uid),
-        [dataset.dataset_name] * len(rec_uid),
+        [dataset_name] * len(rec_uid),
         [metric.upper()] * len(rec_uid),
         rec_pert_total_metric[:, -1],
         [policy] * len(rec_uid)
@@ -158,43 +160,45 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     unique_test_del_edges = len(test_result_all_data[model_dp_s])
     unique_rec_del_edges = len(rec_result_all_data[model_dp_s])
 
+    if (dataset_name, model_name, sens_attr) not in no_policies:
+        _test_df_del_data.extend(
+            np.c_[
+                exp_test_df.values,
+                [sens_attr.title()] * len(exp_test_df),
+                [model_name] * len(exp_test_df),
+                [dataset_name] * len(exp_test_df),
+                np.tile(test_orig_total_metric, unique_test_del_edges),
+                ["NoPolicy"] * len(exp_test_df)
+            ].tolist()
+        )
     _test_df_del_data.extend(
         np.c_[
             exp_test_df.values,
             [sens_attr.title()] * len(exp_test_df),
             [model_name] * len(exp_test_df),
-            [dataset.dataset_name] * len(exp_test_df),
-            np.tile(test_orig_total_metric, unique_test_del_edges),
-            ["NoPolicy"] * len(exp_test_df)
-        ].tolist()
-    )
-    _test_df_del_data.extend(
-        np.c_[
-            exp_test_df.values,
-            [sens_attr.title()] * len(exp_test_df),
-            [model_name] * len(exp_test_df),
-            [dataset.dataset_name] * len(exp_test_df),
+            [dataset_name] * len(exp_test_df),
             _test_result.to_numpy(),
             [policy] * len(exp_test_df)
         ].tolist()
     )
 
+    if (dataset_name, model_name, sens_attr) not in no_policies:
+        _rec_df_del_data.extend(
+            np.c_[
+                exp_rec_df.values,
+                [sens_attr.title()] * len(exp_rec_df),
+                [model_name] * len(exp_rec_df),
+                [dataset_name] * len(exp_rec_df),
+                np.tile(rec_orig_total_metric, unique_rec_del_edges),
+                ["NoPolicy"] * len(exp_rec_df)
+            ].tolist()
+        )
     _rec_df_del_data.extend(
         np.c_[
             exp_rec_df.values,
             [sens_attr.title()] * len(exp_rec_df),
             [model_name] * len(exp_rec_df),
-            [dataset.dataset_name] * len(exp_rec_df),
-            np.tile(rec_orig_total_metric, unique_rec_del_edges),
-            ["NoPolicy"] * len(exp_rec_df)
-        ].tolist()
-    )
-    _rec_df_del_data.extend(
-        np.c_[
-            exp_rec_df.values,
-            [sens_attr.title()] * len(exp_rec_df),
-            [model_name] * len(exp_rec_df),
-            [dataset.dataset_name] * len(exp_rec_df),
+            [dataset_name] * len(exp_rec_df),
             _rec_result.to_numpy(),
             [policy] * len(exp_rec_df)
         ].tolist()
@@ -354,6 +358,7 @@ if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and os.path.exists(os.
 else:
     # %%
     incdisp = {}
+    no_policies = set()
     all_batch_exps = {}
     train_datasets = {}
     datasets_train_inter_sizes = {}
@@ -362,14 +367,15 @@ else:
     for model_file, exp_config_file in zip(args.model_files, args.explainer_config_files):
         config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, exp_config_file)
 
-        train_datasets[dataset.dataset_name] = train_data.dataset
-        datasets_train_inter_sizes[dataset.dataset_name] = train_data.dataset.inter_num
-
+        dataset_name = dataset.dataset_name
         model_name = model.__class__.__name__
         sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
         policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'][p]])
-        incdisp[(dataset.dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
-        all_batch_exps[dataset.dataset_name] = batch_exp
+        incdisp[(dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
+        all_batch_exps[dataset_name] = batch_exp
+
+        train_datasets[dataset_name] = train_data.dataset
+        datasets_train_inter_sizes[dataset_name] = train_data.dataset.inter_num
 
         exp_epochs.append(epochs)
 
@@ -392,6 +398,9 @@ else:
         model_dp_s = f'{model_name}+FairDP'
 
         exp_paths = {model_dp_s: os.path.dirname(exp_config_file)}
+
+        del model
+        del dataset
 
         best_test_exp_df, best_test_exp_result = plot_utils.extract_best_metrics(
             exp_paths,
@@ -432,6 +441,8 @@ else:
         for metric in metrics:
             group_edge_del = update_plot_data(test_df_data, rec_df_data)
             update_plot_del_data(test_del_df_data, rec_del_df_data)
+
+        no_policies.add((dataset_name, model_name, sens_attr))
 
     cols = ['user_id', 'Sens Attr', 'Demo Group', 'Del Edges', 'Model', 'Dataset', 'Metric', 'Value', 'Policy']
     duplicated_cols_subset = [c for c in cols if c not in ['Value', 'Del Edges']]
