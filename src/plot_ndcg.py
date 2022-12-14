@@ -431,7 +431,7 @@ def create_user_user_homophily_plot_over_del_edges_per_group(
     joint_df_gr = joint_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
         del_df = joint_df_gr.get_group(n_del)
-        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data.dataset)
+        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df['del_edges'].iloc[0], train_data.dataset)
 
         pert_user_graph_df = plot_utils.get_user_user_data_sens_df(pert_train_dataset, user_df, sens_attr, attr_map=attr_map.__getitem__)
         del_user_df = user_df[user_df['user_id'].isin(pert_train_dataset.inter_feat[uid_field].unique().numpy())]
@@ -502,7 +502,7 @@ def create_item_item_homophily_plot_over_del_edges_per_popularity(
     pref_df_gr = pref_df.groupby(edges_ylabel)
     for del_i, n_del in enumerate(del_edges_perc):
         del_df = pref_df_gr.get_group(n_del)
-        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df, train_data.dataset)
+        pert_train_dataset = utils.get_dataset_with_perturbed_edges(del_df['del_edges'].iloc[0], train_data.dataset)
 
         pert_item_graph_df = plot_utils.get_item_item_data_pop_df(pert_train_dataset, item_df, pop_label)
         del_item_df = item_df[item_df['item_id'].isin(pert_train_dataset.inter_feat[iid_field].unique().numpy())]

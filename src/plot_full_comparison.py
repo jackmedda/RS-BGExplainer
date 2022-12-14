@@ -47,9 +47,6 @@ def update_plot_data(_test_df_data, _rec_df_data):
     rec_orig_m_metric = rec_orig_total_metric[m_group_mask, -1].mean()
     rec_orig_f_metric = rec_orig_total_metric[f_group_mask, -1].mean()
 
-    test_del_edges = best_test_exp_df[model_dp_s]['del_edges'].map(np.ndarray.tolist)
-    rec_del_edges = best_rec_exp_df[model_dp_s]['del_edges'].map(np.ndarray.tolist)
-
     if rec_orig_m_metric >= rec_orig_f_metric:
         if delete_adv_group is not None:
             _group_edge_del = m_idx if delete_adv_group else f_idx
@@ -66,7 +63,6 @@ def update_plot_data(_test_df_data, _rec_df_data):
             test_uid,
             [sens_attr.title()] * len(test_uid),
             user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-            test_del_edges,
             [model_name] * len(test_uid),
             [dataset_name] * len(test_uid),
             [metric.upper()] * len(test_uid),
@@ -78,7 +74,6 @@ def update_plot_data(_test_df_data, _rec_df_data):
         test_uid,
         [sens_attr.title()] * len(test_uid),
         user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-        test_del_edges,
         [model_name] * len(test_uid),
         [dataset_name] * len(test_uid),
         [metric.upper()] * len(test_uid),
@@ -91,7 +86,6 @@ def update_plot_data(_test_df_data, _rec_df_data):
             rec_uid,
             [sens_attr.title()] * len(rec_uid),
             user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-            rec_del_edges,
             [model_name] * len(rec_uid),
             [dataset_name] * len(rec_uid),
             [metric.upper()] * len(rec_uid),
@@ -103,7 +97,6 @@ def update_plot_data(_test_df_data, _rec_df_data):
         rec_uid,
         [sens_attr.title()] * len(rec_uid),
         user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
-        rec_del_edges,
         [model_name] * len(rec_uid),
         [dataset_name] * len(rec_uid),
         [metric.upper()] * len(rec_uid),
@@ -334,14 +327,11 @@ if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and os.path.exists(os.
     test_del_df = pd.read_csv(os.path.join(plots_path, 'test_del_df.csv'), skiprows=test_rows)
     rec_del_df = pd.read_csv(os.path.join(plots_path, 'rec_del_df.csv'), skiprows=rec_rows)
 
-    test_del_edges = np.load(os.path.join(plots_path, 'test_del_edges.npy'), allow_pickle=True)
-    rec_del_edges = np.load(os.path.join(plots_path, 'rec_del_edges.npy'), allow_pickle=True)
-
-    test_df['Del Edges'] = test_del_edges.tolist()
-    rec_df['Del Edges'] = rec_del_edges.tolist()
-
     with open(os.path.join(plots_path, 'incdisp.pkl'), 'rb') as f:
         incdisp = pickle.load(f)
+
+    with open(os.path.join(plots_path, 'del_edges.pkl'), 'rb') as f:
+        del_edges = pickle.load(f)
 
     with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'rb') as f:
         all_batch_exps = pickle.load(f)
@@ -358,6 +348,7 @@ if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and os.path.exists(os.
 else:
     # %%
     incdisp = {}
+    del_edges = {}
     no_policies = set()
     all_batch_exps = {}
     train_datasets = {}
@@ -417,6 +408,13 @@ else:
             config=config
         )
 
+        # the deleted edges are repeated for each row, so take the first is the same
+        test_del_edges = best_test_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
+        rec_del_edges = best_rec_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
+        for exp_data_name, exp_del_edges in zip(["test", exp_rec_data], [test_del_edges, rec_del_edges]):
+            for policy_type in ["NoPolicy", policy]:
+                del_edges[(exp_data_name, dataset_name, model_name, policy_type, sens_attr.title())] = exp_del_edges
+
         test_uid = best_test_exp_df[model_dp_s]['user_id'].to_numpy()
         rec_uid = best_rec_exp_df[model_dp_s]['user_id'].to_numpy()
 
@@ -444,8 +442,8 @@ else:
 
         no_policies.add((dataset_name, model_name, sens_attr))
 
-    cols = ['user_id', 'Sens Attr', 'Demo Group', 'Del Edges', 'Model', 'Dataset', 'Metric', 'Value', 'Policy']
-    duplicated_cols_subset = [c for c in cols if c not in ['Value', 'Del Edges']]
+    cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy']
+    duplicated_cols_subset = [c for c in cols if c not in ['Value']]
     test_df = pd.DataFrame(test_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
     rec_df = pd.DataFrame(rec_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
 
@@ -457,12 +455,12 @@ else:
     with open(os.path.join(plots_path, 'test_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
         f.write(f'# explainer_config_files {" ".join(args.explainer_config_files)}\n')
-        test_df[test_df.columns[~test_df.columns.isin(['Del Edges'])]].to_csv(f, index=None)
+        test_df.to_csv(f, index=None)
     with open(os.path.join(plots_path, 'rec_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
         f.write(f'# explainer_config_files {" ".join(args.explainer_config_files)}\n')
         f.write(f'exp_rec_data: {exp_rec_data}\n')
-        rec_df[rec_df.columns[~rec_df.columns.isin(['Del Edges'])]].to_csv(f, index=None)
+        rec_df.to_csv(f, index=None)
 
     with open(os.path.join(plots_path, 'test_del_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
@@ -474,11 +472,11 @@ else:
         f.write(f'exp_rec_data: {exp_rec_data}\n')
         rec_del_df.to_csv(f, index=None)
 
-    np.save(os.path.join(plots_path, 'test_del_edges.npy'), np.array(test_df['Del Edges'].to_list()))
-    np.save(os.path.join(plots_path, 'rec_del_edges.npy'), np.array(rec_df['Del Edges'].to_list()))
-
     with open(os.path.join(plots_path, 'incdisp.pkl'), 'wb') as f:
         pickle.dump(incdisp, f)
+
+    with open(os.path.join(plots_path, 'del_edges.pkl'), 'wb') as f:
+        pickle.dump(del_edges, f)
 
     with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'wb') as f:
         pickle.dump(all_batch_exps, f)
@@ -537,7 +535,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
             ]
 
-            train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(sub_df, train_datasets[_dataset], del_edges_col='Del Edges')
+            train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(
+                del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)],
+                train_datasets[_dataset]
+            )
 
             f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
             sens_data = train_datasets[_dataset].user_feat[_s_attr.lower()].numpy()[1:]
