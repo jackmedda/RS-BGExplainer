@@ -1,6 +1,5 @@
 # %%
 import os
-import ast
 import pickle
 import argparse
 import inspect
@@ -505,128 +504,150 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_columns = ["Model", "Dataset", "Policy", "Sens Attr", y_col]
         plot_del_columns = ["Model", "Dataset", "Policy", "% Del Edges", "Sens Attr", y_col]
         palette = dict(zip(unique_policies, sns.color_palette("colorblind")))
-        _m_dset_pol_df = metric_df.groupby(["Model", "Dataset", "Policy", "Sens Attr"])
+        _m_dset_df_gby = metric_df.groupby(["Model", "Dataset", "Sens Attr"])
         _m_dset_pol_del_df = metric_del_df.groupby(["Model", "Dataset", "Policy", "Sens Attr"])
 
-        fig_qnt, axs_qnt = {}, {}
-        for pol in metric_df["Policy"].unique():
-            fig_qnt[pol] = plt.figure(figsize=(15, 15), constrained_layout=True)
-            fig_qnt[pol].subfigures(len(unique_datasets), 1)
-            for dset, subfig in zip(unique_datasets, fig_qnt[pol].subfigs):
+        fig_qnt = {}
+        for qnt_s_attr in unique_sens_attrs:
+            fig_qnt[qnt_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
+            fig_qnt[qnt_s_attr].subfigures(len(unique_datasets), 1)
+            for dset, subfig in zip(unique_datasets, fig_qnt[qnt_s_attr].subfigs):
                 subfig.suptitle(dataset_map[dset])
-                subfig.subplots(1, len(unique_models))
+                subfig.subplots(1, len(unique_models), sharey=True)
 
-        fig_pca, axs_pca = {}, {}
+        fig_pca = {}
         for pca_s_attr in unique_sens_attrs:
-            fig_pca[pca_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
+            fig_pca[pca_s_attr] = plt.figure(figsize=(15, 22), constrained_layout=True)
             fig_pca[pca_s_attr].subfigures(len(unique_datasets), 1)
             for dset, subfig in zip(unique_datasets, fig_pca[pca_s_attr].subfigs):
                 subfig.suptitle(dataset_map[dset])
                 subfig.subplots(len(unique_models), len(unique_policies), sharex=True, sharey=True)
 
-        rel_th = 1e-1
         qnt_size = 100
-        m_dset_pol = list(_m_dset_pol_df.groups.keys())
-        for (_model, _dataset, _policy, _s_attr) in tqdm.tqdm(m_dset_pol, desc="Extracting DP across random samples"):
-            sub_df = _m_dset_pol_df.get_group((_model, _dataset, _policy, _s_attr))
-            sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
+        ch_quantile = 95
+        hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older']}
+        m_dset_attr_list = list(_m_dset_df_gby.groups.keys())
+        for it, (_model, _dataset, _s_attr) in enumerate(tqdm.tqdm(m_dset_attr_list, desc="Extracting DP across random samples")):
+            sub_df = _m_dset_df_gby.get_group((_model, _dataset, _s_attr))
+            qnt_data = []
+            for _policy, sub_policy_df in sub_df.groupby("Policy"):
+                for dg_i, (dg, dg_df) in enumerate(sub_policy_df.groupby("Demo Group")):
+                    qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
+                    qnt_data.extend([
+                        (i, pct.mean() * (1 if dg_i == 0 else -1), group_name_map[dg] , _policy)
+                        for i, pct in enumerate(np.array_split(qnt_values, qnt_size))
+                    ])
 
-            pca_ax = fig_pca[_s_attr.lower()].subfigs[unique_datasets.index(_dataset)].axes[
-                unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
-            ]
+                pca_ax = fig_pca[_s_attr.lower()].subfigs[unique_datasets.index(_dataset)].axes[
+                    unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
+                ]
 
-            train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(
-                del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)],
-                train_datasets[_dataset]
-            )
-
-            f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
-            sens_data = train_datasets[_dataset].user_feat[_s_attr.lower()].numpy()[1:]
-            sens_data = np.array([group_name_map[real_group_map[_s_attr.lower()]['F' if idx == f_idx else 'M']] for idx in sens_data])
-
-            if _policy != 'NoPolicy':
-                changes = np.abs(train_pca - pert_train_pca)
-                mask = changes > np.percentile(changes, 95)
-                rel_chs, = np.bitwise_or.reduce(mask, axis=1).nonzero()
-                irrel_chs, = np.bitwise_or.reduce(~mask, axis=1).nonzero()
-
-                sns.scatterplot(x=pert_train_pca[irrel_chs, 0], y=pert_train_pca[irrel_chs, 1], hue=sens_data[irrel_chs],
-                                marker='o', ax=pca_ax, zorder=1, alpha=0.2)
-                sns.scatterplot(x=pert_train_pca[rel_chs, 0], y=pert_train_pca[rel_chs, 1], hue=sens_data[rel_chs],
-                                marker='o', zorder=3, ax=pca_ax)
-
-                for rel_tr_pca, rel_pert_tr_pca in zip(train_pca[rel_chs], pert_train_pca[rel_chs]):
-                    pca_ax.annotate(
-                        "",
-                        xy=rel_pert_tr_pca, xytext=rel_tr_pca,
-                        arrowprops=dict(arrowstyle='->', lw=0.5, connectionstyle='arc3', zorder=2)
-                    )
-
-                utils.legend_without_duplicate_labels(pca_ax)
-            else:
-                sns.scatterplot(x=train_pca[:, 0], y=train_pca[:, 1], hue=sens_data, marker='o', ax=pca_ax)
-
-            pca_ax.set_title(_policy)
-
-            for dg_i, (dg, dg_df) in enumerate(sub_df.groupby("Demo Group")):
-                ax = fig_qnt[_policy].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
-
-                qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
-                qnt_values = [pct.mean() * (1 if dg_i == 0 else -1) for pct in np.array_split(qnt_values, qnt_size)]
-
-                color = [colors[_s_attr][dg]] * qnt_size
-
-                ax.bar(
-                    np.arange(qnt_size),
-                    qnt_values,
-                    color=color,
-                    align='edge',
-                    label=dg
+                train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(
+                    del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)],
+                    train_datasets[_dataset]
                 )
 
-                ax.xaxis.set_visible(False)
-                ax.set_title(_model)
+                f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
+                sens_data = train_datasets[_dataset].user_feat[_s_attr.lower()].numpy()[1:]
+                sens_data = np.array([group_name_map[real_group_map[_s_attr.lower()]['F' if idx == f_idx else 'M']] for idx in sens_data])
 
-            dp_samples = utils.compute_DP_across_random_samples(
-                sub_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
-            )
+                if _policy != 'NoPolicy':
+                    changes = np.abs(train_pca - pert_train_pca)
+                    mask = changes > np.percentile(changes, ch_quantile)
+                    rel_chs, = np.bitwise_or.reduce(mask, axis=1).nonzero()
+                    irrel_chs, = np.bitwise_or.reduce(~mask, axis=1).nonzero()
 
-            plot_df_data.extend(list(zip(
-                [_model] * args.iterations,
-                [_dataset] * args.iterations,
-                [_policy] * args.iterations,
-                [_s_attr] * args.iterations,
-                dp_samples
-            )))
+                    sns.scatterplot(x=pert_train_pca[irrel_chs, 0], y=pert_train_pca[irrel_chs, 1], hue=sens_data[irrel_chs],
+                                    marker='o', ax=pca_ax, zorder=1, alpha=0.2, hue_order=hue_order[_s_attr], legend=False)
+                    sns.scatterplot(x=pert_train_pca[rel_chs, 0], y=pert_train_pca[rel_chs, 1], hue=sens_data[rel_chs],
+                                    marker='o', zorder=3, ax=pca_ax, hue_order=hue_order[_s_attr])
 
-            n_del_df_gby = sub_del_df.groupby("# Del Edges")
-            sorted_del_edges = sub_del_df.sort_values("# Del Edges")["# Del Edges"].unique()
-            for n_del in sorted_del_edges:
-                n_del_df = n_del_df_gby.get_group(n_del)
-                del_dp_samples = utils.compute_DP_across_random_samples(
-                    n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
+                    for rel_tr_pca, rel_pert_tr_pca in zip(train_pca[rel_chs], pert_train_pca[rel_chs]):
+                        pca_ax.annotate(
+                            "",
+                            xy=rel_pert_tr_pca, xytext=rel_tr_pca,
+                            arrowprops=dict(arrowstyle='->', lw=0.5, connectionstyle='arc3', zorder=2)
+                        )
+
+                    utils.legend_without_duplicate_labels(pca_ax)
+                elif not pca_ax.collections:
+                    sns.scatterplot(x=train_pca[:, 0], y=train_pca[:, 1], hue=sens_data, marker='o', ax=pca_ax, hue_order=hue_order[_s_attr])
+                    pca_ax.set_ylabel(_model)
+
+                pca_ax.set_title(_policy)
+                if it == len(m_dset_attr_list) - 1 and unique_policies.index(_policy) == len(unique_policies) - 1:
+                    pca_handles, pca_labels = pca_ax.get_legend_handles_labels()
+                    pca_ax.get_legend().remove()
+                    pca_legend = fig_pca[_s_attr.lower()].legend(pca_handles, pca_labels, loc="center right",
+                                                                 bbox_to_anchor=(1.1, 0.5),
+                                                                 bbox_transform=fig_pca[_s_attr.lower()].transFigure)
+                    pca_legend.set_zorder(10)
+                else:
+                    pca_ax.get_legend().remove()
+
+                dp_samples = utils.compute_DP_across_random_samples(
+                    sub_policy_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
                 )
 
-                plot_del_df_data.extend(list(zip(
+                plot_df_data.extend(list(zip(
                     [_model] * args.iterations,
                     [_dataset] * args.iterations,
                     [_policy] * args.iterations,
-                    [n_del] * args.iterations,
                     [_s_attr] * args.iterations,
-                    del_dp_samples
+                    dp_samples
                 )))
 
-        for pol in fig_qnt:
-            for subfig in fig_qnt[pol].subfigs:
-                for ax in subfig.axes:
-                    ax.legend(loc='upper right')
-            fig_qnt[pol].savefig(os.path.join(plots_path, f'percentile_plot_{exp_data_name}_{metric}_{pol}.png'))
+                sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
+                n_del_df_gby = sub_del_df.groupby("# Del Edges")
+                sorted_del_edges = sub_del_df.sort_values("# Del Edges")["# Del Edges"].unique()
+                for n_del in sorted_del_edges:
+                    n_del_df = n_del_df_gby.get_group(n_del)
+                    del_dp_samples = utils.compute_DP_across_random_samples(
+                        n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
+                    )
+
+                    plot_del_df_data.extend(list(zip(
+                        [_model] * args.iterations,
+                        [_dataset] * args.iterations,
+                        [_policy] * args.iterations,
+                        [n_del] * args.iterations,
+                        [_s_attr] * args.iterations,
+                        del_dp_samples
+                    )))
+
+            qnt_ax = fig_qnt[_s_attr.lower()].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
+            qnt_df = pd.DataFrame(qnt_data, columns=["x", metric.upper(), "Demo Group", "Policy"])
+
+            sns.lineplot(x="x", y=metric.upper(), data=qnt_df, ax=qnt_ax,
+                         hue="Demo Group", hue_order=hue_order[_s_attr], style="Policy", style_order=unique_policies)
+
+            if unique_models.index(_model) == 0:
+                qnt_ax.text(-0.29, 0.01, f"$-${metric.upper()}", transform=qnt_ax.transAxes)
+                qnt_ax.text(-0.29, 0.99, f"{metric.upper()}", transform=qnt_ax.transAxes)
+            qnt_ax.set_xticks([])
+            qnt_ax.set_xlabel(_model)
+            qnt_ax.set_ylabel("")
+
+            if it == len(m_dset_attr_list) - 1:
+                qnt_handles, qnt_labels = qnt_ax.get_legend_handles_labels()
+                qnt_ax.get_legend().remove()
+                qnt_legend = fig_qnt[_s_attr.lower()].legend(qnt_handles, qnt_labels, loc="center right",
+                                                             bbox_to_anchor=(1.15, 0.5),
+                                                             bbox_transform=fig_qnt[_s_attr.lower()].transFigure)
+                qnt_legend.set_zorder(10)
+            else:
+                qnt_ax.get_legend().remove()
 
         for pca_s_attr in fig_pca:
-            for subfig in fig_pca[pca_s_attr].subfigs:
-                for ax in subfig.axes:
-                    ax.legend(loc='upper right')
-            fig_pca[pca_s_attr].savefig(os.path.join(plots_path, f'{pca_s_attr}_adj_matrix_decomposition_{exp_data_name}_{metric}.png'))
+            fig_pca[pca_s_attr].savefig(
+                os.path.join(plots_path, f'{pca_s_attr}_adj_matrix_decomposition_{exp_data_name}_{metric}.png'),
+                bbox_inches="tight"
+            )
+        for qnt_s_attr in fig_pca:
+            fig_qnt[qnt_s_attr].savefig(
+                os.path.join(plots_path, f'{qnt_s_attr}_percentile_plot_{exp_data_name}_{metric}.png'),
+                bbox_inches="tight"
+            )
         plt.close("all")
 
         hatches = ['//', 'o']
