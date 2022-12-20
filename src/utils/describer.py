@@ -44,7 +44,7 @@ class Describer(object):
         self.sens_attrs = ['gender', 'age'] if sensitive_attributes is None else sensitive_attributes
         self.best_exp = best_exp if best_exp is not None else "loss_total"
 
-        self.graph = utils.get_nx_adj_matrix(self.config, self.train_data.dataset)
+        self.graph = utils.get_nx_adj_matrix(self.train_data.dataset)
         try:
             eigen_centrality = nx.eigenvector_centrality(self.graph, tol=1e-3)
         except nx.PowerIterationFailedConvergence as e:

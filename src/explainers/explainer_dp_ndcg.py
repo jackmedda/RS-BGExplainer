@@ -209,7 +209,7 @@ class DPBGExplainer:
             data_df.update(Interaction({data.dataset.iid_field: item_data}))
 
         if hasattr(data, "uid2history_item"):
-            history_item = data.uid2history_item[data_df['user_id']]
+            history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
         else:
             history_item = []
 
@@ -599,7 +599,7 @@ class DPBGExplainer:
         user_feat = {k: feat[user_id_mask] for k, feat in user_feat.interaction.items()}
 
         target = torch.zeros_like(cf_scores, dtype=torch.float, device=cf_scores.device)
-        target[torch.arange(target.shape[0])[:, None], self.rec_data.history_item_matrix()[0][user_feat['user_id']]] = 1
+        target[torch.arange(target.shape[0])[:, None], self.rec_data.history_item_matrix()[0][user_feat[self.dataset.uid_field]]] = 1
         target[:, 0] = 0
 
         loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, adj_sub_cf_adj = self.cf_model.loss(

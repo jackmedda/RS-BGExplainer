@@ -176,10 +176,10 @@ def get_adj_matrix(interaction_matrix,
 
 
 def get_nx_adj_matrix(config, dataset):
-    USER_ID = config['USER_ID_FIELD']
-    ITEM_ID = config['ITEM_ID_FIELD']
-    n_users = dataset.num(USER_ID)
-    n_items = dataset.num(ITEM_ID)
+    uid_field = dataset.uid_field
+    iid_field = dataset.iid_field
+    n_users = dataset.num(uid_field)
+    n_items = dataset.num(iid_field)
     inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
     num_all = n_users + n_items
     A = get_adj_from_inter_matrix(inter_matrix, num_all, n_users)
@@ -258,8 +258,8 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
 def compute_metric_per_group(evaluator, data, user_df, pref_data, sens_attr, group_idxs, col='topk_pred', metric="ndcg", raw=False):
     m_idx, f_idx = group_idxs
 
-    m_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])
-    f_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])
+    m_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, data.dataset.uid_field])
+    f_group_mask = pref_data.user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, data.dataset.uid_field])
 
     metric_result = compute_metric(
         evaluator,
@@ -387,6 +387,7 @@ def compute_category_intersharing_distribution(_item_df, n_categories=None, raw=
 
 
 def get_category_inter_distribution_over_attrs(train_data, sens_attrs, norm=False, item_cats=None):
+    uid_field, iid_field = train_data.dataset.uid_field, train_data.dataset.iid_field
     inter_num = train_data.dataset.inter_num
 
     item_cats = item_cats if item_cats is not None else train_data.dataset.item_feat['class']
@@ -394,17 +395,17 @@ def get_category_inter_distribution_over_attrs(train_data, sens_attrs, norm=Fals
     n_total_cats = train_data.dataset.item_feat['class'].max() + 1
 
     item_df = pd.DataFrame({
-        'item_id': train_data.dataset.item_feat['item_id'].numpy(),
+        iid_field: train_data.dataset.item_feat[iid_field].numpy(),
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
     user_df = pd.DataFrame({
-        'user_id': train_data.dataset.user_feat['user_id'].numpy(),
+        uid_field: train_data.dataset.user_feat[uid_field].numpy(),
         **{sens_attr: train_data.dataset.user_feat[sens_attr].numpy() for sens_attr in sens_attrs}
     })
 
-    train_df = pd.DataFrame(train_data.dataset.inter_feat.numpy())[["user_id", "item_id"]]
-    joint_df = train_df.join(item_df.set_index('item_id'), on='item_id').join(user_df.set_index('user_id'), on='user_id')
+    train_df = pd.DataFrame(train_data.dataset.inter_feat.numpy())[[uid_field, iid_field]]
+    joint_df = train_df.join(item_df.set_index(iid_field), on=iid_field).join(user_df.set_index(uid_field), on=uid_field)
 
     cats_inter_counts_attr = {}
     for attr in sens_attrs:
@@ -626,16 +627,17 @@ def generate_steck_pref_ratio(_train_data,
                               sensitive_attr=None,
                               mapped_keys=False,
                               item_cats=None):
+    uid_field, iid_field = _train_data.dataset.uid_field, _train_data.dataset.iid_field
     sensitive_attr = 'gender' if sensitive_attr is None else sensitive_attr
     user_df = pd.DataFrame({
-        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
+        uid_field: _train_data.dataset.user_feat[uid_field].numpy(),
         sensitive_attr: _train_data.dataset.user_feat[sensitive_attr].numpy()
     })
 
     item_cats = item_cats if item_cats is not None else _train_data.dataset.item_feat['class']
 
     item_df = pd.DataFrame({
-        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
+        iid_field: _train_data.dataset.item_feat[iid_field].numpy(),
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
@@ -658,7 +660,7 @@ def generate_steck_pref_ratio(_train_data,
                 pref_ratio[attr][gr_idx] = None
                 continue
 
-            group_users = demo_df['user_id'].to_numpy()
+            group_users = demo_df[uid_field].to_numpy()
             # TODO: only consider history len of users with data in pref_matrix
             pref_ratio[attr][gr_idx] = p_gu[group_users, :].mean(dim=0)
 
@@ -673,16 +675,17 @@ def generate_bias_ratio(_train_data,
                         mapped_keys=False,
                         user_subset=None,
                         item_cats=None):
+    uid_field, iid_field = _train_data.dataset.uid_field, _train_data.dataset.iid_field
     sensitive_attr = 'gender' if sensitive_attr is None else sensitive_attr
     user_df = pd.DataFrame({
-        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy(),
+        uid_field: _train_data.dataset.user_feat[uid_field].numpy(),
         sensitive_attr: _train_data.dataset.user_feat[sensitive_attr].numpy()
     })
 
     item_cats = item_cats if item_cats is not None else _train_data.dataset.item_feat['class']
 
     item_df = pd.DataFrame({
-        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
+        iid_field: _train_data.dataset.item_feat[iid_field].numpy(),
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
@@ -697,7 +700,7 @@ def generate_bias_ratio(_train_data,
         topk = len(history_matrix.iloc[0][pred_col])
         history_len = np.zeros(user_df.shape[0])
         history_len[history_matrix['user_id']] = topk
-        history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
+        history_df = user_df[[uid_field]].join(history_matrix.set_index('user_id'), on=uid_field)
         history_topk = history_df[pred_col]
         history_df[pred_col] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
 
@@ -723,7 +726,7 @@ def generate_bias_ratio(_train_data,
                 bias_ratio[attr][gr_idx] = None
                 continue
 
-            group_users = demo_df['user_id'].to_numpy()
+            group_users = demo_df[uid_field].to_numpy()
             # TODO: only consider history len of users with data in pref_matrix
             group_pref = pref_matrix[group_users, :].sum(dim=0)
             group_history_len = history_len[group_users].sum()
@@ -739,14 +742,15 @@ def generate_individual_bias_ratio(_train_data,
                                    history_matrix: pd.DataFrame = None,
                                    pred_col='cf_topk_pred',
                                    item_cats=None):
+    uid_field, iid_field = _train_data.dataset.uid_field, _train_data.dataset.iid_field
     user_df = pd.DataFrame({
-        'user_id': _train_data.dataset.user_feat[config['USER_ID_FIELD']].numpy()
+        uid_field: _train_data.dataset.user_feat[uid_field].numpy()
     })
 
     item_cats = item_cats if item_cats is not None else _train_data.dataset.item_feat['class']
 
     item_df = pd.DataFrame({
-        'item_id': _train_data.dataset.item_feat[config['ITEM_ID_FIELD']].numpy(),
+        iid_field: _train_data.dataset.item_feat[iid_field].numpy(),
         'class': map(lambda x: [el for el in x if el != 0], item_cats.numpy().tolist())
     })
 
@@ -760,7 +764,7 @@ def generate_individual_bias_ratio(_train_data,
         topk = len(history_matrix.iloc[0][pred_col])
         history_len = np.zeros(user_df.shape[0])
         history_len[history_matrix['user_id']] = topk
-        history_df = user_df[['user_id']].join(history_matrix.set_index('user_id'))
+        history_df = user_df[[uid_field]].join(history_matrix.set_index('user_id'), on=uid_field)
         history_topk = history_df[pred_col]
         history_df[pred_col] = history_topk.apply(lambda x: np.zeros(topk, dtype=int) if np.isnan(x).all() else x)
 

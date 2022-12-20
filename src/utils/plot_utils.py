@@ -87,7 +87,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
     sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     user_df = pd.DataFrame({
-        'user_id': train_data.dataset.user_feat['user_id'].numpy(),
+        train_data.dataset.uid_field: train_data.dataset.user_feat[train_data.dataset.uid_field].numpy(),
         sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
     })
 
@@ -126,7 +126,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
 
         exp_data = []
         for exp_entry in exps_data:
-            for _exp in exp_entry:
+            for _exp in exp_entry[:-1]:  # the last epoch is a stub epoch to retrieve back the best epoch
                 exp_row_data = [_exp[0]]
                 for col in cols:
                     if col in [1, 2, 3, 4, 5, 6]:
@@ -160,7 +160,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
                 zip([n_del] * len(t_dist), t_dist / len(t_dist), gr_df['topk_dist'].to_numpy() / len(t_dist))
             ))
 
-            gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index('user_id'), on='user_id')
+            gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index(train_data.dataset.uid_field), on='user_id')
             n_users_data[e_type][n_del] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
             n_users_del = n_users_data[e_type][n_del][sens_attr]
             n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
@@ -174,7 +174,17 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
     return exp_dfs, result_data, n_users_data, topk_dist
 
 
-def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr, user_df, d_grs, del_edges_map, metric, test_f="f_oneway"):
+def compute_exp_stats_data(_result_all_data,
+                           _pref_dfs,
+                           orig_result,
+                           order,
+                           attr,
+                           user_df,
+                           d_grs,
+                           del_edges_map,
+                           metric,
+                           test_f="f_oneway",
+                           uid_field='user_id'):
     orig_data = []
     orig_stats_data = []
     exp_data = []
@@ -193,7 +203,7 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
             temp_exp_data = []
             temp_stats_data = []
             for n_del, bin_del in del_edges_map.items():
-                e_d_grs_df = e_df_grby.get_group(n_del).join(user_df.set_index("user_id"), on="user_id")
+                e_d_grs_df = e_df_grby.get_group(n_del).join(user_df.set_index(uid_field), on="user_id")
                 masks = {d_gr: e_d_grs_df[attr] == d_gr for d_gr in d_grs}
 
                 if len(ch_bins) == 0:
@@ -255,7 +265,7 @@ def compute_exp_stats_data(_result_all_data, _pref_dfs, orig_result, order, attr
 def result_data_per_epoch_per_group(exp_dfs, evaluator, group_idxs: tuple, user_df, rec_data, sens_attr):
     m_idx, f_idx = group_idxs
 
-    u_df = user_df.set_index('user_id')
+    u_df = user_df.set_index(rec_data.uid_field)
 
     result_per_epoch = {}
     del_edges_per_epoch = {}
@@ -267,7 +277,7 @@ def result_data_per_epoch_per_group(exp_dfs, evaluator, group_idxs: tuple, user_
         for epoch, epoch_df in e_df.groupby("epoch"):
             result_per_epoch[e_type][epoch] = {}
             del_edges_per_epoch[e_type][epoch] = {}
-            uid = epoch_df['user_id']
+            uid = epoch_df[rec_data.uid_field]
 
             m_mask = (u_df.loc[uid, sens_attr] == m_idx).values
             f_mask = ~m_mask
@@ -403,14 +413,14 @@ def get_data_active_inactive(dataloader, inactive_perc=0.3):
 
 def get_user_user_data_sens_df(dataset, user_df, sens_attr, attr_map=None):
     user_history, _, _ = dataset.history_item_matrix()
-    user_graph_df = get_node_node_data_feature_df(user_history.numpy(), user_df, 'user_id', sens_attr, attr_map=attr_map)
+    user_graph_df = get_node_node_data_feature_df(user_history.numpy(), user_df, dataset.uid_field, sens_attr, attr_map=attr_map)
 
     return user_graph_df
 
 
 def get_item_item_data_pop_df(dataset, item_df, pop_attr):
     item_history, _, _ = dataset.history_user_matrix()
-    item_graph_df = get_node_node_data_feature_df(item_history.numpy(), item_df, 'item_id', pop_attr)
+    item_graph_df = get_node_node_data_feature_df(item_history.numpy(), item_df, dataset.iid_field, pop_attr)
 
     return item_graph_df
 

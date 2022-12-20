@@ -40,8 +40,8 @@ def update_plot_data(_test_df_data, _rec_df_data):
     test_pert_total_metric = best_test_exp_result[model_dp_s][metric]
     rec_pert_total_metric = best_rec_exp_result[model_dp_s][metric]
 
-    m_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, 'user_id'])
-    f_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, 'user_id'])
+    m_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == m_idx, uid_field])
+    f_group_mask = best_rec_exp_df[model_dp_s].user_id.isin(user_df.loc[user_df[sens_attr] == f_idx, uid_field])
 
     rec_orig_m_metric = rec_orig_total_metric[m_group_mask, -1].mean()
     rec_orig_f_metric = rec_orig_total_metric[f_group_mask, -1].mean()
@@ -61,7 +61,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
         _test_df_data.extend(list(zip(
             test_uid,
             [sens_attr.title().replace('_', ' ')] * len(test_uid),
-            user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+            user_df.set_index(uid_field).loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
             [model_name] * len(test_uid),
             [dataset_name] * len(test_uid),
             [metric.upper()] * len(test_uid),
@@ -72,7 +72,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
     _test_df_data.extend(list(zip(
         test_uid,
         [sens_attr.title().replace('_', ' ')] * len(test_uid),
-        user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+        user_df.set_index(uid_field).loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         [model_name] * len(test_uid),
         [dataset_name] * len(test_uid),
         [metric.upper()] * len(test_uid),
@@ -84,7 +84,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
         _rec_df_data.extend(list(zip(
             rec_uid,
             [sens_attr.title().replace('_', ' ')] * len(rec_uid),
-            user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+            user_df.set_index(uid_field).loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
             [model_name] * len(rec_uid),
             [dataset_name] * len(rec_uid),
             [metric.upper()] * len(rec_uid),
@@ -95,7 +95,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
     _rec_df_data.extend(list(zip(
         rec_uid,
         [sens_attr.title().replace('_', ' ')] * len(rec_uid),
-        user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+        user_df.set_index(uid_field).loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         [model_name] * len(rec_uid),
         [dataset_name] * len(rec_uid),
         [metric.upper()] * len(rec_uid),
@@ -135,13 +135,13 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
             result_test_df_data, columns=['n_del_edges', 'user_id', 'Value', 'Metric']
         ).set_index(['n_del_edges', 'user_id']),
         on=['n_del_edges', 'user_id']
-    ).join(user_df.set_index('user_id'), on='user_id')
+    ).join(user_df.set_index(uid_field), on='user_id')
     exp_rec_df = exp_rec_df.join(
         pd.DataFrame(
             result_rec_df_data, columns=['n_del_edges', 'user_id', 'Value', 'Metric']
         ).set_index(['n_del_edges', 'user_id']),
         on=['n_del_edges', 'user_id']
-    ).join(user_df.set_index('user_id'), on='user_id')
+    ).join(user_df.set_index(uid_field), on='user_id')
 
     _test_result = exp_test_df.pop("Value")
     _rec_result = exp_rec_df.pop("Value")
@@ -278,7 +278,9 @@ dataset_map = {
     "ml-100k": "ML 100K",
     "ml-1m": "ML 1M",
     "lastfm-1k": "Last.FM 1K",
-    "coco_8_America": "COCO 8 (America)"
+    "coco_8_America": "COCO 8 (America)",
+    "insurance": "Insurance",
+    "yelp40": "Yelp 40"
 }
 
 
@@ -378,8 +380,10 @@ else:
         delete_adv_group = config['delete_adv_group']
         rec_data = locals()[f"{exp_rec_data}_data"]
 
+        uid_field = train_data.dataset.uid_field
+
         user_df = pd.DataFrame({
-            'user_id': train_data.dataset.user_feat['user_id'].numpy(),
+            uid_field: train_data.dataset.user_feat[uid_field].numpy(),
             sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
         })
 

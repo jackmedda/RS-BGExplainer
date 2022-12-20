@@ -242,7 +242,7 @@ def hops_analysis(config, model, topk=10, dist_type="damerau_levenshtein", diam=
     :return:
     """
     if diam is None:
-        graph = utils.get_nx_adj_matrix(config, dataset)
+        graph = utils.get_nx_adj_matrix(dataset)
         max_cc_graph = graph.subgraph(max(nx.connected_components(graph), key=len)).copy()
         # cc_graphs = [graph.subgraph(x).copy() for x in nx.connected_components(graph)]
         # for x in cc_graphs:
