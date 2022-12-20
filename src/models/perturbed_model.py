@@ -39,6 +39,7 @@ class PerturbedModel(object):
 
         self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
 
+        # TODO: the code that generates the mask and mask_filter takes too much memory. Check to reduce it
         self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
@@ -57,9 +58,9 @@ class PerturbedModel(object):
             self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device)
 
             if self.filtered_users is not None:
-                filter = (self.mask_sub_adj[0][:, None] == self.filtered_users).sum(dim=1).bool() | \
-                         (self.mask_sub_adj[1][:, None] == self.filtered_users).sum(dim=1).bool()
-                self.mask_filter &= filter
+                user_filter = (self.mask_sub_adj[0][:, None] == self.filtered_users).sum(dim=1).bool() | \
+                              (self.mask_sub_adj[1][:, None] == self.filtered_users).sum(dim=1).bool()
+                self.mask_filter &= user_filter
 
             P_symm_init = 0
             P_symm_func = "ones"

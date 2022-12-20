@@ -461,6 +461,8 @@ class DPBGExplainer:
         self.initialize_cf_model(filtered_users=filtered_users)
 
         orig_ndcg_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
+        self.logger.info(self.results)
+        self.logger.info(f"M idx: {self.m_idx}")
         self.logger.info(f"Original Fair Loss: {orig_ndcg_loss}")
 
         iter_epochs = tqdm.tqdm(

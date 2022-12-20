@@ -153,7 +153,6 @@ def execute_explanation(model_file,
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
                                                                                           explainer_config_file)
-    import pdb; pdb.set_trace()
 
     if config['exp_rec_data'] is not None:
         if config['exp_rec_data'] != 'train+valid':

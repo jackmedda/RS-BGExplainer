@@ -60,7 +60,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
     if (dataset_name, model_name, sens_attr) not in no_policies:
         _test_df_data.extend(list(zip(
             test_uid,
-            [sens_attr.title()] * len(test_uid),
+            [sens_attr.title().replace('_', ' ')] * len(test_uid),
             user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
             [model_name] * len(test_uid),
             [dataset_name] * len(test_uid),
@@ -71,7 +71,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
 
     _test_df_data.extend(list(zip(
         test_uid,
-        [sens_attr.title()] * len(test_uid),
+        [sens_attr.title().replace('_', ' ')] * len(test_uid),
         user_df.set_index('user_id').loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         [model_name] * len(test_uid),
         [dataset_name] * len(test_uid),
@@ -83,7 +83,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
     if (dataset_name, model_name, sens_attr) not in no_policies:
         _rec_df_data.extend(list(zip(
             rec_uid,
-            [sens_attr.title()] * len(rec_uid),
+            [sens_attr.title().replace('_', ' ')] * len(rec_uid),
             user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
             [model_name] * len(rec_uid),
             [dataset_name] * len(rec_uid),
@@ -94,7 +94,7 @@ def update_plot_data(_test_df_data, _rec_df_data):
 
     _rec_df_data.extend(list(zip(
         rec_uid,
-        [sens_attr.title()] * len(rec_uid),
+        [sens_attr.title().replace('_', ' ')] * len(rec_uid),
         user_df.set_index('user_id').loc[rec_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
         [model_name] * len(rec_uid),
         [dataset_name] * len(rec_uid),
@@ -156,7 +156,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
         _test_df_del_data.extend(
             np.c_[
                 exp_test_df.values,
-                [sens_attr.title()] * len(exp_test_df),
+                [sens_attr.title().replace('_', ' ')] * len(exp_test_df),
                 [model_name] * len(exp_test_df),
                 [dataset_name] * len(exp_test_df),
                 np.tile(test_orig_total_metric, unique_test_del_edges),
@@ -166,7 +166,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     _test_df_del_data.extend(
         np.c_[
             exp_test_df.values,
-            [sens_attr.title()] * len(exp_test_df),
+            [sens_attr.title().replace('_', ' ')] * len(exp_test_df),
             [model_name] * len(exp_test_df),
             [dataset_name] * len(exp_test_df),
             _test_result.to_numpy(),
@@ -178,7 +178,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
         _rec_df_del_data.extend(
             np.c_[
                 exp_rec_df.values,
-                [sens_attr.title()] * len(exp_rec_df),
+                [sens_attr.title().replace('_', ' ')] * len(exp_rec_df),
                 [model_name] * len(exp_rec_df),
                 [dataset_name] * len(exp_rec_df),
                 np.tile(rec_orig_total_metric, unique_rec_del_edges),
@@ -188,7 +188,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     _rec_df_del_data.extend(
         np.c_[
             exp_rec_df.values,
-            [sens_attr.title()] * len(exp_rec_df),
+            [sens_attr.title().replace('_', ' ')] * len(exp_rec_df),
             [model_name] * len(exp_rec_df),
             [dataset_name] * len(exp_rec_df),
             _rec_result.to_numpy(),
@@ -219,13 +219,13 @@ def create_table_best_explanations(_metric_df):
         values="Value"
     )
     table_df = metr_df_pivot.reindex(
-        ["Gender", "Age"], axis=1, level=0
+        ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
     ).reindex(
-        ["M", "F", "Y", "O"], axis=1, level=1
+        ["M", "F", "Y", "O", "America", "Other"], axis=1, level=1
     ).reindex(
         ['Before', 'After'], axis=1, level=2
     )
-    for level_attr, demo_groups in zip(["Gender", "Age"], [["M", "F"], ["Y", "O"]]):
+    for level_attr, demo_groups in zip(["Gender", "Age", "User Wide Zone"], [["M", "F"], ["Y", "O"], ["America", "Other"]]):
         if level_attr in table_df:
             table_dp_df = (table_df[(level_attr, demo_groups[0])] - table_df[(level_attr, demo_groups[1])]).abs()
             table_dp_df.columns = pd.MultiIndex.from_product([[level_attr], ["$\Delta$"], ["Before", "After"]])
@@ -277,20 +277,24 @@ policy_map = {
 dataset_map = {
     "ml-100k": "ML 100K",
     "ml-1m": "ML 1M",
-    "lastfm-1k": "Last.FM 1K"
+    "lastfm-1k": "Last.FM 1K",
+    "coco_8_America": "COCO 8 (America)"
 }
 
 
 real_group_map = {
     'gender': {'M': 'M', 'F': 'F'},
-    'age': {'M': 'Y', 'F': 'O'}
+    'age': {'M': 'Y', 'F': 'O'},
+    'user_wide_zone': {'M': 'America', 'F': 'Other'}
 }
 
 group_name_map = {
     "M": "Males",
     "F": "Females",
     "Y": "Younger",
-    "O": "Older"
+    "O": "Older",
+    "America": "America",
+    "Other": "Other"
 }
 
 colors = {
@@ -412,7 +416,7 @@ else:
         rec_del_edges = best_rec_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
         for exp_data_name, exp_del_edges in zip(["test", exp_rec_data], [test_del_edges, rec_del_edges]):
             for policy_type in ["NoPolicy", policy]:
-                del_edges[(exp_data_name, dataset_name, model_name, policy_type, sens_attr.title())] = exp_del_edges
+                del_edges[(exp_data_name, dataset_name, model_name, policy_type, sens_attr.title().replace('_', ' '))] = exp_del_edges
 
         test_uid = best_test_exp_df[model_dp_s]['user_id'].to_numpy()
         rec_uid = best_rec_exp_df[model_dp_s]['user_id'].to_numpy()
@@ -525,7 +529,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
         qnt_size = 100
         ch_quantile = 95
-        hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older']}
+        hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
         m_dset_attr_list = list(_m_dset_df_gby.groups.keys())
         for it, (_model, _dataset, _s_attr) in enumerate(tqdm.tqdm(m_dset_attr_list, desc="Extracting DP across random samples")):
             sub_df = _m_dset_df_gby.get_group((_model, _dataset, _s_attr))
@@ -538,7 +542,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         for i, pct in enumerate(np.array_split(qnt_values, qnt_size))
                     ])
 
-                pca_ax = fig_pca[_s_attr.lower()].subfigs[unique_datasets.index(_dataset)].axes[
+                pca_ax = fig_pca[_s_attr.lower().replace(' ', '_')].subfigs[unique_datasets.index(_dataset)].axes[
                     unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
                 ]
 
@@ -547,9 +551,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     train_datasets[_dataset]
                 )
 
-                f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower()] == 'F').nonzero()[0][0]
-                sens_data = train_datasets[_dataset].user_feat[_s_attr.lower()].numpy()[1:]
-                sens_data = np.array([group_name_map[real_group_map[_s_attr.lower()]['F' if idx == f_idx else 'M']] for idx in sens_data])
+                f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower().replace(' ', '_')] == 'F').nonzero()[0][0]
+                sens_data = train_datasets[_dataset].user_feat[_s_attr.lower().replace(' ', '_')].numpy()[1:]
+                sens_data = np.array([group_name_map[real_group_map[_s_attr.lower().replace(' ', '_')]['F' if idx == f_idx else 'M']] for idx in sens_data])
 
                 if _policy != 'NoPolicy':
                     changes = np.abs(train_pca - pert_train_pca)
@@ -578,9 +582,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 if it == len(m_dset_attr_list) - 1 and unique_policies.index(_policy) == len(unique_policies) - 1:
                     pca_handles, pca_labels = pca_ax.get_legend_handles_labels()
                     pca_ax.get_legend().remove()
-                    pca_legend = fig_pca[_s_attr.lower()].legend(pca_handles, pca_labels, loc="center right",
+                    pca_legend = fig_pca[_s_attr.lower().replace(' ', '_')].legend(pca_handles, pca_labels, loc="center right",
                                                                  bbox_to_anchor=(1.1, 0.5),
-                                                                 bbox_transform=fig_pca[_s_attr.lower()].transFigure)
+                                                                 bbox_transform=fig_pca[_s_attr.lower().replace(' ', '_')].transFigure)
                     pca_legend.set_zorder(10)
                 else:
                     pca_ax.get_legend().remove()
@@ -615,7 +619,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         del_dp_samples
                     )))
 
-            qnt_ax = fig_qnt[_s_attr.lower()].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
+            qnt_ax = fig_qnt[_s_attr.lower().replace(' ', '_')].subfigs[unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
             qnt_df = pd.DataFrame(qnt_data, columns=["x", metric.upper(), "Demo Group", "Policy"])
 
             sns.lineplot(x="x", y=metric.upper(), data=qnt_df, ax=qnt_ax,
@@ -631,9 +635,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             if it == len(m_dset_attr_list) - 1:
                 qnt_handles, qnt_labels = qnt_ax.get_legend_handles_labels()
                 qnt_ax.get_legend().remove()
-                qnt_legend = fig_qnt[_s_attr.lower()].legend(qnt_handles, qnt_labels, loc="center right",
+                qnt_legend = fig_qnt[_s_attr.lower().replace(' ', '_')].legend(qnt_handles, qnt_labels, loc="center right",
                                                              bbox_to_anchor=(1.15, 0.5),
-                                                             bbox_transform=fig_qnt[_s_attr.lower()].transFigure)
+                                                             bbox_transform=fig_qnt[_s_attr.lower().replace(' ', '_')].transFigure)
                 qnt_legend.set_zorder(10)
             else:
                 qnt_ax.get_legend().remove()
@@ -663,7 +667,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_del_df_line_gby = plot_del_df_line.groupby(["Sens Attr", "Dataset", "Model"])
         plot_df_bar_gby = plot_df_bar.groupby(["Sens Attr", "Dataset"])
         for s_attr_i, orig_sens_attr in enumerate(unique_sens_attrs):
-            sens_attr = orig_sens_attr.title()
+            sens_attr = orig_sens_attr.title().replace('_', ' ')
             fig_line = plt.figure(figsize=(15, 15), constrained_layout=True)
             subfigs = fig_line.subfigures(len(unique_datasets), 1)
             subfigs = [subfigs] if not isinstance(subfigs, np.ndarray) else subfigs
@@ -707,10 +711,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
-            fig_line.suptitle(sens_attr.title())
+            fig_line.suptitle(sens_attr.title().replace('_', ' '))
             fig_line.savefig(os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
-            fig_bar.suptitle(sens_attr.title())
+            fig_bar.suptitle(sens_attr.title().replace('_', ' '))
             fig_bar.tight_layout()
             fig_bar.savefig(os.path.join(plots_path, f"{sens_attr}_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
