@@ -517,25 +517,98 @@ else:
     with open(os.path.join(plots_path, 'datasets_train_inter_sizes.pkl'), 'wb') as f:
         pickle.dump(datasets_train_inter_sizes, f)
 
-if os.path.exists(os.path.join(plots_path, 'graph_metrics_dfs.pkl')):
-    with open(os.path.join(plots_path, 'graph_metrics_dfs.pkl'), 'rb') as f:
+base_all_plots_path = os.path.join(script_path, os.pardir, f'dp_plots')
+if os.path.exists(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl')):
+    with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'rb') as f:
         graph_metrics_dfs = pickle.load(f)
 else:
-    graph_metrics_dfs = dict.fromkeys(unique_datasets)
-    for _dataset in unique_datasets:
+    graph_metrics_dfs = {}
+
+for _dataset in unique_datasets:
+    if _dataset not in graph_metrics_dfs:
         graph_metrics_dfs[_dataset] = plot_utils.extract_graph_metrics_per_node(
             train_datasets[_dataset],
             remove_first_row_col=True,
             metrics="all"
         )
 
-    with open(os.path.join(plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f:
-        pickle.dump(graph_metrics_dfs, f)
+with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f:
+    pickle.dump(graph_metrics_dfs, f)
 
+qnt_size = 100
+ch_quantile = 95
+hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
 unique_policies = sorted(test_df['Policy'].unique(), key=lambda x: 0 if x == "NoPolicy" else len(x))
 for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
+    gm_metrics = next(graph_metrics_dfs.values().__iter__()).columns
+    gm_metrics = gm_metrics[~gm_metrics.isin(['Node', '# Del Edges'])]
+    fig_gm = {}
+    for gm in gm_metrics:
+        fig_gm[gm] = {}
+        for gm_s_attr in unique_sens_attrs:
+            fig_gm[gm][gm_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
+            fig_gm[gm][gm_s_attr].subfigures(len(unique_datasets), 1)
+            for dset, subfig in zip(unique_datasets, fig_gm[gm][gm_s_attr].subfigs):
+                subfig.suptitle(dataset_map[dset])
+                subfig.subplots(1, len(unique_models), sharey=True)
+
     _metr_df_gby = df.groupby("Metric")
     _metr_del_df_gby = del_df.groupby("Metric")
+
+    m_dset_attr_groups = list(df.groupby(["Model", "Dataset", "Sens Attr"]).groups.keys())
+    for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
+        gm_data = {}
+        for _policy in unique_policies[1:]:  # NoPolicy has no deleted edges
+            de = np.array(del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)])
+            # remove user and item id 0 padding
+            de -= 1
+            de[1] -= 1
+
+            graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
+            # each edge is counted once for one node and once for the other (it is equal to a bincount)
+            graph_mdf['# Del Edges'] = np.bincount(de.reshape(de.shape[1] * 2), minlength=len(graph_mdf))
+
+            last_user_id = train_datasets[_dataset].user_num - 2
+            graph_mdf = graph_mdf.set_index('Node')
+            graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
+            graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
+            graph_mdf = graph_mdf.reset_index()
+
+            for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
+                gm_policy_data = gm_data.setdefault(graph_metric, [])
+                nt_gmdfby = graph_mdf.groupby('Node Type')
+                for nt, node_type in enumerate(['User', 'Item']):
+                    nt_gmdf = nt_gmdfby.get_group(node_type)
+                    gm_values = nt_gmdf.sort_values(graph_metric)['# Del Edges']
+                    gm_policy_data.extend([
+                        (i, pct.mean() * ((-1) ** nt), node_type, _policy)
+                        for i, pct in enumerate(np.array_split(gm_values, qnt_size))
+                    ])
+        for graph_metric, gm_plot_data in gm_data.items():
+            gm_ax = fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')].subfigs[
+                unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
+            gm_df = pd.DataFrame(gm_plot_data, columns=["x", graph_metric.title(), "Node Type", "Policy"])
+
+            sns.lineplot(x="x", y=graph_metric.title(), data=gm_df, ax=gm_ax,
+                         hue="Node Type", hue_order=["User", "Item"],
+                         style="Policy", style_order=unique_policies[1:])
+
+            clean_quantile_ax(
+                fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')], gm_ax, _model, groups_it,
+                len(m_dset_attr_groups)
+            )
+
+            if unique_models.index(_model) == 0:
+                gm_ax.text(-0.4, 0.01, f"$-$ # Del Edges", transform=gm_ax.transAxes)
+                gm_ax.text(-0.4, 0.99, f"# Del Edges", transform=gm_ax.transAxes)
+
+        for gm in fig_gm:
+            for gm_s_attr in fig_gm[gm]:
+                fig_gm[gm][gm_s_attr].savefig(
+                    os.path.join(plots_path, f'{gm_s_attr}_graph_metric_({gm.title()})_plot_{exp_data_name}.png'),
+                    bbox_inches="tight"
+                )
+        plt.close("all")
 
     _metrics = list(_metr_df_gby.groups.keys())
     for metric in _metrics:
@@ -569,26 +642,11 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 subfig.suptitle(dataset_map[dset])
                 subfig.subplots(len(unique_models), len(unique_policies), sharex=True, sharey=True)
 
-        gm_metrics = next(graph_metrics_dfs.values().__iter__()).columns
-        gm_metrics = gm_metrics[~gm_metrics.isin(['Node', '# Del Edges'])]
-        fig_gm = {}
-        for gm in gm_metrics:
-            fig_gm[gm] = {}
-            for gm_s_attr in unique_sens_attrs:
-                fig_gm[gm][gm_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
-                fig_gm[gm][gm_s_attr].subfigures(len(unique_datasets), 1)
-                for dset, subfig in zip(unique_datasets, fig_gm[gm][gm_s_attr].subfigs):
-                    subfig.suptitle(dataset_map[dset])
-                    subfig.subplots(1, len(unique_models), sharey=True)
-
-        qnt_size = 100
-        ch_quantile = 95
-        hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
         m_dset_attr_list = list(_m_dset_df_gby.groups.keys())
         for it, (_model, _dataset, _s_attr) in enumerate(tqdm.tqdm(m_dset_attr_list, desc="Extracting DP across random samples")):
             sub_df = _m_dset_df_gby.get_group((_model, _dataset, _s_attr))
+
             qnt_data = []
-            gm_data = {}
             for _policy, sub_policy_df in sub_df.groupby("Policy"):
                 for dg_i, (dg, dg_df) in enumerate(sub_policy_df.groupby("Demo Group")):
                     qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
@@ -646,30 +704,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 else:
                     pca_ax.get_legend().remove()
 
-                if _policy != 'NoPolicy':
-                    de = np.array(del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)])
-                    # remove user and item id 0 padding
-                    de -= 1
-                    de[1] -= 1
-
-                    graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
-                    # each edge is counted once for one node and once for the other (it is equal to a bincount)
-                    graph_mdf['# Del Edges'] = np.bincount(de.reshape(de.shape[1] * 2), minlength=len(graph_mdf))
-
-                    last_user_id = train_datasets[_dataset].user_num - 2
-                    graph_mdf = graph_mdf.set_index('Node')
-                    graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
-                    graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
-                    graph_mdf = graph_mdf.reset_index()
-
-                    for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
-                        gm_policy_data = gm_data.setdefault(graph_metric, [])
-                        gm_values = graph_mdf.sort_values(graph_metric)['# Del Edges']
-                        gm_policy_data.extend([
-                            (i, pct.mean(), _policy)
-                            for i, pct in enumerate(np.array_split(gm_values, qnt_size))
-                        ])
-
                 dp_samples = utils.compute_DP_across_random_samples(
                     sub_policy_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
                 )
@@ -713,18 +747,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             clean_quantile_ax(fig_qnt[_s_attr.lower().replace(' ', '_')], qnt_ax, _model, it, len(m_dset_attr_list))
 
-            for graph_metric, gm_plot_data in gm_data.items():
-                gm_ax = fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')].subfigs[
-                    unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
-                gm_df = pd.DataFrame(gm_plot_data, columns=["x", graph_metric.title(), "Policy"])
-
-                sns.lineplot(x="x", y=graph_metric.title(), data=gm_df, ax=gm_ax,
-                             style="Policy", style_order=unique_policies[1:])  # NoPolicy does not have deleted edges
-
-                clean_quantile_ax(
-                    fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')], gm_ax, _model, it, len(m_dset_attr_list)
-                )
-
         for qnt_s_attr in fig_pca:
             fig_qnt[qnt_s_attr].savefig(
                 os.path.join(plots_path, f'{qnt_s_attr}_percentile_plot_{exp_data_name}_{metric}.png'),
@@ -735,12 +757,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 os.path.join(plots_path, f'{pca_s_attr}_adj_matrix_decomposition_{exp_data_name}_{metric}.png'),
                 bbox_inches="tight"
             )
-        for gm in fig_gm:
-            for gm_s_attr in fig_gm[gm]:
-                fig_gm[gm][gm_s_attr].savefig(
-                    os.path.join(plots_path, f'{gm_s_attr}_graph_metric_({gm.title()})_plot_{exp_data_name}_{metric}.png'),
-                    bbox_inches="tight"
-                )
         plt.close("all")
 
         hatches = ['//', 'o']

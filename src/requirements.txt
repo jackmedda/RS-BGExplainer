@@ -17,3 +17,4 @@ torchviz==0.0.2
 tqdm==4.64.0
 numba
 wandb
+igraph
