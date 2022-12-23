@@ -11,6 +11,7 @@ import scipy
 import numba
 import numpy as np
 import pandas as pd
+import igraph as ig
 import networkx as nx
 import recbole.evaluator.collector as recb_collector
 from sklearn.decomposition import PCA
@@ -175,7 +176,7 @@ def get_adj_matrix(interaction_matrix,
     return adj, edge_subset
 
 
-def get_nx_adj_matrix(config, dataset):
+def get_nx_adj_matrix(dataset):
     uid_field = dataset.uid_field
     iid_field = dataset.iid_field
     n_users = dataset.num(uid_field)
@@ -193,6 +194,17 @@ def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
         inter_matrix = inter_matrix[1:, 1:]
 
     return nx.bipartite.from_biadjacency_matrix(inter_matrix)
+
+
+def get_bipartite_igraph(dataset, remove_first_row_col=False):
+    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
+    if remove_first_row_col:
+        inter_matrix = inter_matrix[1:, 1:]
+
+    incid_adj = ig.Graph.Incidence(inter_matrix.todense().tolist())
+    bip_info = np.concatenate([np.zeros(inter_matrix.shape[0], dtype=int), np.ones(inter_matrix.shape[1], dtype=int)])
+
+    return ig.Graph.Bipartite(bip_info, incid_adj.get_edgelist())
 
 
 def get_node_node_graph_data(history):
@@ -233,6 +245,42 @@ def _inner_combinations(n1, n_nodes, hist, node_node):
         node_node[sum(range(n_nodes - n1 + 1, n_nodes)) + (n2 - n1 - 1)] = [
             n1, n2, len(hist[n1] & hist[n2]) - 1
         ]
+
+
+def get_user_reachability(graph, last_user_id):
+    return get_reachability_per_node(graph, last=last_user_id)
+
+
+def get_item_reachability(graph, first_item_id):
+    return get_reachability_per_node(graph, first=first_item_id)
+
+
+def get_reachability_per_node(graph, first=None, last=None, nodes=None):
+    reach = {}
+    dist = np.array(graph.distances())
+
+    if nodes is not None:
+        nodes = sorted(nodes)
+        dist = dist[nodes][:, nodes]
+    else:
+        nodes = np.arange(dist.shape[0])
+
+        dist = dist[first:][:, first:] if first is not None else dist
+        nodes = nodes[first:] if first is not None else nodes
+
+        dist = dist[:(last + 1)][:, :(last + 1)] if last is not None else dist
+        nodes = nodes[:(last + 1)] if last is not None else nodes
+
+    for n, n_dist in zip(nodes, dist):
+        n_reach = np.bincount(n_dist[(~np.isinf(n_dist)) & (n_dist > 0)].astype(int))
+        n_reach = n_reach[n_reach > 0]
+        reach[n] = compute_reachability(n_reach)
+
+    return reach
+
+
+def compute_reachability(reach):
+    return sum([reach[i] / (i + 1) for i in range(len(reach))])
 
 
 def compute_metric(evaluator, dataset, pref_data, pred_col, metric):

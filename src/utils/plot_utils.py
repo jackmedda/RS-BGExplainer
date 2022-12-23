@@ -340,6 +340,55 @@ def get_adv_group_idx_to_delete(exp_path,
     return group_edge_del
 
 
+def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics="all"):
+    metrics = ["Degree", "Sparsity", "Reachability"] if metrics == "all" else metrics
+
+    G_df = None
+    node_col = 'Node'
+
+    igg = utils.get_bipartite_igraph(dataset, remove_first_row_col=remove_first_row_col)
+    for metr in metrics:
+        if metr == "Degree":
+            df = pd.DataFrame(dict(zip(igg.vs.indices, igg.degree())).items(), columns=[node_col, metr])
+        elif metr == "Reachability":
+            last_user_id = dataset.user_num - (1 + remove_first_row_col)
+            user_reach = utils.get_user_reachability(igg, last_user_id=last_user_id)
+
+            first_item_id = last_user_id + 1
+            item_reach = utils.get_item_reachability(igg, first_item_id=first_item_id)
+
+            df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[node_col, metr])
+        elif metr == "Sparsity":
+            item_hist, _, item_pop = dataset.history_user_matrix()
+            user_hist, _, user_hist_len = dataset.history_item_matrix()
+            if remove_first_row_col:
+                item_hist = item_hist[1:] - 1
+                item_pop = item_pop[1:]
+                user_hist = user_hist[1:] - 1
+                user_hist_len = user_hist_len[1:]
+
+            user_density = ((item_pop[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len).numpy()
+            user_sparsity = 1 - user_density
+
+            # item density represents the activity of the users that interact with an item.
+            # If only a user interact with item X and this user interacted with all the items in the catalog, then
+            # the density of X is maximum. A low density than means a high sparsity, which means the users that interact
+            # with that item interact with a few others
+            item_density = ((user_hist_len[item_hist] / item_hist.shape[0]).sum(dim=1) / item_pop).numpy()
+            item_sparsity = 1 - item_density
+
+            df = pd.DataFrame(
+                zip(igg.vs.indices, np.concatenate([user_sparsity, item_sparsity])),
+                columns=[node_col, metr]
+            )
+
+        if G_df is None:
+            G_df = df
+        else:
+            G_df = G_df.join(df.set_index(node_col), on=node_col)
+    return G_df
+
+
 def get_centrality_graph_df(graph_nx, top, original=True, sens_attr_map=None):
     label = "Original" if original else "Perturbed"
 
