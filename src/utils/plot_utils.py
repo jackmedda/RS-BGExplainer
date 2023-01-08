@@ -362,19 +362,25 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
             item_hist, _, item_pop = dataset.history_user_matrix()
             user_hist, _, user_hist_len = dataset.history_item_matrix()
             if remove_first_row_col:
-                item_hist = item_hist[1:] - 1
-                item_pop = item_pop[1:]
-                user_hist = user_hist[1:] - 1
-                user_hist_len = user_hist_len[1:]
+                item_hist = item_hist[1:].where(item_hist[1:] == 0, item_hist[1:] - 1)
+                item_pop = item_pop
+                user_hist = user_hist[1:].where(user_hist[1:] == 0, user_hist[1:] - 1)
+                user_hist_len = user_hist_len
 
-            user_density = ((item_pop[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len).numpy()
+            user_density = np.nan_to_num(
+                ((item_pop[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
+                nan=0
+            )
             user_sparsity = 1 - user_density
 
             # item density represents the activity of the users that interact with an item.
             # If only a user interact with item X and this user interacted with all the items in the catalog, then
-            # the density of X is maximum. A low density than means a high sparsity, which means the users that interact
+            # the density of X is maximum. A low density then means a high sparsity, which means the users that interact
             # with that item interact with a few others
-            item_density = ((user_hist_len[item_hist] / item_hist.shape[0]).sum(dim=1) / item_pop).numpy()
+            item_density = np.nan_to_num(
+                ((user_hist_len[item_hist] / item_hist.shape[0]).sum(dim=1) / item_pop[1:]).numpy(),
+                nan=0
+            )
             item_sparsity = 1 - item_density
 
             df = pd.DataFrame(

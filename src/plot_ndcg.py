@@ -8,6 +8,8 @@ from collections import defaultdict
 import wandb
 import numpy as np
 import pandas as pd
+import igraph as ig
+import networkx as nx
 import seaborn as sns
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -883,6 +885,24 @@ def plot_dist_over_del_edges(_topk_dist_all, bd_all, config_id, max_del_edges=80
 
 
 # %%
+def plot_del_edges_hops(dfs):
+    from scipy.sparse import coo_matrix
+
+    color_0 = "red"
+    color_1 = "blue"
+
+    train_nx = utils.get_nx_biadj_matrix(train_data.dataset, remove_first_row_col=True)
+
+    for e_type, e_df in dfs.items():
+        _df = e_df[['user_id', 'del_edges']]
+
+        del_edges_nx = nx.bipartite.biadjacency_matrix(coo_matrix(
+            (np.ones((len(_df['del_edges']))), (*_df['del_edges'])),
+            shape=(train_data.dataset.user_num(), train_data.dataset.item_num())
+        ).tocsr()[1:, 1:])
+
+
+# %%
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_file', required=True)
 parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
@@ -1214,28 +1234,28 @@ else:
 #     hist_type="test",
 #     n_bins=6
 # )
-
-# %%
-plot_decomposition_perturbed(best_test_pref_data[model_dp_s], train_data)
-
-# %%
-if exp_rec_data != "test":
-    create_distribution_diff_metric_random_groups(
-        rec_result_all_data,
-        all_exp_rec_dfs,
-        best_rec_result[model_name],
-        load_config_id,
-        hist_type=exp_rec_data,
-        n_bins=12,
-        iterations=100
-    )
-
-create_distribution_diff_metric_random_groups(
-    test_result_all_data,
-    all_exp_test_dfs,
-    best_test_result[model_name],
-    load_config_id,
-    hist_type="test",
-    n_bins=12,
-    iterations=100
-)
+#
+# # %%
+# plot_decomposition_perturbed(best_test_pref_data[model_dp_s], train_data)
+#
+# # %%
+# if exp_rec_data != "test":
+#     create_distribution_diff_metric_random_groups(
+#         rec_result_all_data,
+#         all_exp_rec_dfs,
+#         best_rec_result[model_name],
+#         load_config_id,
+#         hist_type=exp_rec_data,
+#         n_bins=12,
+#         iterations=100
+#     )
+#
+# create_distribution_diff_metric_random_groups(
+#     test_result_all_data,
+#     all_exp_test_dfs,
+#     best_test_result[model_name],
+#     load_config_id,
+#     hist_type="test",
+#     n_bins=12,
+#     iterations=100
+# )

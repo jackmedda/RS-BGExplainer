@@ -532,6 +532,19 @@ for _dataset in unique_datasets:
             metrics="all"
         )
 
+        last_user_id = train_datasets[_dataset].user_num - 2
+        graph_mdf = graph_metrics_dfs[_dataset].set_index('Node')
+        graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
+        graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
+        graph_metrics_dfs[_dataset] = graph_mdf.reset_index()
+
+    pg = sns.PairGrid(graph_metrics_dfs[_dataset], hue='Node Type')
+    pg.map_diag(sns.histplot)
+    pg.map_offdiag(sns.scatterplot)
+    pg.add_legend()
+    pg.figure.savefig(os.path.join(base_all_plots_path, _dataset, f'{_dataset}_graph_metrics_pair_grid.png'))
+    plt.close(pg.figure)
+
 with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f:
     pickle.dump(graph_metrics_dfs, f)
 
@@ -567,12 +580,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
             # each edge is counted once for one node and once for the other (it is equal to a bincount)
             graph_mdf['# Del Edges'] = np.bincount(de.reshape(de.shape[1] * 2), minlength=len(graph_mdf))
-
-            last_user_id = train_datasets[_dataset].user_num - 2
-            graph_mdf = graph_mdf.set_index('Node')
-            graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
-            graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
-            graph_mdf = graph_mdf.reset_index()
 
             for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
                 gm_policy_data = gm_data.setdefault(graph_metric, [])
