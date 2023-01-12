@@ -48,7 +48,12 @@ class PerturbedModel(object):
             self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device=self.device)
 
             if self.filtered_users is not None:
-                self.mask_sub_adj = self.mask_sub_adj[(self.mask_sub_adj[0][:, None] == self.filtered_users).nonzero()[:, 0]]
+                try:
+                    self.mask_sub_adj = torch.isin(self.mask_sub_adj[0], self.filtered_users).nonzero()[:, 0]
+                except AttributeError:
+                    self.mask_sub_adj = self.mask_sub_adj[
+                        (self.mask_sub_adj[0][:, None] == self.filtered_users).nonzero()[:, 0]
+                    ]
 
             P_symm_init = -5  # to get sigmoid closer to 0
             P_symm_func = "zeros"
@@ -58,8 +63,11 @@ class PerturbedModel(object):
             self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device)
 
             if self.filtered_users is not None:
-                user_filter = (self.mask_sub_adj[0][:, None] == self.filtered_users).sum(dim=1).bool() | \
-                              (self.mask_sub_adj[1][:, None] == self.filtered_users).sum(dim=1).bool()
+                try:
+                    user_filter = torch.isin(self.mask_sub_adj, self.filtered_users).any(dim=0)
+                except AttributeError:
+                    user_filter = (self.mask_sub_adj[0][:, None] == self.filtered_users).any(-1) | \
+                                  (self.mask_sub_adj[1][:, None] == self.filtered_users).any(-1)
                 self.mask_filter &= user_filter
 
             P_symm_init = 0

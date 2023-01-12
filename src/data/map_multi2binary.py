@@ -4,34 +4,61 @@ import argparse
 
 import pandas as pd
 
+from src.utils.utils import copytree
+
 
 def map_multi2binary(df, field, label):
     mask = df[field] == label
-    df[mask] = "M"
-    df[~mask] = "F"
+    df.loc[mask, field] = "M"
+    df.loc[~mask, field] = "F"
     return df
 
 
 if __name__ == "__main__":
     r"""
-    python -m src.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type timestamp --user_field user_id:token --item_field course_id:token --time_field timestamp:float --in_filepath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_5_America\coco_5_America.inter --user_filepath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_5_America\coco_5_America.user --out_folderpath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_7_America\ --dataset_name coco_7_America --min_interactions 7
+    python -m src.data.map_multi2binary --user_filepath dataset.user --map_attributes age
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument('--user_filepath', required=True)
-    parser.add_argument('--out_folderpath', required=True)
-    parser.add_argument('--dataset_name', required=True)
-    parser.add_argument('--map_attribues', nargs='+', required=True)
+    parser.add_argument('--dataset', '--d', required=True)
+    parser.add_argument('--map_attributes', '--ma', nargs='+', required=True)
+    parser.add_argument('--user_filepath', '--uf', default='')
     
     args = parser.parse_args()
 
-    user_df = pd.read_csv(args.user_filepath, sep='\t')
+    datasets_path = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, 'dataset'
+    )
+
+    uf = args.user_filepath
+    uf = os.path.join(datasets_path, args.dataset, f"{args.dataset}.user") if not uf else uf
+    user_df = pd.read_csv(uf, sep='\t')
 
     pprint.pprint(vars(args))
 
-    os.makedirs(args.out_folderpath, exist_ok=True)
+    recbole_extended_data_types = ['.inter', '.item', '.test', '.train', '.user', '.validation']
 
-    for attr in args.map_atttibutes:
-        for label in user_df[attr].unique():
+    for attr in args.map_attributes:
+        unique_labels = user_df[attr].unique()
+        if len(unique_labels) == 2:
+            raise ValueError(f"The attribute `{attr}` is already binary")
+
+        for label in unique_labels:
             df = user_df.copy(deep=True)
             df = map_multi2binary(df, attr, label)
-            df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}_{label}.user"), index=None, sep='\t')
+
+            dset_new_name = f"{args.dataset}_{attr.split(':')[0] if ':' in attr else attr}_{label}"
+            dst = os.path.join(datasets_path, dset_new_name)
+            copytree(os.path.join(datasets_path, args.dataset), dst, ignore=lambda x, y: ['splits_backup'])
+
+            df.to_csv(os.path.join(dst, f"{args.dataset}.user"), index=None, sep='\t')
+            for dirname, _, filename in os.walk(dst, topdown=True):
+                for data_type in recbole_extended_data_types:
+                    if f"{args.dataset}.{data_type}" == filename:
+                        os.rename(
+                            os.path.join(dirname, filename),
+                            os.path.join(dirname, f"{dset_new_name}.{data_type}")
+                        )
+
+            print('-' * 50)
+            print(f"Attr: {attr}    Label: {label}")
+            print(df[attr].value_counts().map(lambda x: f"{x / len(df) * 100:.2f}%"))

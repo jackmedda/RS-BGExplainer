@@ -1,8 +1,9 @@
 import os
 import copy
+import stat
+import shutil
 import pickle
 from logging import getLogger
-from collections import defaultdict
 
 import yaml
 import wandb
@@ -274,13 +275,42 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
     for n, n_dist in zip(nodes, dist):
         n_reach = np.bincount(n_dist[(~np.isinf(n_dist)) & (n_dist > 0)].astype(int))
         n_reach = n_reach[n_reach > 0]
-        reach[n] = compute_reachability(n_reach)
+        reach[n] = compute_reachability(n_reach) / len(nodes)
 
     return reach
 
 
 def compute_reachability(reach):
     return sum([reach[i] / (i + 1) for i in range(len(reach))])
+
+
+# @numba.jit(nopython=True, parallel=True)
+def compute_sharing_potentiality(common_data, hist, hist_len, length=2, depth=2):
+    n = common_data.shape[0]
+    res = np.zeros((n,), dtype=np.float32)
+    for i in range(n):  # numba.prange(n):
+        import pdb;
+        pdb.set_trace()
+        most_sim = np.argsort(common_data[i])[::-1][:length]
+        res[i] += _compute_sp_length(i, most_sim, hist, hist_len)
+        for d in range(depth - 1):
+            most_d_sim = np.argsort(common_data[most_sim[d]])[::-1][:length]
+            res[i] += _compute_sp_length(most_sim[d], most_d_sim, hist, hist_len) / (2 + d)
+    return res
+
+
+# @numba.jit(nopython=True, parallel=True)
+def _compute_sp_length(data_i, most_sim, hist, hist_len):
+    sp_length = 0
+    for i in range(most_sim.shape[0]):  # numba.prange(most_sim.shape[0]):
+        sim = hist[data_i, most_sim[i]]
+        if hist_len[data_i] == 0 and hist_len[most_sim[i]] > 0:
+            sp_length += 1  # most_sim[i] can share every item
+        elif hist_len[data_i] == 0 or hist_len[most_sim[i]] == 0:
+            sp_length += 0
+        else:
+            sp_length += sim / hist_len[data_i] * (1 - sim / hist_len[most_sim[i]])
+    return sp_length / most_sim.shape[0]
 
 
 def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
@@ -298,7 +328,10 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
     dataobject.set('rec.topk', pos_data)
 
     pos_index, pos_len = evaluator.metric_class[metric].used_info(dataobject)
-    result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
+    if metric in ['hit', 'mrr']:
+        result = evaluator.metric_class[metric].metric_info(pos_index)
+    else:
+        result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)
 
     return result
 
@@ -858,7 +891,87 @@ def unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None,
         return dict(zip([uid_field, iid_field], new_inter)), unique, counts
 
 
+def rolling_window(input_array, size_kernel, stride, op="mean"):
+    """Function to get rolling windows.
+    https://stackoverflow.com/a/59781066
+
+    Arguments:
+        input_array {numpy.array} -- Input, by default it only works with depth equals to 1.
+                                      It will be treated as a (height, width) image. If the input have (height, width, channel)
+                                      dimensions, it will be rescaled to two-dimension (height, width)
+        size_kernel {int} -- size of kernel to be applied. Usually 3,5,7. It means that a kernel of (size_kernel, size_kernel) will be applied
+                             to the image.
+        stride {int or tuple} -- horizontal and vertical displacement
+
+    Returns:
+        [list] -- A list with the resulting numpy.arrays
+    """
+    # Check right input dimension
+    assert len(input_array.shape) in {1, 2}, \
+        "input_array must have dimension 2 or 3. Yours have dimension {}".format(len(input_array))
+
+    if input_array.shape == 3:
+        input_array = input_array[:, :, 0]
+
+    # Stride: horizontal and vertical displacement
+    if isinstance(stride, int):
+        sh, sw = stride, stride
+    elif isinstance(stride, tuple):
+        sh, sw = stride
+    else:
+        raise NotImplementedError("stride format not supported")
+
+    # Input dimension (height, width)
+    n_ah, n_aw = input_array.shape
+
+    # Filter dimension (or window)
+    if isinstance(size_kernel, int):
+        n_w, n_h = size_kernel, size_kernel
+    elif isinstance(size_kernel, tuple):
+        n_w, n_h = size_kernel
+    else:
+        raise NotImplementedError("size_kernel format not supported")
+
+    dim_out_h = int(np.floor((n_ah - n_h) / sh + 1))
+    dim_out_w = int(np.floor((n_aw - n_w) / sw + 1))
+
+    # List to save output arrays
+    list_tensor = []
+
+    # Initialize row position
+    start_row = 0
+    for i in range(dim_out_h):
+        list_tensor.append([])
+        start_col = 0
+        for j in range(dim_out_w):
+
+            # Get one window
+            sub_array = input_array[start_row:(start_row + n_h), start_col:(start_col + n_w)]
+
+            if op is not None:
+                sub_array = getattr(np, op)(sub_array)
+
+            # Append sub_array
+            list_tensor[i].append(sub_array)
+            start_col += sw
+        start_row += sh
+
+    return list_tensor
+
+
 def damerau_levenshtein_distance(s1, s2):
+    s1 = [s1] if np.ndim(s1) == 1 else s1
+    s2 = [s2] if np.ndim(s2) == 1 else s2
+
+    out = np.zeros((len(s1, )), dtype=int)
+    for i, (_s1, _s2) in enumerate(zip(s1, s2)):
+        out[i] = _damerau_levenshtein_distance(numba.typed.List(_s1), numba.typed.List(_s2))
+
+    return out.item() if out.shape == (1,) else out
+
+
+@numba.jit(nopython=True)
+def _damerau_levenshtein_distance(s1, s2):
     """
     Copyright (c) 2015, James Turk
     https://github.com/jamesturk/jellyfish/blob/main/jellyfish/_jellyfish.py
@@ -872,7 +985,7 @@ def damerau_levenshtein_distance(s1, s2):
     infinite = len1 + len2
 
     # character array
-    da = defaultdict(int)
+    da = {}
 
     # distance matrix
     score = [[0] * (len2 + 2) for _ in range(len1 + 2)]
@@ -888,7 +1001,7 @@ def damerau_levenshtein_distance(s1, s2):
     for i in range(1, len1 + 1):
         db = 0
         for j in range(1, len2 + 1):
-            i1 = da[s2[j - 1]]
+            i1 = da[s2[j - 1]] if s2[j - 1] in da else 0
             j1 = db
             cost = 1
             if s1[i - 1] == s2[j - 1]:
@@ -953,3 +1066,30 @@ class NDCGApproxLoss(torch.nn.modules.loss._Loss):
         ranks = approx_ranks(_input_temp)
 
         return -ndcg(target, ranks)
+
+
+def copytree(src, dst, symlinks=False, ignore=None):
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+        shutil.copystat(src, dst)
+    lst = os.listdir(src)
+    if ignore:
+        excl = ignore(src, lst)
+        lst = [x for x in lst if x not in excl]
+    for item in lst:
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if symlinks and os.path.islink(s):
+            if os.path.lexists(d):
+                os.remove(d)
+            os.symlink(os.readlink(s), d)
+            try:
+                st = os.lstat(s)
+                mode = stat.S_IMODE(st.st_mode)
+                os.lchmod(d, mode)
+            except:
+                pass  # lchmod not available
+        elif os.path.isdir(s):
+            copytree(s, d, symlinks, ignore)
+        else:
+            shutil.copy2(s, d)
