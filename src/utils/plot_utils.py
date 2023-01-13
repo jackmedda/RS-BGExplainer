@@ -87,7 +87,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
     return pref_data_all, result_all
 
 
-def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, sens_attr, rec=False):
+def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, sens_attr, rec=False, overwrite=False):
     sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     user_df = pd.DataFrame({
@@ -120,7 +120,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
             continue
         if len(_exp_paths) == 1:
             saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
-            if os.path.exists(saved_path):
+            if os.path.exists(saved_path) and not overwrite:
                 with open(saved_path, 'rb') as saved_file:
                     saved_data = pickle.load(saved_file)
                 for s_data, curr_data in zip(saved_data, [exp_dfs, result_data, n_users_data, topk_dist]):
@@ -171,7 +171,7 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
 
         if len(_exp_paths) == 1:
             saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
-            if not os.path.exists(saved_path):
+            if not os.path.exists(saved_path) or overwrite:
                 with open(saved_path, 'wb') as saved_file:
                     pickle.dump((exp_dfs, result_data, n_users_data, topk_dist), saved_file)
 

@@ -327,6 +327,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
 parser.add_argument('--explainer_config_files', required=True, nargs='+', type=str)
 parser.add_argument('--iterations', default=100)
+parser.add_argument('--overwrite_plot_data', '--opd', action="store_true")
+parser.add_argument('--overwrite_extracted_data', '--oed', action="store_true")
+parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
 
 args = parser.parse_args()
 
@@ -379,7 +382,7 @@ for exp_config_file in args.explainer_config_files:
     datasets_list.append(dset)
     models_list.append(model)
     sens_attrs.append(s_attr)
-    exp_epochs.append(eps)
+    exp_epochs.append(eps.replace('epochs_', ''))
     config_ids.append(cid)
 
 unique_datasets, unique_models, unique_sens_attrs = \
@@ -393,7 +396,8 @@ plots_path = os.path.join(
 if not os.path.exists(plots_path):
     os.makedirs(plots_path)
 
-if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and os.path.exists(os.path.join(plots_path, 'incdisp.pkl')):
+if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and \
+        os.path.exists(os.path.join(plots_path, 'incdisp.pkl')) and not args.overwrite_plot_data:
     test_rows, rec_rows = 2, 3
 
     test_df = pd.read_csv(os.path.join(plots_path, 'test_df.csv'), skiprows=test_rows)
@@ -505,7 +509,8 @@ else:
             test_data.dataset,
             evaluator,
             sens_attr,
-            rec=False
+            rec=False,
+            overwrite=args.overwrite_extracted_data
         )
 
         all_exp_rec_dfs, rec_result_all_data, _, _ = plot_utils.extract_all_exp_metrics_data(
@@ -514,7 +519,8 @@ else:
             rec_data.dataset,
             evaluator,
             sens_attr,
-            rec=True
+            rec=True,
+            overwrite=args.overwrite_extracted_data
         )
 
         for metric in metrics:
@@ -581,12 +587,11 @@ else:
     graph_metrics_dfs = {}
 
 for _dataset in unique_datasets:
-    if _dataset not in graph_metrics_dfs:
+    if _dataset not in graph_metrics_dfs and not args.overwrite_graph_metrics:
         graph_metrics_dfs[_dataset] = plot_utils.extract_graph_metrics_per_node(
             train_datasets[_dataset],
             remove_first_row_col=True,
-            # metrics="all"
-            metric=['Reachability', 'Degree', 'Sparsity']
+            metrics="all"
         )
 
         last_user_id = train_datasets[_dataset].user_num - 2
@@ -826,11 +831,18 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     )
     table_gm_pivot = table_gm_df.pivot(
         index=['Dataset', 'Model', 'Sens Attr'],
-        columns=['Graph Metric', 'Node Type', 'Statistic'],
+        columns=['Graph Metric', 'Statistic', 'Node Type'],
         values='Value'
     )
-    table_gm_pivot.to_csv(os.path.join(plots_path, 'graph_metric_statistics.csv'))
-    table_gm_pivot.round(2).to_latex(os.path.join(plots_path, 'graph_metric_statistics.tex'))
+    table_gm_final = table_gm_pivot.reindex(
+        ['Degree', 'Reachability', 'Sparsity'], axis=1, level=0
+    ).reindex(
+        ["Skewnees", "Kurtosis"], axis=1, level=1
+    ).reindex(
+        ['User', 'Item'], axis=1, level=2
+    )
+    table_gm_final.to_csv(os.path.join(plots_path, 'graph_metric_statistics.csv'))
+    table_gm_final.round(2).to_latex(os.path.join(plots_path, 'graph_metric_statistics.tex'))
 
     _metrics = list(_metr_df_gby.groups.keys())
     for metric in _metrics:
