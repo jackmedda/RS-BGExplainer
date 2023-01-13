@@ -87,7 +87,14 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
     return pref_data_all, result_all
 
 
-def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, sens_attr, rec=False, overwrite=False):
+def extract_all_exp_metrics_data(_exp_paths,
+                                 train_data,
+                                 rec_data,
+                                 evaluator,
+                                 sens_attr,
+                                 rec=False,
+                                 overwrite=False,
+                                 other_cols=None):
     sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     user_df = pd.DataFrame({
@@ -95,10 +102,11 @@ def extract_all_exp_metrics_data(_exp_paths, train_data, rec_data, evaluator, se
         sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
     })
 
+    other_cols = [] if other_cols is None else other_cols
     if not rec:
-        cols = [2, 4, 6, 8, 9, 10, 11]
+        cols = [2, 4, 6, 8, 9, 10, 11] + other_cols
     else:
-        cols = [1, 3, 5, 8, 9, 10, 11]
+        cols = [1, 3, 5, 8, 9, 10, 11] + other_cols
 
     col_names = [
         'user_id',

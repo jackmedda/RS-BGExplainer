@@ -510,7 +510,8 @@ else:
             evaluator,
             sens_attr,
             rec=False,
-            overwrite=args.overwrite_extracted_data
+            overwrite=args.overwrite_extracted_data,
+            other_cols=["set"]
         )
 
         all_exp_rec_dfs, rec_result_all_data, _, _ = plot_utils.extract_all_exp_metrics_data(
@@ -520,7 +521,8 @@ else:
             evaluator,
             sens_attr,
             rec=True,
-            overwrite=args.overwrite_extracted_data
+            overwrite=args.overwrite_extracted_data,
+            other_cols=["set"]
         )
 
         for metric in metrics:
@@ -830,7 +832,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         columns=["Model", "Dataset", "Sens Attr", "Policy", "Graph Metric", "Node Type", "Statistic", "Value"]
     )
     table_gm_pivot = table_gm_df.pivot(
-        index=['Dataset', 'Model', 'Sens Attr'],
+        index=['Sens Attr', 'Dataset', 'Model', 'Policy'],
         columns=['Graph Metric', 'Statistic', 'Node Type'],
         values='Value'
     )
