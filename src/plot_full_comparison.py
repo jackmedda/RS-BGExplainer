@@ -937,7 +937,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plt.close("all")
 
         hatches = ['//', 'o']
-        fig_bar2, axs_bar2 = plt.subplots(len(unique_sens_attrs), len(unique_datasets), figsize=(10, 6))
+        fig_bar2, axs_bar2 = plt.subplots(len(unique_sens_attrs), len(unique_datasets), squeeze=False, figsize=(10, 6))
         axs_bar2 = [axs_bar2] if not isinstance(axs_bar2, np.ndarray) else axs_bar2
         table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = "NoPolicy"
         table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
@@ -972,7 +972,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
                     plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
-                    _ax = axs_bar2[s_attr_i, i] if len(unique_sens_attrs) > 1 else axs_bar2[i]
+                    _ax = axs_bar2[s_attr_i, i]
                     dg_df_gby = plot_tdf_bar_sattr_df.groupby("Demo Group")
                     s_attr_dgs = [x for x in sorted(dg_df_gby.groups) if 'Delta' not in x]
                     for dg, hatch in zip(s_attr_dgs, hatches):

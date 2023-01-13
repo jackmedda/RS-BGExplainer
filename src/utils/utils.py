@@ -21,6 +21,7 @@ from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
 from recbole.data.interaction import Interaction
 
+
 EXPS_COLUMNS = [
     "user_id",
     "rec_topk",
@@ -284,26 +285,24 @@ def compute_reachability(reach):
     return sum([reach[i] / (i + 1) for i in range(len(reach))])
 
 
-# @numba.jit(nopython=True, parallel=True)
-def compute_sharing_potentiality(common_data, hist, hist_len, length=2, depth=2):
+@numba.jit(nopython=True, parallel=True)
+def compute_sharing_potentiality(common_data, hist_len, length=2, depth=2):
     n = common_data.shape[0]
     res = np.zeros((n,), dtype=np.float32)
-    for i in range(n):  # numba.prange(n):
-        import pdb;
-        pdb.set_trace()
+    for i in numba.prange(n):
         most_sim = np.argsort(common_data[i])[::-1][:length]
-        res[i] += _compute_sp_length(i, most_sim, hist, hist_len)
+        res[i] += _compute_sp_length(i, most_sim, common_data, hist_len)
         for d in range(depth - 1):
             most_d_sim = np.argsort(common_data[most_sim[d]])[::-1][:length]
-            res[i] += _compute_sp_length(most_sim[d], most_d_sim, hist, hist_len) / (2 + d)
+            res[i] += _compute_sp_length(most_sim[d], most_d_sim, common_data, hist_len) / (2 + d)
     return res
 
 
-# @numba.jit(nopython=True, parallel=True)
-def _compute_sp_length(data_i, most_sim, hist, hist_len):
+@numba.jit(nopython=True)
+def _compute_sp_length(data_i, most_sim, common_data, hist_len):
     sp_length = 0
-    for i in range(most_sim.shape[0]):  # numba.prange(most_sim.shape[0]):
-        sim = hist[data_i, most_sim[i]]
+    for i in numba.prange(most_sim.shape[0]):
+        sim = common_data[data_i, most_sim[i]]
         if hist_len[data_i] == 0 and hist_len[most_sim[i]] > 0:
             sp_length += 1  # most_sim[i] can share every item
         elif hist_len[data_i] == 0 or hist_len[most_sim[i]] == 0:
@@ -935,28 +934,42 @@ def rolling_window(input_array, size_kernel, stride, op="mean"):
     dim_out_h = int(np.floor((n_ah - n_h) / sh + 1))
     dim_out_w = int(np.floor((n_aw - n_w) / sw + 1))
 
+    return _inner_rolling_window(input_array, dim_out_h, dim_out_w, n_h, n_w, sh, sw, op)
+
+
+@numba.jit(nopython=True, parallel=True)
+def _inner_rolling_window(input_array, dim_out_h, dim_out_w, n_h, n_w, sh, sw, op):
     # List to save output arrays
-    list_tensor = []
+    rolled_array = np.zeros((dim_out_h, dim_out_w), dtype=np.float32)
+
+    other_args = [dim_out_w, n_h, n_w, sh, sw]
 
     # Initialize row position
-    start_row = 0
-    for i in range(dim_out_h):
-        list_tensor.append([])
-        start_col = 0
-        for j in range(dim_out_w):
+    for i in numba.prange(dim_out_h):
+        start_row = sh * i
+        _inner_inner_rolling_window(input_array, rolled_array, i, start_row, op, other_args)
 
-            # Get one window
-            sub_array = input_array[start_row:(start_row + n_h), start_col:(start_col + n_w)]
+    return rolled_array
 
-            if op is not None:
-                sub_array = getattr(np, op)(sub_array)
 
-            # Append sub_array
-            list_tensor[i].append(sub_array)
-            start_col += sw
-        start_row += sh
+@numba.jit(nopython=True, parallel=True)
+def _inner_inner_rolling_window(input_array, rolled_array, i, start_row, op, other_args):
+    dim_out_w, n_h, n_w, sh, sw = other_args
+    for j in numba.prange(dim_out_w):
+        start_col = sw * j
 
-    return list_tensor
+        # Get one window
+        sub_array = input_array[start_row:(start_row + n_h), start_col:(start_col + n_w)]
+
+        if op == "mean":
+            agg_window = np.mean(sub_array)
+        elif op == "sum":
+            agg_window = np.sum(sub_array)
+        else:
+            raise TypeError("op should be one in ['sum', 'mean']")
+
+        # Append sub_array
+        rolled_array[i, j] = agg_window
 
 
 def damerau_levenshtein_distance(s1, s2):

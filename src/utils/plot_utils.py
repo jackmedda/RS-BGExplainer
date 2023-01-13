@@ -406,25 +406,24 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
 
             n_users = user_hist[1:].shape[0]
             user_user = utils.get_node_node_graph_data(user_hist[1:].numpy())
-            user_user = sp.coo_matrix(
+            user_user = np.asarray(sp.coo_matrix(
                 (user_user[:, -1], (user_user[:, 0], user_user[:, 1])), shape=(n_users, n_users)
-            ).todense()
+            ).todense())
             user_sp = utils.compute_sharing_potentiality(
-                user_user, user_hist[1:].numpy(), user_hist_len[1:].numpy(), **sp_kwargs
+                user_user, user_hist_len[1:].numpy(), **sp_kwargs
             )
 
             n_items = item_hist[1:].shape[0]
             item_item = utils.get_node_node_graph_data(item_hist[1:].numpy())
-            item_item = sp.coo_matrix(
+            item_item = np.asarray(sp.coo_matrix(
                 (item_item[:, -1], (item_item[:, 0], item_item[:, 1])), shape=(n_items, n_items)
-            ).todense()
+            ).todense())
             item_sp = utils.compute_sharing_potentiality(
-                item_item, item_hist[1:].numpy(), item_hist_len[1:].numpy(), **sp_kwargs
+                item_item, item_hist_len[1:].numpy(), **sp_kwargs
             )
 
             sp_data = np.concatenate([user_sp, item_sp])
             df = pd.DataFrame(zip(range(len(sp_data)), sp_data), columns=[node_col, metr])
-            import pdb; pdb.set_trace()
 
         if G_df is None:
             G_df = df
