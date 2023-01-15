@@ -144,7 +144,7 @@ def extract_all_exp_metrics_data(_exp_paths,
                     if col in [1, 2, 3, 4, 5, 6]:
                         exp_row_data.append(_exp[col])
                     elif col == "set":
-                        comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(_exp[1], _exp[2])])
+                        comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(_exp[cols[0]], _exp[cols[1]])])
                         exp_row_data.append(len(_exp[1][0]) - comm_items)
                     else:
                         exp_row_data.append([_exp[col]] * len(exp_row_data[0]))
