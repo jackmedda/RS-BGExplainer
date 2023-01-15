@@ -352,7 +352,9 @@ dataset_map = {
     "lastfm-1k": "Last.FM 1K",
     "coco_8_America": "COCO 8 (America)",
     "insurance": "Insurance",
-    "yelp40": "Yelp 40"
+    "yelp40": "Yelp 40",
+    "rent_the_runway": "Rent The Runway",
+    "tafeng": "Ta Feng"
 }
 
 
@@ -837,7 +839,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         values='Value'
     )
     table_gm_final = table_gm_pivot.reindex(
-        ['Degree', 'Reachability', 'Sparsity'], axis=1, level=0
+        ['Degree', 'Reachability', 'Sparsity', 'Sharing Potentiality'], axis=1, level=0
     ).reindex(
         ["Skewnees", "Kurtosis"], axis=1, level=1
     ).reindex(

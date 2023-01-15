@@ -117,7 +117,7 @@ def extract_all_exp_metrics_data(_exp_paths,
         'fair_loss',
         'del_edges',
         'epoch'
-    ]
+    ] + other_cols
 
     exp_dfs = {}
     result_data = {}
@@ -356,6 +356,9 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
     metrics = ["Degree", "Sparsity", "Reachability", "Sharing Potentiality"] if metrics == "all" else metrics
     sp_kwargs = sp_kwargs or dict(length=2, depth=2)
 
+    item_hist, _, item_hist_len = dataset.history_user_matrix()
+    user_hist, _, user_hist_len = dataset.history_item_matrix()
+
     G_df = None
     node_col = 'Node'
 
@@ -372,16 +375,14 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
 
             df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[node_col, metr])
         elif metr == "Sparsity":
-            item_hist, _, item_pop = dataset.history_user_matrix()
-            user_hist, _, user_hist_len = dataset.history_item_matrix()
             if remove_first_row_col:
                 item_hist = item_hist[1:].where(item_hist[1:] == 0, item_hist[1:] - 1)
-                item_pop = item_pop
+                item_pop = item_hist_len
                 user_hist = user_hist[1:].where(user_hist[1:] == 0, user_hist[1:] - 1)
                 user_hist_len = user_hist_len
 
             user_density = np.nan_to_num(
-                ((item_pop[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
+                ((item_hist_len[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
                 nan=0
             )
             user_sparsity = 1 - user_density
@@ -401,9 +402,6 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
                 columns=[node_col, metr]
             )
         elif metr == "Sharing Potentiality":
-            item_hist, _, item_hist_len = dataset.history_user_matrix()
-            user_hist, _, user_hist_len = dataset.history_item_matrix()
-
             n_users = user_hist[1:].shape[0]
             user_user = utils.get_node_node_graph_data(user_hist[1:].numpy())
             user_user = np.asarray(sp.coo_matrix(
