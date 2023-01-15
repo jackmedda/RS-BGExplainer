@@ -242,7 +242,9 @@ def create_table_best_explanations(_metric_df):
     for level_attr, demo_groups in zip(level_attrs, attrs_demo_groups):
         if level_attr in table_df:
             table_dp_df = (table_df[(level_attr, demo_groups[0])] - table_df[(level_attr, demo_groups[1])]).abs()
-            table_dp_df.columns = pd.MultiIndex.from_product([[level_attr], ["$\Delta$"], ["Before", "After"]])
+            table_dp_df.columns = pd.MultiIndex.from_product([
+                [level_attr], [f"$\Delta$ {metric.upper()}"], ["Before", "After"]
+            ])
             table_df = pd.concat([table_df, table_dp_df], axis=1)
     table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1]), x[2]))
     table_out_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
@@ -253,25 +255,27 @@ def create_table_best_explanations(_metric_df):
     return table_out_bar_df
 
 
-def create_table_topk_list_change(data_df: pd.DataFrame):
+def create_table_topk_list_change(data_df: pd.DataFrame, col_dist='Edit Dist'):
     data_df = data_df[data_df["Policy"] != "NoPolicy"].reset_index(drop=True)
     data_df = data_df.drop(["Value", "user_id"], axis=1)
 
+    mean_col, std_col = col_dist + ' Mean', col_dist + ' Std'
+
     data_df_gby = data_df.groupby(["Dataset", "Model", "Policy", "Sens Attr", "Demo Group"])
     data_df_mean = data_df_gby.mean()
-    data_df_mean = data_df_mean.rename(columns={"Topk Dist": "Topk Dist Mean"})
+    data_df_mean = data_df_mean.rename(columns={col_dist: mean_col})
     data_df_std = data_df_gby.std()
-    data_df_std = data_df_std.rename(columns={"Topk Dist": "Topk Dist Std"})
+    data_df_std = data_df_std.rename(columns={col_dist: std_col})
 
     data_df_stats = data_df_mean.join(data_df_std)
-    data_df_stats['Topk Dist'] = data_df_stats.apply(
-        lambda x: f"{x['Topk Dist Mean']:.2f} ($\pm$ {x['Topk Dist Std']:.2f})", axis=1
+    data_df_stats[col_dist] = data_df_stats.apply(
+        lambda x: f"{x[mean_col]:.2f} ($\pm$ {x[std_col]:.2f})", axis=1
     )
-    data_df_stats = data_df_stats.drop(['Topk Dist Mean', 'Topk Dist Std'], axis=1).reset_index()
+    data_df_stats = data_df_stats.drop([mean_col, std_col], axis=1).reset_index()
     data_df_pivot = data_df_stats.pivot(
         index=["Dataset", "Model", "Policy"],
         columns=["Sens Attr", "Demo Group"],
-        values="Topk Dist"
+        values=col_dist
     )
     table_df = data_df_pivot.reindex(
         ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
@@ -283,7 +287,10 @@ def create_table_topk_list_change(data_df: pd.DataFrame):
     table_out_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
     table_out_bar_df.to_csv(os.path.join(plots_path, f"table_{exp_data_name}_topk_dist_best_epoch.csv"))
     table_df.columns.names = [''] * len(table_df.columns.names)
-    table_df.to_latex(os.path.join(plots_path, f"table_{exp_data_name}_topk_dist_best_epoch.tex"), escape=False)
+    table_df.to_latex(
+        os.path.join(plots_path, f"table_{exp_data_name}_{col_dist.replace(' ', '_')}_best_epoch.tex"),
+        escape=False
+    )
 
 
 def create_fig_bar2_legend(fig, _palette, _hatches, demo_groups, loc="upper left"):
@@ -441,6 +448,7 @@ else:
         dataset_name = dataset.dataset_name
         model_name = model.__class__.__name__
         sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
+        cf_topk = config['cf_topk']
         policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'][p]])
         incdisp[(dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
         all_batch_exps[dataset_name] = batch_exp
@@ -484,7 +492,7 @@ else:
             evaluator,
             test_data.dataset,
             config=config,
-            additional_cols=additional_best_cols[:1]
+            additional_cols=additional_best_cols[:1] + ['set_dist']
         )
         best_rec_exp_df, best_rec_exp_result = plot_utils.extract_best_metrics(
             exp_paths,
@@ -492,8 +500,15 @@ else:
             evaluator,
             rec_data.dataset,
             config=config,
-            additional_cols=additional_best_cols[1:]
+            additional_cols=additional_best_cols[1:] + ['set_dist']
         )
+
+        for exp_df in [best_test_exp_df, best_rec_exp_df]:
+            set_dist = np.array([
+                cf_topk - len(set(orig) & set(pred))
+                for orig, pred in zip(exp_df[model_dp_s]['topk_pred'], exp_df[model_dp_s]['topk_pred'])
+            ])
+            exp_df['set_dist'] = set_dist
 
         # the deleted edges are repeated for each row, so take the first is the same
         test_del_edges = best_test_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
@@ -512,8 +527,7 @@ else:
             evaluator,
             sens_attr,
             rec=False,
-            overwrite=args.overwrite_extracted_data,
-            other_cols=["set"]
+            overwrite=args.overwrite_extracted_data
         )
 
         all_exp_rec_dfs, rec_result_all_data, _, _ = plot_utils.extract_all_exp_metrics_data(
@@ -523,8 +537,7 @@ else:
             evaluator,
             sens_attr,
             rec=True,
-            overwrite=args.overwrite_extracted_data,
-            other_cols=["set"]
+            overwrite=args.overwrite_extracted_data
         )
 
         for metric in metrics:
@@ -533,7 +546,8 @@ else:
 
         no_policies.add((dataset_name, model_name, sens_attr))
 
-    cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy', 'Topk Dist']
+    cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy',
+            'Edit Dist', 'Set Dist']
     duplicated_cols_subset = [c for c in cols if c not in ['Value']]
     test_df = pd.DataFrame(test_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
     rec_df = pd.DataFrame(rec_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
@@ -856,7 +870,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         table_bar_df = create_table_best_explanations(metric_df)
 
         if _metrics.index(metric) == 0:
-            create_table_topk_list_change(metric_df)
+            create_table_topk_list_change(metric_df, 'Edit Dist')
+            create_table_topk_list_change(metric_df, 'Set Dist')
 
         plot_df_data = []
         plot_del_df_data = []
