@@ -492,7 +492,7 @@ else:
             evaluator,
             test_data.dataset,
             config=config,
-            additional_cols=additional_best_cols[:1] + ['set_dist']
+            additional_cols=additional_best_cols[:1]
         )
         best_rec_exp_df, best_rec_exp_result = plot_utils.extract_best_metrics(
             exp_paths,
@@ -500,7 +500,7 @@ else:
             evaluator,
             rec_data.dataset,
             config=config,
-            additional_cols=additional_best_cols[1:] + ['set_dist']
+            additional_cols=additional_best_cols[1:]
         )
 
         for exp_df in [best_test_exp_df, best_rec_exp_df]:
