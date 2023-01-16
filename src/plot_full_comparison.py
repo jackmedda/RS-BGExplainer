@@ -254,7 +254,11 @@ def create_table_best_explanations(_metric_df):
     table_out_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
     table_out_bar_df.to_csv(os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.csv"))
     table_df.columns.names = [''] * len(table_df.columns.names)
-    table_df.round(3).to_latex(os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.tex"), escape=False)
+    table_df.round(3).to_latex(
+        os.path.join(plots_path, f"table_{exp_data_name}_{metric}_best_epoch.tex"),
+        multicolumn_format="c",
+        escape=False
+    )
 
     return table_out_bar_df
 
@@ -295,6 +299,7 @@ def create_table_topk_list_change(data_df: pd.DataFrame, col_dist='Edit Dist'):
     table_df.columns.names = [''] * len(table_df.columns.names)
     table_df.to_latex(
         os.path.join(plots_path, f"table_{exp_data_name}_{col_dist.replace(' ', '_')}_best_epoch.tex"),
+        multicolumn_format="c",
         escape=False
     )
 
@@ -889,7 +894,11 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         ['User', 'Item'], axis=1, level=2
     )
     table_gm_final.to_csv(os.path.join(plots_path, 'graph_metric_statistics.csv'))
-    table_gm_final.round(2).to_latex(os.path.join(plots_path, 'graph_metric_statistics.tex'))
+    table_gm_final.round(2).to_latex(
+        os.path.join(plots_path, 'graph_metric_statistics.tex'),
+        multicolumn_format="c",
+        escape=False
+    )
 
     _metrics = list(_metr_df_gby.groups.keys())
     for metric in _metrics:
