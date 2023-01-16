@@ -541,7 +541,11 @@ else:
         )
 
         for metric in metrics:
-            group_edge_del = update_plot_data(test_df_data, rec_df_data, additional_best_cols=additional_best_cols)
+            group_edge_del = update_plot_data(
+                test_df_data,
+                rec_df_data,
+                additional_best_cols=additional_best_cols + ["set_dist"]
+            )
             update_plot_del_data(test_del_df_data, rec_del_df_data)
 
         no_policies.add((dataset_name, model_name, sens_attr))
