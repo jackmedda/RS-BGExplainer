@@ -925,9 +925,9 @@ def rolling_window(input_array, size_kernel, stride, op="mean"):
 
     # Filter dimension (or window)
     if isinstance(size_kernel, int):
-        n_w, n_h = size_kernel, size_kernel
+        n_h, n_w = size_kernel, size_kernel
     elif isinstance(size_kernel, tuple):
-        n_w, n_h = size_kernel
+        n_h, n_w = size_kernel
     else:
         raise NotImplementedError("size_kernel format not supported")
 
