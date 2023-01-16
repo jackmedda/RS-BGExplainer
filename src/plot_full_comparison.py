@@ -256,12 +256,14 @@ def create_table_best_explanations(_metric_df):
 
 
 def create_table_topk_list_change(data_df: pd.DataFrame, col_dist='Edit Dist'):
+    info_cols = ["Dataset", "Model", "Policy", "Sens Attr", "Demo Group"]
+
     data_df = data_df[data_df["Policy"] != "NoPolicy"].reset_index(drop=True)
-    data_df = data_df.drop(["Value", "user_id"], axis=1)
+    data_df = data_df.drop(data_df.columns[~data_df.columns.isin(info_cols + [col_dist])], axis=1)
 
     mean_col, std_col = col_dist + ' Mean', col_dist + ' Std'
 
-    data_df_gby = data_df.groupby(["Dataset", "Model", "Policy", "Sens Attr", "Demo Group"])
+    data_df_gby = data_df.groupby(info_cols)
     data_df_mean = data_df_gby.mean()
     data_df_mean = data_df_mean.rename(columns={col_dist: mean_col})
     data_df_std = data_df_gby.std()
