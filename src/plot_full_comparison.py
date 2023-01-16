@@ -703,7 +703,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     unique_models.index(_model) * len(unique_policies[1:]) + unique_policies[1:].index(_policy)
                 ]
 
-                kernel = tuple(map(lambda x: round(x / 40), train_adj.shape))
+                kernel = tuple(map(lambda x: max(min(x, 40), round(x / 40)), train_adj.shape))
                 del_heatmap = utils.rolling_window(train_adj - pert_train_adj, kernel, kernel, op="sum")
 
                 sns.heatmap(del_heatmap, ax=heat_ax, cbar=False, xticklabels=False, yticklabels=False)
