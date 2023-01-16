@@ -508,7 +508,7 @@ else:
                 cf_topk - len(set(orig) & set(pred))
                 for orig, pred in zip(exp_df[model_dp_s]['topk_pred'], exp_df[model_dp_s]['topk_pred'])
             ])
-            exp_df['set_dist'] = set_dist
+            exp_df[model_dp_s]['set_dist'] = set_dist
 
         # the deleted edges are repeated for each row, so take the first is the same
         test_del_edges = best_test_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
