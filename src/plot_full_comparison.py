@@ -577,20 +577,23 @@ else:
     cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy',
             'Edit Dist', 'Set Dist']
     duplicated_cols_subset = [c for c in cols if c not in ['Value']]
-    test_df = pd.DataFrame(test_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
     rec_df = pd.DataFrame(rec_df_data, columns=cols).drop_duplicates(subset=duplicated_cols_subset, ignore_index=True)
 
     del_cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss',
                 'Metric', 'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
     duplicated_del_cols_subset = [c for c in del_cols if c not in ['Value', 'Fair Loss', 'Epoch']]
-    test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols).drop_duplicates(
-        subset=duplicated_del_cols_subset, ignore_index=True
-    )
     rec_del_df = pd.DataFrame(rec_del_df_data, columns=del_cols).drop_duplicates(
         subset=duplicated_del_cols_subset, ignore_index=True
     )
 
     if exp_rec_data != "test":
+        test_df = pd.DataFrame(test_df_data, columns=cols).drop_duplicates(
+            subset=duplicated_cols_subset, ignore_index=True
+        )
+        test_del_df = pd.DataFrame(test_del_df_data, columns=del_cols).drop_duplicates(
+            subset=duplicated_del_cols_subset, ignore_index=True
+        )
+
         with open(os.path.join(plots_path, 'test_df.csv'), 'w') as f:
             f.write(f'# model_files {" ".join(args.model_files)}\n')
             f.write(f'# explainer_config_files {" ".join(args.explainer_config_files)}\n')
@@ -600,6 +603,8 @@ else:
             f.write(f'# model_files {" ".join(args.model_files)}\n')
             f.write(f'# explainer_config_files {" ".join(args.explainer_config_files)}\n')
             test_del_df.to_csv(f, index=None)
+    else:
+        test_df, test_del_df = None, None
 
     with open(os.path.join(plots_path, 'rec_df.csv'), 'w') as f:
         f.write(f'# model_files {" ".join(args.model_files)}\n')
@@ -675,7 +680,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     for gm in gm_metrics:
         fig_gm[gm] = {}
         for gm_s_attr in unique_sens_attrs:
-            fig_gm[gm][gm_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
+            fig_gm[gm][gm_s_attr] = plt.figure(figsize=(40, 15), constrained_layout=True)
             fig_gm[gm][gm_s_attr].subfigures(len(unique_datasets), 1)
             for dset, subfig in zip(unique_datasets, fig_gm[gm][gm_s_attr].subfigs):
                 subfig.suptitle(dataset_map[dset])
@@ -889,7 +894,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     table_gm_final = table_gm_pivot.reindex(
         ['Degree', 'Reachability', 'Sparsity', 'Sharing Potentiality'], axis=1, level=0
     ).reindex(
-        ["Skewnees", "Kurtosis"], axis=1, level=1
+        ["Skewness", "Kurtosis"], axis=1, level=1
     ).reindex(
         ['User', 'Item'], axis=1, level=2
     )
@@ -1051,7 +1056,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             fig_line.suptitle(sens_attr.title().replace('_', ' '))
             fig_line.savefig(os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
-            fig_bar.suptitle(sens_attr.title().replace('_', ' '))
+            fig_bar.suptitle()
             fig_bar.tight_layout()
             fig_bar.savefig(os.path.join(plots_path, f"{sens_attr}_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
