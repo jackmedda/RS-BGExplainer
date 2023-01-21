@@ -72,7 +72,7 @@ def update_plot_data(_test_df_data, _rec_df_data, additional_best_cols=None):
             zip_data = []
             zip_data.extend(test_zip_data)
             zip_data.append(test_orig_total_metric[:, -1])
-            zip_data.append(["NoPolicy"] * len(test_uid))
+            zip_data.append([no_pert_col] * len(test_uid))
             for add_col in additional_best_cols:
                 if add_col in best_test_exp_df[model_dp_s]:
                     zip_data.append(best_test_exp_df[model_dp_s][add_col].to_numpy())
@@ -100,7 +100,7 @@ def update_plot_data(_test_df_data, _rec_df_data, additional_best_cols=None):
         zip_data = []
         zip_data.extend(rec_zip_data)
         zip_data.append(rec_orig_total_metric[:, -1])
-        zip_data.append(["NoPolicy"] * len(rec_uid))
+        zip_data.append([no_pert_col] * len(rec_uid))
         for add_col in additional_best_cols:
             if add_col in best_rec_exp_df[model_dp_s]:
                 zip_data.append(best_rec_exp_df[model_dp_s][add_col].to_numpy())
@@ -175,7 +175,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
                     [model_name] * len(exp_test_df),
                     [dataset_name] * len(exp_test_df),
                     np.tile(test_orig_total_metric, unique_test_del_edges),
-                    ["NoPolicy"] * len(exp_test_df)
+                    [no_pert_col] * len(exp_test_df)
                 ].tolist()
             )
         _test_df_del_data.extend(
@@ -197,7 +197,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
                 [model_name] * len(exp_rec_df),
                 [dataset_name] * len(exp_rec_df),
                 np.tile(rec_orig_total_metric, unique_rec_del_edges),
-                ["NoPolicy"] * len(exp_rec_df)
+                [no_pert_col] * len(exp_rec_df)
             ].tolist()
         )
     _rec_df_del_data.extend(
@@ -213,7 +213,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
 
 
 def create_table_best_explanations(_metric_df):
-    nop_mask = _metric_df["Policy"] == "NoPolicy"
+    nop_mask = _metric_df["Policy"] == no_pert_col
     metr_df_nop = _metric_df[nop_mask].copy()
     metr_df_p = _metric_df[~nop_mask].copy()
 
@@ -221,7 +221,7 @@ def create_table_best_explanations(_metric_df):
     metr_df_p["Status"] = "After"
 
     metr_df = pd.concat(
-        [metr_df_p] + [metr_df_nop.copy().replace('NoPolicy', p) for p in metr_df_p.Policy.unique()],
+        [metr_df_p] + [metr_df_nop.copy().replace(no_pert_col, p) for p in metr_df_p.Policy.unique()],
         ignore_index=True
     )
 
@@ -266,7 +266,7 @@ def create_table_best_explanations(_metric_df):
 def create_table_topk_list_change(data_df: pd.DataFrame, col_dist='Edit Dist'):
     info_cols = ["Dataset", "Model", "Policy", "Sens Attr", "Demo Group"]
 
-    data_df = data_df[data_df["Policy"] != "NoPolicy"].reset_index(drop=True)
+    data_df = data_df[data_df["Policy"] != no_pert_col].reset_index(drop=True)
     data_df = data_df.drop(data_df.columns[~data_df.columns.isin(info_cols + [col_dist])], axis=1)
 
     mean_col, std_col = col_dist + ' Mean', col_dist + ' Std'
@@ -395,6 +395,8 @@ colors = {
     "Gender": {"M": "#0173b2", "F": "#de8f05"},
     "Age": {"Y": "#0173b2", "O": "#de8f05"}
 }
+
+no_pert_col = "NoPerturbation"
 
 exp_epochs, config_ids, datasets_list, models_list, sens_attrs = [], [], [], [], []
 for exp_config_file in args.explainer_config_files:
@@ -535,7 +537,7 @@ else:
         rec_del_edges = best_rec_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
         for exp_data_name, exp_del_edges in zip(["test", exp_rec_data], [test_del_edges, rec_del_edges]):
             if exp_del_edges is not None:
-                for policy_type in ["NoPolicy", policy]:
+                for policy_type in [no_pert_col, policy]:
                     del_edges[(exp_data_name, dataset_name, model_name, policy_type, sens_attr.title().replace('_', ' '))] = exp_del_edges
 
         test_uid = best_test_exp_df[model_dp_s]['user_id'].to_numpy() if best_test_exp_df is not None else None
@@ -640,6 +642,8 @@ if os.path.exists(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl')):
 else:
     graph_metrics_dfs = {}
 
+plt.rcParams.update({'font.size': 22})
+
 for _dataset in unique_datasets:
     if _dataset not in graph_metrics_dfs and not args.overwrite_graph_metrics:
         graph_metrics_dfs[_dataset] = plot_utils.extract_graph_metrics_per_node(
@@ -665,10 +669,16 @@ for _dataset in unique_datasets:
 with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f:
     pickle.dump(graph_metrics_dfs, f)
 
+rec_df["Policy"] = rec_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
+rec_del_df["Policy"] = rec_del_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
+if exp_rec_data != "test":
+    test_df["Policy"] = test_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
+    test_del_df["Policy"] = test_del_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
+
 qnt_size = 100
 ch_quantile = 95
 hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
-unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == "NoPolicy" else len(x))
+unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
 for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
     if df is None or del_df is None:
         continue
@@ -723,8 +733,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
         gm_data = {}
         len_pol = len(unique_policies[1:])
-        for _policy in unique_policies:  # NoPolicy has no deleted edges
-            if _policy != 'NoPolicy':
+        for _policy in unique_policies:
+            if _policy != no_pert_col:  # without perturbation that are no perturbed edges
                 de = np.array(del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)])
 
                 pert_train_dataset = utils.get_dataset_with_perturbed_edges(de.copy(), train_datasets[_dataset])
@@ -774,9 +784,12 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             pca_ax = fig_pca[_s_attr.lower().replace(' ', '_')].subfigs[unique_datasets.index(_dataset)].axes[
                 unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
             ]
-
+            try:
+                pca_del_edges = del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)]
+            except KeyError:
+                pca_del_edges = del_edges[(exp_data_name, _dataset, _model, "NoPolicy", _s_attr)]
             train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(
-                del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)],
+                pca_del_edges,
                 train_datasets[_dataset]
             )
 
@@ -787,7 +800,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                  for idx in sens_data]
             )
 
-            if _policy != 'NoPolicy':
+            if _policy != no_pert_col:
                 changes = np.abs(train_pca - pert_train_pca)
                 mask = changes > np.percentile(changes, ch_quantile)
                 rel_chs, = np.bitwise_or.reduce(mask, axis=1).nonzero()
@@ -999,7 +1012,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         hatches = ['//', 'o']
         fig_bar2, axs_bar2 = plt.subplots(len(unique_sens_attrs), len(unique_datasets), squeeze=False, figsize=(10, 6))
         axs_bar2 = [axs_bar2] if not isinstance(axs_bar2, np.ndarray) else axs_bar2
-        table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = "NoPolicy"
+        table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = no_pert_col
         table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
 
         plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
@@ -1021,7 +1034,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             for i, (dset, ax_bar, ax_box) in enumerate(zip(unique_datasets, axs_bar, axs_box)):
                 if (sens_attr, dset) in plot_df_bar_gby.groups:
                     dset_bar_sattr_df = plot_df_bar_gby.get_group((sens_attr, dset))
-                    import pdb; pdb.set_trace()
                     sns.barplot(x="Model", y=y_col, data=dset_bar_sattr_df, hue="Policy", ax=ax_bar, palette=palette)
                     # ax_bar.set_title(dataset_map[dset], pad=30)
                     ax_bar.set_xlabel("")
