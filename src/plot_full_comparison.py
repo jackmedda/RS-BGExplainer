@@ -642,7 +642,17 @@ if os.path.exists(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl')):
 else:
     graph_metrics_dfs = {}
 
-plt.rcParams.update({'font.size': 22})
+SMALL_SIZE = 12
+MEDIUM_SIZE = 14
+BIGGER_SIZE = 16
+
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=BIGGER_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=BIGGER_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=BIGGER_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=BIGGER_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)
 
 for _dataset in unique_datasets:
     if _dataset not in graph_metrics_dfs and not args.overwrite_graph_metrics:
