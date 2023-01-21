@@ -247,7 +247,7 @@ def create_table_best_explanations(_metric_df):
         if level_attr in table_df:
             table_dp_df = (table_df[(level_attr, demo_groups[0])] - table_df[(level_attr, demo_groups[1])]).abs()
             table_dp_df.columns = pd.MultiIndex.from_product([
-                [level_attr], [f"$\Delta$ {metric.upper()}"], ["Before", "After"]
+                [level_attr], [f"{level_attr} $\Delta$ {metric.upper()}"], ["Before", "After"]
             ])
             table_df = pd.concat([table_df, table_dp_df], axis=1)
     table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1]), x[2]))
@@ -1010,25 +1010,34 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_df_bar_gby = plot_df_bar.groupby(["Sens Attr", "Dataset"])
         for s_attr_i, orig_sens_attr in enumerate(unique_sens_attrs):
             sens_attr = orig_sens_attr.title().replace('_', ' ')
-            fig_line = plt.figure(figsize=(15, 15), constrained_layout=True)
-            subfigs = fig_line.subfigures(len(unique_datasets), 1)
-            subfigs = [subfigs] if not isinstance(subfigs, np.ndarray) else subfigs
 
             fig_bar, axs_bar = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
             axs_bar = [axs_bar] if not isinstance(axs_bar, np.ndarray) else axs_bar
 
-            s_attr_dgs = []
+            fig_box, axs_box = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
+            axs_box = [axs_box] if not isinstance(axs_box, np.ndarray) else axs_box
 
-            for i, (dset, ax_bar) in enumerate(zip(unique_datasets, axs_bar)):
+            s_attr_dgs = []
+            for i, (dset, ax_bar, ax_box) in enumerate(zip(unique_datasets, axs_bar, axs_box)):
                 if (sens_attr, dset) in plot_df_bar_gby.groups:
                     dset_bar_sattr_df = plot_df_bar_gby.get_group((sens_attr, dset))
+                    import pdb; pdb.set_trace()
                     sns.barplot(x="Model", y=y_col, data=dset_bar_sattr_df, hue="Policy", ax=ax_bar, palette=palette)
-                    ax_bar.set_title(dataset_map[dset])
+                    # ax_bar.set_title(dataset_map[dset], pad=30)
+                    ax_bar.set_xlabel("")
+
+                    dset_bar_sattr_box_df = dset_bar_sattr_df[dset_bar_sattr_df["Policy"] != 'MonDel+DelCons']
+                    sns.boxplot(x="Model", y=y_col, data=dset_bar_sattr_box_df, hue="Policy", ax=ax_box, palette=palette, whis=np.inf)
+                    # ax_box.set_title(dataset_map[dset], pad=30)
+                    ax_box.set_xlabel("")
 
                     if i == len(axs_bar) - 1:
-                        handles, labels = ax_bar.get_legend_handles_labels()
-                        fig_bar.legend(handles, labels, loc='upper center', ncol=len(labels))
+                        bar_handles, bar_labels = ax_bar.get_legend_handles_labels()
+                        fig_bar.legend(bar_handles, bar_labels, loc='upper center', ncol=len(bar_labels))
+                        box_handles, box_labels = ax_box.get_legend_handles_labels()
+                        fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_bar.get_legend().remove()
+                    ax_box.get_legend().remove()
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
                     plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
@@ -1041,25 +1050,37 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         _ax.get_legend().remove()
                         _ax.set_title(dataset_map[dset])
 
+            create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
+
+            fig_bar.tight_layout()
+            fig_bar.savefig(os.path.join(plots_path, f"{sens_attr}_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+
+            fig_box.tight_layout()
+            fig_box.savefig(os.path.join(plots_path, f"{sens_attr}_boxplot_MonDel_{exp_data_name}_{metric}_DP_random_samples.png"))
+
+        fig_bar2.tight_layout()
+        fig_bar2.savefig(os.path.join(plots_path, f"overlapping_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+        plt.close("all")
+
+        # need to be done here due to maximum number of axes opened simultaneously
+        for s_attr_i, orig_sens_attr in enumerate(unique_sens_attrs):
+            sens_attr = orig_sens_attr.title().replace('_', ' ')
+            fig_line = plt.figure(figsize=(15, 15), constrained_layout=True)
+            subfigs = fig_line.subfigures(len(unique_datasets), 1)
+            subfigs = [subfigs] if not isinstance(subfigs, np.ndarray) else subfigs
+
+            for i, dset in enumerate(unique_datasets):
                 subfigs[i].suptitle(dset.upper())
                 axs_line = subfigs[i].subplots(1, len(unique_models))
                 axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
                 for m, ax_line in zip(unique_models, axs_line):
                     if (sens_attr, dset, m) in plot_del_df_line_gby.groups:
                         dset_model_line_df = plot_del_df_line_gby.get_group((sens_attr, dset, m))
-                        sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
+                        sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line,palette=palette, ci=None)
                         ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
                         ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
-
-            create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
             fig_line.suptitle(sens_attr.title().replace('_', ' '))
             fig_line.savefig(os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
-            fig_bar.suptitle()
-            fig_bar.tight_layout()
-            fig_bar.savefig(os.path.join(plots_path, f"{sens_attr}_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
-
-        fig_bar2.tight_layout()
-        fig_bar2.savefig(os.path.join(plots_path, f"overlapping_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
         plt.close("all")

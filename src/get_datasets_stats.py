@@ -42,7 +42,7 @@ out_columns = ['# Interactions', '# Users', '# Items', 'Avg. Users Degree', 'Avg
 for model_path in os.listdir(args.saved_path):
     if 'perturbed' not in model_path and os.path.isfile(os.path.join(args.saved_path, model_path)):
         dset_name = model_path.replace('GCMC-', '').replace('LightGCN-', '').replace('NGCF-', '')  # removes model name
-        dset_name = dset_name[::-1].split('_')[1].split('-', maxsplit=3)[-1][::-1]  # removes date
+        dset_name = dset_name[::-1].split('_', maxsplit=1)[1].split('-', maxsplit=3)[-1][::-1]  # removes date
         if dset_name.lower() not in check_datasets:
             config_files = os.listdir(config_path)
             try:
