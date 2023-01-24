@@ -952,7 +952,7 @@ def _inner_rolling_window(input_array, dim_out_h, dim_out_w, n_h, n_w, sh, sw, o
     return rolled_array
 
 
-@numba.jit(nopython=True, parallel=True)
+@numba.jit(nopython=True)
 def _inner_inner_rolling_window(input_array, rolled_array, i, start_row, op, other_args):
     dim_out_w, n_h, n_w, sh, sw = other_args
     for j in numba.prange(dim_out_w):

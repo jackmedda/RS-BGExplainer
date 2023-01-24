@@ -3,6 +3,7 @@ import os
 import pickle
 import argparse
 import inspect
+import itertools
 
 import tqdm
 import scipy
@@ -10,8 +11,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.cbook as mpl_cbook
 import matplotlib.ticker as mpl_tick
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as mpl_path_eff
 from recbole.evaluator import Evaluator
 
 import src.utils as utils
@@ -395,6 +398,8 @@ colors = {
     "Gender": {"M": "#0173b2", "F": "#de8f05"},
     "Age": {"Y": "#0173b2", "O": "#de8f05"}
 }
+
+P_VALUE = 0.05
 
 no_pert_col = "NoPerturbation"
 
@@ -936,8 +941,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         table_bar_df = create_table_best_explanations(metric_df)
 
         if _metrics.index(metric) == 0:
-            create_table_topk_list_change(metric_df, 'Edit Dist')
-            create_table_topk_list_change(metric_df, 'Set Dist')
+            if 'Edit Dist' in df.columns:
+                create_table_topk_list_change(metric_df, 'Edit Dist')
+            if 'Set Dist' in df.columns:
+                create_table_topk_list_change(metric_df, 'Set Dist')
 
         plot_df_data = []
         plot_del_df_data = []
@@ -1026,39 +1033,68 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
 
         plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
-        plot_df_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
+        plot_df_box_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
 
         plot_table_df_bar_gby = table_bar_df.groupby(["Sens Attr", "Dataset"])
         plot_del_df_line_gby = plot_del_df_line.groupby(["Sens Attr", "Dataset", "Model"])
-        plot_df_bar_gby = plot_df_bar.groupby(["Sens Attr", "Dataset"])
+        plot_df_box_bar_gby = plot_df_box_bar.groupby(["Sens Attr", "Dataset"])
         for s_attr_i, orig_sens_attr in enumerate(unique_sens_attrs):
             sens_attr = orig_sens_attr.title().replace('_', ' ')
 
-            fig_bar, axs_bar = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
-            axs_bar = [axs_bar] if not isinstance(axs_bar, np.ndarray) else axs_bar
+            fig_pol_box, axs_pol_box = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
+            axs_pol_box = [axs_pol_box] if not isinstance(axs_pol_box, np.ndarray) else axs_pol_box
 
             fig_box, axs_box = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
             axs_box = [axs_box] if not isinstance(axs_box, np.ndarray) else axs_box
 
             s_attr_dgs = []
-            for i, (dset, ax_bar, ax_box) in enumerate(zip(unique_datasets, axs_bar, axs_box)):
-                if (sens_attr, dset) in plot_df_bar_gby.groups:
-                    dset_bar_sattr_df = plot_df_bar_gby.get_group((sens_attr, dset))
-                    sns.barplot(x="Model", y=y_col, data=dset_bar_sattr_df, hue="Policy", ax=ax_bar, palette=palette)
+            for i, (dset, ax_pol_box, ax_box) in enumerate(zip(unique_datasets, axs_pol_box, axs_box)):
+                if (sens_attr, dset) in plot_df_box_bar_gby.groups:
+                    dset_box_bar_sattr_df = plot_df_box_bar_gby.get_group((sens_attr, dset))
+                    box = sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_df, hue="Policy", ax=ax_pol_box, palette=palette)
                     # ax_bar.set_title(dataset_map[dset], pad=30)
-                    ax_bar.set_xlabel("")
+                    ax_pol_box.set_xlabel("")
 
-                    dset_bar_sattr_box_df = dset_bar_sattr_df[dset_bar_sattr_df["Policy"] != 'MonDel+DelCons']
-                    sns.boxplot(x="Model", y=y_col, data=dset_bar_sattr_box_df, hue="Policy", ax=ax_box, palette=palette, whis=np.inf)
+                    # A marker will be present in a specific couple of boxplots if the means of their plotted data is statistically different
+                    patches = [artist for artist in box.get_children() if isinstance(artist, mpatches.PathPatch)]
+                    # sorted by x0 of the Bbox to ensure the order from left to right
+                    patches = sorted(patches, key=lambda x: x.get_extents().x0)
+                    stest_df = dset_box_bar_sattr_df.set_index(["Model", "Policy"])
+                    for mod, mod_ptcs in zip(unique_models, np.array_split(patches, len(unique_models))):
+                        mod_ptcs_text = [''] * len(mod_ptcs)
+                        data_ptcs = [stest_df.loc[(mod, pol), y_col] for pol in sorted(unique_policies)]
+                        for ((data1, ptc1), (data2, ptc2)), marker in zip(
+                                itertools.combinations(zip(data_ptcs, mod_ptcs), 2),
+                                ['X', '^', '*']
+                        ):
+                            tt_stat, tt_pv = scipy.stats.ttest_rel(data1, data2)
+                            if tt_pv < P_VALUE:
+                                for _ptc in [ptc1, ptc2]:
+                                    _ptc_idx = (mod_ptcs == _ptc).nonzero()[0].item()
+                                    mod_ptcs_text[_ptc_idx] += " " + marker if mod_ptcs_text[_ptc_idx] else marker
+                        bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
+                        for ptc_text, bxp_s, _ptc in zip(mod_ptcs_text, bxp_stats, mod_ptcs):
+                            if ptc_text:
+                                x = np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]])
+                                height = np.abs(_ptc.get_path().vertices[2][1] - _ptc.get_path().vertices[1][1])
+                                # text = ax_pol_box.text(x, bxp_s['med'], ptc_text, ha='center', color='white')
+                                text = ax_pol_box.text(x, bxp_s['med'] + 0.05 * bxp_s['med'], ptc_text, ha='center', color='white')
+                                text.set_path_effects([
+                                    mpl_path_eff.Stroke(linewidth=3, foreground='k'),
+                                    mpl_path_eff.Normal(),
+                                ])
+
+                    dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']
+                    sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box, palette=palette)
                     # ax_box.set_title(dataset_map[dset], pad=30)
                     ax_box.set_xlabel("")
 
-                    if i == len(axs_bar) - 1:
-                        bar_handles, bar_labels = ax_bar.get_legend_handles_labels()
-                        fig_bar.legend(bar_handles, bar_labels, loc='upper center', ncol=len(bar_labels))
+                    if i == len(axs_pol_box) - 1:
+                        pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
+                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='upper center', ncol=len(pol_box_labels))
                         box_handles, box_labels = ax_box.get_legend_handles_labels()
                         fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
-                    ax_bar.get_legend().remove()
+                    ax_pol_box.get_legend().remove()
                     ax_box.get_legend().remove()
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
@@ -1074,8 +1110,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
-            fig_bar.tight_layout()
-            fig_bar.savefig(os.path.join(plots_path, f"{sens_attr}_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+            fig_pol_box.tight_layout()
+            fig_pol_box.savefig(os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"))
 
             fig_box.tight_layout()
             fig_box.savefig(os.path.join(plots_path, f"{sens_attr}_boxplot_MonDel_{exp_data_name}_{metric}_DP_random_samples.png"))
