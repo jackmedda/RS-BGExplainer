@@ -289,18 +289,16 @@ def create_table_best_explanations_per_group(_metric_df):
                 tab_dg_df.columns = pd.MultiIndex.from_product([[level_attr], [tab_dg]])
 
                 final_table_df.append(tab_dg_df)
-            table_df = pd.concat(final_table_df, axis=1)
-            table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1])))
-            table_out_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
+            final_table_df = pd.concat(final_table_df, axis=1)
+            final_table_df.columns = final_table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1])))
+            table_out_bar_df = pd.melt(final_table_df, ignore_index=False).reset_index()
             table_out_bar_df.to_csv(os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
-            table_df.columns.names = [''] * len(table_df.columns.names)
-            table_df.to_latex(
+            final_table_df.columns.names = [''] * len(final_table_df.columns.names)
+            final_table_df.replace('%', '\%', regex=True).to_latex(
                 os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.tex"),
                 multicolumn_format="c",
                 escape=False
             )
-
-    return table_out_bar_df
 
 
 def create_table_best_explanations(_metric_df):
@@ -1204,7 +1202,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                     h.append(_bxp['whishi'])
                                 dh, barh = .05, .05
                                 ax_pol_t = plot_utils.annotate_brackets(
-                                    ax_pol_box, 0, 1, tt_pv, x, h, yerr, dh, barh, fs=SMALL_SIZE
+                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE
                                 )
                                 # yerr is updated such that next brackets are drawn over others
                                 ax_pol_y0, ax_pol_y1 = ax_pol_box.get_ylim()
