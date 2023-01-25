@@ -1192,15 +1192,15 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         mod_ptcs_text = [''] * len(mod_ptcs)
                         data_ptcs = [stest_df.loc[(mod, pol), y_col] for pol in sorted(unique_policies)]
                         bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
+                        height = max([_bxps['whishi'] for _bxps in bxp_stats])
                         yerr = 0
-                        for (data1, bxps1, ptc1), (data2, bxps2, ptc2) in itertools.combinations(zip(data_ptcs, bxp_stats, mod_ptcs), 2):
+                        for (data1, ptc1), (data2, ptc2) in itertools.combinations(zip(data_ptcs, mod_ptcs), 2):
                             tt_stat, tt_pv = scipy.stats.ttest_rel(data1, data2)
                             if tt_pv < P_VALUE:
-                                x, h = [], []
-                                for _ptc, _bxp in zip([ptc1, ptc2], [bxps1, bxps2]):
+                                x, h = [], [height, height]
+                                for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
-                                    h.append(_bxp['whishi'])
-                                dh, barh = .05, .05
+                                dh, barh = .1, .05
                                 ax_pol_t = plot_utils.annotate_brackets(
                                     ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE
                                 )
