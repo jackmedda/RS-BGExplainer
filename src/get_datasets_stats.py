@@ -61,10 +61,11 @@ for model_path in os.listdir(args.saved_path):
             sens_cols = user_feat.columns[~user_feat.columns.str.contains('_id')]
             sens_info = ""
             for col in sens_cols:
-                user_feat[col] = user_feat[col].map(dataset.field2id_token[col].__getitem__)
-                col_info = (user_feat[[col]].value_counts() / len(user_feat) * 100).map(lambda x: f"{x:.2f}%")
-                col_info = col_info.reset_index().to_dict(orient="list")
-                sens_info += str(col_info) + "\n"
+                if col in dataset.field2id_token:
+                    user_feat[col] = user_feat[col].map(dataset.field2id_token[col].__getitem__)
+                    col_info = (user_feat[[col]].value_counts() / len(user_feat) * 100).map(lambda x: f"{x:.1f}%")
+                    col_info = col_info.reset_index().to_dict(orient="list")
+                    sens_info += str(col_info) + "\n"
 
             out_data.append([
                 dataset.inter_num,
@@ -79,3 +80,8 @@ for model_path in os.listdir(args.saved_path):
 df = pd.DataFrame(out_data, columns=out_columns, index=check_datasets)
 print(df)
 df.to_csv(os.path.join(get_plots_path(), 'datasets_stats.csv'))
+with pd.option_context('max_colwidth', None):
+    df.index.name = "Dataset"
+    df.reset_index().replace('%', '\%', regex=True).to_latex(
+        os.path.join(get_plots_path(), 'datasets_stats.tex'), index=None, escape=False
+    )

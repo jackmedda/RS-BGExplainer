@@ -385,13 +385,15 @@ def compute_DP_across_random_samples(df, sens_attr, demo_group_field, dataset, m
     max_user = df['user_id'].max() + 1
 
     n_users = 0
+    demo_groups_order = []
     size_perc = np.zeros((2,), dtype=float)
     groups = np.zeros((2, max_user), dtype=int)
-    for i, (_, gr_df) in enumerate(df.groupby(demo_group_field)):
+    for i, (dg, gr_df) in enumerate(df.groupby(demo_group_field)):
         gr_users = gr_df['user_id'].unique()
         groups[i, gr_users] = 1
         n_users += gr_users.shape[0]
         size_perc[i] = gr_users.shape[0]
+        demo_groups_order.append(dg)
     size_perc /= n_users
 
     gr_data = np.zeros(max_user)
@@ -400,7 +402,9 @@ def compute_DP_across_random_samples(df, sens_attr, demo_group_field, dataset, m
         gr_data[pos] = df.set_index('user_id').loc[pos, metric].to_numpy()
 
     if (dataset, sens_attr) not in compute_DP_across_random_samples.generated_groups:
-        compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)] = np.zeros((iterations, 2, max_user), dtype=np.bool_)
+        compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)] = np.zeros(
+            (iterations, 2, max_user), dtype=np.bool_
+        )
 
     return _compute_DP_random_samples(
         gr_data,
@@ -408,24 +412,25 @@ def compute_DP_across_random_samples(df, sens_attr, demo_group_field, dataset, m
         size_perc,
         compute_DP_across_random_samples.generated_groups[(dataset, sens_attr)],
         batch_size=batch_size,
-        iterations=iterations,
-        n_users=max_user
-    )
+        iterations=iterations
+    ), demo_groups_order
 
 
 @numba.jit(nopython=True, parallel=True)
-def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch_size=64, iterations=100, n_users=0):
-    out = np.empty((iterations,), dtype=np.float32)
+def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch_size=64, iterations=100):
+    out = np.empty((iterations, 3), dtype=np.float32)
     check = out_samples.nonzero()[0].shape[0] == 0
     for i in numba.prange(iterations):
         if check:
-            samples = np.zeros((2, n_users), dtype=np.bool_)
+            samples = np.zeros_like(groups, dtype=np.bool_)
             for gr_i in range(len(groups)):
                 sample_size = round(batch_size * size_perc[gr_i])
                 samples[gr_i][np.random.choice(groups[gr_i].nonzero()[0], sample_size, replace=False)] = True
             out_samples[i] = samples
 
-        out[i] = np.abs(group_data[out_samples[i, 0]].mean() - group_data[out_samples[i, 1]].mean())
+        gr1_mean = group_data[out_samples[i, 0]].mean()
+        gr2_mean = group_data[out_samples[i, 1]].mean()
+        out[i] = [gr1_mean, gr2_mean, np.abs(gr1_mean - gr2_mean)]
 
     return out
 

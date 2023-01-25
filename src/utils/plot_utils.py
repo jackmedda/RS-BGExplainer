@@ -607,3 +607,65 @@ def add_bar_value_labels(ax, spacing=5, format='.2f', **kwargs):
             ha='center',                 # Horizontally center label
             va=va,                       # Vertically align label differently for
             **kwargs)                    # positive and negative values.
+
+
+def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, barh=.05, same_h=True, fs=None):
+    """
+    https://stackoverflow.com/a/52333561
+
+    Annotate plot (barplot, boxplot, ...) with p-values.
+
+    :param num1: number of left bar to put bracket over
+    :param num2: number of right bar to put bracket over
+    :param data: string to write or number for generating asterixes
+    :param center: centers of all bars (like plt.bar() input)
+    :param height: heights of all bars (like plt.bar() input)
+    :param yerr: yerrs of all bars (like plt.bar() input)
+    :param dh: height offset over bar / bar + yerr in axes coordinates (0 to 1)
+    :param barh: bar height in axes coordinates (0 to 1)
+    :param same_h: if the bracket edges should have the same length or not (if not the ends get close to the bars)
+    :param fs: font size
+    """
+
+    text = f"p = {data:.3f}" if data >= 0.001 else f"p < 0.001"
+
+    lx, ly = center[num1], height[num1]
+    rx, ry = center[num2], height[num2]
+
+    if yerr:
+        ly += yerr[num1]
+        ry += yerr[num2]
+
+    ax_y0, ax_y1 = ax.get_ylim()
+    dh *= (ax_y1 - ax_y0)
+    barh *= (ax_y1 - ax_y0)
+
+    if same_h:
+        y = max(ly, ry) + dh
+        y0, y1 = y, y
+
+        barhl = {0: barh, 1: barh}
+    else:
+        y0 = ly + dh
+        y1 = ry + dh
+
+        barhl = dict.fromkeys([0, 1])
+        if y0 > y1:
+            barhl[1] = y0 + barh - y1
+            barhl[0] = barh
+        else:
+            barhl[0] = y1 + barh - y0
+            barhl[1] = barh
+
+    barx = [lx, lx, rx, rx]
+    bary = [y0, y0+barhl[0], y1+barhl[1], y1]
+    mid = ((lx+rx)/2, max(y0, y1)+barh)
+
+    ax.plot(barx, bary, c='black')
+    # ax.plot([lx + 0.001, rx - 0.001], [max(y0, y1), max(y0, y1)], c='black', ls='--', lw=0.6)
+
+    kwargs = dict(ha='center', va='bottom')
+    if fs is not None:
+        kwargs['fontsize'] = fs
+
+    return ax.text(*mid, text, **kwargs)

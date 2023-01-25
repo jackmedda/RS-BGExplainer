@@ -215,6 +215,94 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     )
 
 
+def create_table_best_explanations_per_group(_metric_df):
+    nop_mask = _metric_df["Policy"] == no_pert_col
+    metr_df_nop = _metric_df[nop_mask].copy()
+    metr_df_p = _metric_df[~nop_mask].copy()
+
+    metr_df_nop["Status"] = "Before"
+    metr_df_p["Status"] = "After"
+
+    metr_df = pd.concat(
+        [metr_df_p] + [metr_df_nop.copy().replace(no_pert_col, p) for p in metr_df_p.Policy.unique()],
+        ignore_index=True
+    )
+
+    metr_df_mean = metr_df.groupby(
+        ["Dataset", "Model", "Policy", "Status", "Sens Attr", "Demo Group"]
+    ).mean()
+
+    metric_col = metr_df_mean.columns[0]
+
+    metr_stest = {}
+    metr_df_gb = metr_df.groupby(
+        ["Dataset", "Model", "Policy", "Sens Attr"]
+    )
+    for mdf_stat_cols, mdf_stat in metr_df_gb:
+        stat_dg_gby = mdf_stat.groupby("Demo Group")
+        s_attr_stat = dict.fromkeys(stat_dg_gby.groups.keys())
+        tot_val = dict.fromkeys(["Before", "After"])
+        for stat_dg, stat_dg_df in stat_dg_gby:
+            after_mask = stat_dg_df["Status"] == "After"
+            after_stat_val = stat_dg_df.loc[after_mask, metric_col]
+            before_stat_val = stat_dg_df.loc[~after_mask, metric_col]
+            for stat_status, stat_status_val in zip(["Before", "After"], [before_stat_val, after_stat_val]):
+                if tot_val[stat_status] is None:
+                    tot_val[stat_status] = stat_status_val
+                else:
+                    tot_val[stat_status] = (tot_val[stat_status].to_numpy() + stat_status_val.to_numpy()) / 2
+            s_attr_stat[stat_dg] = scipy.stats.ttest_rel(before_stat_val, after_stat_val)
+        s_attr_stat["Total"] = scipy.stats.ttest_rel(*tot_val.values())
+        metr_stest[mdf_stat_cols] = s_attr_stat
+
+    metr_df_pivot = metr_df_mean.reset_index().pivot(
+        index=["Dataset", "Model", "Policy"],
+        columns=["Sens Attr", "Demo Group", "Status"],
+        values=metric_col
+    )
+
+    table_df = metr_df_pivot.reindex(
+        ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
+    ).reindex(
+        ["M", "F", "Y", "O", "America", "Other"], axis=1, level=1
+    ).reindex(
+        ['Before', 'After'], axis=1, level=2
+    )
+    level_attrs = ["Gender", "Age", "User Wide Zone"]
+    attrs_demo_groups = [["M", "F"], ["Y", "O"], ["America", "Other"]]
+
+    def relative_change(row, l_attr, row_dg):
+        v1, v2 = row.loc["After"].item(), row.loc["Before"].item()
+        ch = v1 - v2
+        stat_pv = metr_stest[(*row.name, l_attr)][row_dg].pvalue
+        stat_s = '*' if stat_pv < P_VALUE else ''
+        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:.1f}%)'
+
+    for level_attr, demo_groups in zip(level_attrs, attrs_demo_groups):
+        final_table_df = []
+        if level_attr in table_df:
+            table_total_df = (table_df[(level_attr, demo_groups[0])] + table_df[(level_attr, demo_groups[1])]) / 2
+            for tab_dg in demo_groups + ["Total"]:
+                curr_tab_df = table_df[(level_attr, tab_dg)] if tab_dg in demo_groups else table_total_df
+
+                tab_dg_df = curr_tab_df.apply(lambda row: relative_change(row, level_attr, tab_dg), axis=1).to_frame()
+                tab_dg_df.columns = pd.MultiIndex.from_product([[level_attr], [tab_dg]])
+
+                final_table_df.append(tab_dg_df)
+            table_df = pd.concat(final_table_df, axis=1)
+            table_df.columns = table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1])))
+            table_out_bar_df = pd.melt(table_df, ignore_index=False).reset_index()
+            table_out_bar_df.to_csv(os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
+            table_df.columns.names = [''] * len(table_df.columns.names)
+            table_df.to_latex(
+                os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.tex"),
+                multicolumn_format="c",
+                escape=False
+            )
+
+    return table_out_bar_df
+
+
 def create_table_best_explanations(_metric_df):
     nop_mask = _metric_df["Policy"] == no_pert_col
     metr_df_nop = _metric_df[nop_mask].copy()
@@ -711,6 +799,14 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 subfig.suptitle(dataset_map[dset])
                 subfig.subplots(1, len(unique_models), sharey=True)
 
+    # fig_heat_gm = {}
+    # for gm_s_attr in unique_sens_attrs:
+    #     fig_heat_gm[gm_s_attr] = plt.figure(figsize=(40, 15), constrained_layout=True)
+    #     fig_heat_gm[gm_s_attr].subfigures(len(unique_datasets), 1)
+    #     for dset, subfig in zip(unique_datasets, fig_heat_gm[gm_s_attr].subfigs):
+    #         subfig.suptitle(dataset_map[dset])
+    #         subfig.subplots(1, len(unique_models), sharey=True)
+
     fig_heat = {}
     for heat_s_attr in unique_sens_attrs:
         fig_heat[heat_s_attr] = plt.figure(figsize=(15, 8), constrained_layout=True)
@@ -779,6 +875,20 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
                 # each edge is counted once for one node and once for the other (it is equal to a bincount)
                 graph_mdf['# Del Edges'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
+
+                # s_attr_df = df.set_index(['Model', 'Metric', 'Policy'])
+                # s_attr_df = df.set_index(['Dataset', 'Sens Attr', 'Model', 'Metric', 'Policy']).loc[
+                #     tuple([_dataset, _s_attr] + list(s_attr_df.index[0]))
+                # ].copy(deep=True)
+                # s_attr_df['user_id'] -= 1  # reindexing to zero
+                # sens_gmdf = graph_mdf.join(
+                #     s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
+                #     on='Node'
+                # ).fillna('Item')
+                # mi_item = sklearn.feature_selection.mutual_info_regression(
+                #     sens_gmdf.loc[sens_gmdf['Node Type'] == 'Item', ['Degree', 'Sparsity', 'Reachability']],
+                #     sens_gmdf.loc[sens_gmdf['Node Type'] == 'Item', '# Del Edges']
+                # )
 
                 for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
                     gm_policy_data = gm_data.setdefault(graph_metric, [])
@@ -852,6 +962,13 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 pca_legend.set_zorder(10)
             else:
                 pca_ax.get_legend().remove()
+
+        # gmk, gmv = zip(*gm_data.items())
+        # gmv = [pd.DataFrame(gmd, columns=["x", k, "Node Type", "Policy"]) for gmd, k in zip(gmv, gmk)]
+        # gmj = gmv[0]
+        # for _gmv in gmv[1:]:
+        #     gmj = gmj.join(_gmv.set_index(["x", "Node Type", "Policy"]), on=["x", "Node Type", "Policy"])
+
         for graph_metric, gm_plot_data in gm_data.items():
             gm_ax = fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')].subfigs[
                 unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
@@ -947,9 +1064,11 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 create_table_topk_list_change(metric_df, 'Set Dist')
 
         plot_df_data = []
+        dp_df_data_per_group = []
         plot_del_df_data = []
         y_col = f"$\Delta$ {metric.upper()}"
         plot_columns = ["Model", "Dataset", "Policy", "Sens Attr", y_col]
+        data_columns_per_group = ["Model", "Dataset", "Policy", "Sens Attr", "Demo Group", metric.upper()]
         plot_del_columns = ["Model", "Dataset", "Policy", "% Del Edges", "Sens Attr", y_col]
         palette = dict(zip(unique_policies, sns.color_palette("colorblind")))
         _m_dset_df_gby = metric_df.groupby(["Model", "Dataset", "Sens Attr"])
@@ -976,7 +1095,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         for i, pct in enumerate(np.array_split(qnt_values, qnt_size))
                     ])
 
-                dp_samples = utils.compute_DP_across_random_samples(
+                dp_samples, dgs_order = utils.compute_DP_across_random_samples(
                     sub_policy_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
                 )
 
@@ -985,7 +1104,16 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     [_dataset] * args.iterations,
                     [_policy] * args.iterations,
                     [_s_attr] * args.iterations,
-                    dp_samples
+                    dp_samples[:, -1]
+                )))
+
+                dp_df_data_per_group.extend(list(zip(
+                    [_model] * args.iterations * len(dgs_order),
+                    [_dataset] * args.iterations * len(dgs_order),
+                    [_policy] * args.iterations * len(dgs_order),
+                    [_s_attr] * args.iterations * len(dgs_order),
+                    np.repeat(dgs_order, args.iterations),
+                    np.concatenate(dp_samples[:, :-1].T)
                 )))
 
                 sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
@@ -993,7 +1121,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 sorted_del_edges = sub_del_df.sort_values("# Del Edges")["# Del Edges"].unique()
                 for n_del in sorted_del_edges:
                     n_del_df = n_del_df_gby.get_group(n_del)
-                    del_dp_samples = utils.compute_DP_across_random_samples(
+                    del_dp_samples, _ = utils.compute_DP_across_random_samples(
                         n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
                     )
 
@@ -1003,7 +1131,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         [_policy] * args.iterations,
                         [n_del] * args.iterations,
                         [_s_attr] * args.iterations,
-                        del_dp_samples
+                        del_dp_samples[:, -1]
                     )))
 
             qnt_ax = fig_qnt[_s_attr.lower().replace(' ', '_')].subfigs[
@@ -1034,6 +1162,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
         plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
         plot_df_box_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
+        dp_df_per_group = pd.DataFrame(dp_df_data_per_group, columns=data_columns_per_group)
+
+        create_table_best_explanations_per_group(dp_df_per_group)
 
         plot_table_df_bar_gby = table_bar_df.groupby(["Sens Attr", "Dataset"])
         plot_del_df_line_gby = plot_del_df_line.groupby(["Sens Attr", "Dataset", "Model"])
@@ -1051,11 +1182,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             for i, (dset, ax_pol_box, ax_box) in enumerate(zip(unique_datasets, axs_pol_box, axs_box)):
                 if (sens_attr, dset) in plot_df_box_bar_gby.groups:
                     dset_box_bar_sattr_df = plot_df_box_bar_gby.get_group((sens_attr, dset))
-                    box = sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_df, hue="Policy", ax=ax_pol_box, palette=palette)
+                    box = sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_df, hue="Policy", ax=ax_pol_box, palette=palette, showfliers=False)
                     # ax_bar.set_title(dataset_map[dset], pad=30)
                     ax_pol_box.set_xlabel("")
 
-                    # A marker will be present in a specific couple of boxplots if the means of their plotted data is statistically different
                     patches = [artist for artist in box.get_children() if isinstance(artist, mpatches.PathPatch)]
                     # sorted by x0 of the Bbox to ensure the order from left to right
                     patches = sorted(patches, key=lambda x: x.get_extents().x0)
@@ -1063,39 +1193,39 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     for mod, mod_ptcs in zip(unique_models, np.array_split(patches, len(unique_models))):
                         mod_ptcs_text = [''] * len(mod_ptcs)
                         data_ptcs = [stest_df.loc[(mod, pol), y_col] for pol in sorted(unique_policies)]
-                        for ((data1, ptc1), (data2, ptc2)), marker in zip(
-                                itertools.combinations(zip(data_ptcs, mod_ptcs), 2),
-                                ['X', '^', '*']
-                        ):
+                        bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
+                        yerr = 0
+                        for (data1, bxps1, ptc1), (data2, bxps2, ptc2) in itertools.combinations(zip(data_ptcs, bxp_stats, mod_ptcs), 2):
                             tt_stat, tt_pv = scipy.stats.ttest_rel(data1, data2)
                             if tt_pv < P_VALUE:
-                                for _ptc in [ptc1, ptc2]:
-                                    _ptc_idx = (mod_ptcs == _ptc).nonzero()[0].item()
-                                    mod_ptcs_text[_ptc_idx] += " " + marker if mod_ptcs_text[_ptc_idx] else marker
-                        bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
-                        for ptc_text, bxp_s, _ptc in zip(mod_ptcs_text, bxp_stats, mod_ptcs):
-                            if ptc_text:
-                                x = np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]])
-                                height = np.abs(_ptc.get_path().vertices[2][1] - _ptc.get_path().vertices[1][1])
-                                # text = ax_pol_box.text(x, bxp_s['med'], ptc_text, ha='center', color='white')
-                                text = ax_pol_box.text(x, bxp_s['med'] + 0.05 * bxp_s['med'], ptc_text, ha='center', color='white')
-                                text.set_path_effects([
-                                    mpl_path_eff.Stroke(linewidth=3, foreground='k'),
-                                    mpl_path_eff.Normal(),
-                                ])
+                                x, h = [], []
+                                for _ptc, _bxp in zip([ptc1, ptc2], [bxps1, bxps2]):
+                                    x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
+                                    h.append(_bxp['whishi'])
+                                dh, barh = .05, .05
+                                ax_pol_t = plot_utils.annotate_brackets(
+                                    ax_pol_box, 0, 1, tt_pv, x, h, yerr, dh, barh, fs=SMALL_SIZE
+                                )
+                                # yerr is updated such that next brackets are drawn over others
+                                ax_pol_y0, ax_pol_y1 = ax_pol_box.get_ylim()
+                                offset_norm = ax_pol_y0 - ax_pol_y1
+                                yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 1e-4
 
                     dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']
                     sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box, palette=palette)
                     # ax_box.set_title(dataset_map[dset], pad=30)
                     ax_box.set_xlabel("")
 
-                    if i == len(axs_pol_box) - 1:
+                    if i == len(axs_pol_box) - 1 and dset == "ml-1m":
                         pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
-                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='upper center', ncol=len(pol_box_labels))
+                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='upper center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.0])
                         box_handles, box_labels = ax_box.get_legend_handles_labels()
                         fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_pol_box.get_legend().remove()
                     ax_box.get_legend().remove()
+
+                    if dset not in ['lastfm-1k', 'tafeng']:
+                        ax_pol_box.set_ylabel("")
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
                     plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
@@ -1111,7 +1241,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
             fig_pol_box.tight_layout()
-            fig_pol_box.savefig(os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+            fig_pol_box.savefig(os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"), bbox_inches='tight', pad_inches=0)
 
             fig_box.tight_layout()
             fig_box.savefig(os.path.join(plots_path, f"{sens_attr}_boxplot_MonDel_{exp_data_name}_{metric}_DP_random_samples.png"))
@@ -1134,7 +1264,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 for m, ax_line in zip(unique_models, axs_line):
                     if (sens_attr, dset, m) in plot_del_df_line_gby.groups:
                         dset_model_line_df = plot_del_df_line_gby.get_group((sens_attr, dset, m))
-                        sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line,palette=palette, ci=None)
+                        sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
                         ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
                         ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
 
