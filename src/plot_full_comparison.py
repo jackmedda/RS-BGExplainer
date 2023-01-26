@@ -1207,7 +1207,12 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                 # yerr is updated such that next brackets are drawn over others
                                 offset_norm = abs(height)
                                 yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 5e-4
-                    ax_pol_box.margins(x=0)
+                    left_xpatch, right_xpatch = zip(
+                        *[(_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]) for _ptc in patches]
+                    )
+                    left_min, right_max = min(left_xpatch), max(right_xpatch)
+                    offset_xlim = 0.005 * (right_max - left_min)
+                    ax_pol_box.set_xlim(left_min - offset_xlim, right_max + offset_xlim)
 
                     dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']
                     sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box, palette=palette)
@@ -1238,7 +1243,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
-            fig_pol_box.tight_layout()
+            fig_pol_box.tight_layout(pad=0)
             fig_pol_box.savefig(os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"), bbox_inches='tight', pad_inches=0)
 
             fig_box.tight_layout()
