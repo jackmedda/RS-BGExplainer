@@ -893,7 +893,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                             gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
 
                             gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
-                                lambda x: f"{x['Demo Group']} : {x['Degree']:.1f}\%", axis=1
+                                lambda x: f"{x['Demo Group']} : {x[gm]:.1f}\%", axis=1
                             ).values)
                             dsets_df.loc[gm_str, _dataset] = gm_stat_dg
 
