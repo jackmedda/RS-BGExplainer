@@ -276,8 +276,9 @@ def create_table_best_explanations_per_group(_metric_df):
         v1, v2 = row.loc["After"].item(), row.loc["Before"].item()
         ch = v1 - v2
         stat_pv = metr_stest[(*row.name, l_attr)][row_dg].pvalue
-        stat_s = '*' if stat_pv < P_VALUE else ' '
-        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:05.1f}%)'
+        stat_s = '*' if stat_pv < P_VALUE else '\hspace{3pt}'
+        zeros = "04.1f" if ch >= 0 else "05.1f"
+        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:{zeros}}%)'
 
     for level_attr, demo_groups in zip(level_attrs, attrs_demo_groups):
         final_table_df = []
