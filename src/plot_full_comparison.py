@@ -1294,8 +1294,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     ax_pol_box.get_legend().remove()
                     ax_box.get_legend().remove()
 
-                    if dset not in ['lastfm-1k', 'tafeng']:
-                        ax_pol_box.set_ylabel("")
+                    if dset == 'insurance':
+                        ax_pol_box.tick_params('x', bottom=False, labelbottom=False)
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
                     plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
