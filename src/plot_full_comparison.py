@@ -1202,11 +1202,12 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
                                 dh, barh = .05, .05
                                 ax_pol_t = plot_utils.annotate_brackets(
-                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE
+                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE - 2
                                 )
                                 # yerr is updated such that next brackets are drawn over others
                                 offset_norm = abs(height)
-                                yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 1e-4
+                                yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 5e-4
+                    ax_pol_box.margins(x=0)
 
                     dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']
                     sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box, palette=palette)
