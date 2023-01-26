@@ -15,6 +15,7 @@ import matplotlib.cbook as mpl_cbook
 import matplotlib.ticker as mpl_tick
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as mpl_path_eff
+import sklearn.feature_selection as sk_feats
 from recbole.evaluator import Evaluator
 
 import src.utils as utils
@@ -260,6 +261,7 @@ def create_table_best_explanations_per_group(_metric_df):
         columns=["Sens Attr", "Demo Group", "Status"],
         values=metric_col
     )
+    metr_df_pivot.index = metr_df_pivot.index.map(lambda x: (dataset_map[x[0]], *x[1:]))
 
     table_df = metr_df_pivot.reindex(
         ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
@@ -275,8 +277,8 @@ def create_table_best_explanations_per_group(_metric_df):
         v1, v2 = row.loc["After"].item(), row.loc["Before"].item()
         ch = v1 - v2
         stat_pv = metr_stest[(*row.name, l_attr)][row_dg].pvalue
-        stat_s = '*' if stat_pv < P_VALUE else ''
-        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:.1f}%)'
+        stat_s = '*' if stat_pv < P_VALUE else ' '
+        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:05.1f}%)'
 
     for level_attr, demo_groups in zip(level_attrs, attrs_demo_groups):
         final_table_df = []
@@ -797,14 +799,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 subfig.suptitle(dataset_map[dset])
                 subfig.subplots(1, len(unique_models), sharey=True)
 
-    # fig_heat_gm = {}
-    # for gm_s_attr in unique_sens_attrs:
-    #     fig_heat_gm[gm_s_attr] = plt.figure(figsize=(40, 15), constrained_layout=True)
-    #     fig_heat_gm[gm_s_attr].subfigures(len(unique_datasets), 1)
-    #     for dset, subfig in zip(unique_datasets, fig_heat_gm[gm_s_attr].subfigs):
-    #         subfig.suptitle(dataset_map[dset])
-    #         subfig.subplots(1, len(unique_models), sharey=True)
-
     fig_heat = {}
     for heat_s_attr in unique_sens_attrs:
         fig_heat[heat_s_attr] = plt.figure(figsize=(15, 8), constrained_layout=True)
@@ -838,6 +832,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     _metr_df_gby = df.groupby("Metric")
     _metr_del_df_gby = del_df.groupby("Metric")
 
+    gm_heat_data = []
+    gm_heat_order = ['Degree', 'Sparsity', 'Reachability']
     m_dset_attr_groups = list(mds_gby.groups.keys())
     for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
         gm_data = {}
@@ -874,19 +870,27 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 # each edge is counted once for one node and once for the other (it is equal to a bincount)
                 graph_mdf['# Del Edges'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
 
-                # s_attr_df = df.set_index(['Model', 'Metric', 'Policy'])
-                # s_attr_df = df.set_index(['Dataset', 'Sens Attr', 'Model', 'Metric', 'Policy']).loc[
-                #     tuple([_dataset, _s_attr] + list(s_attr_df.index[0]))
-                # ].copy(deep=True)
-                # s_attr_df['user_id'] -= 1  # reindexing to zero
-                # sens_gmdf = graph_mdf.join(
-                #     s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
-                #     on='Node'
-                # ).fillna('Item')
-                # mi_item = sklearn.feature_selection.mutual_info_regression(
-                #     sens_gmdf.loc[sens_gmdf['Node Type'] == 'Item', ['Degree', 'Sparsity', 'Reachability']],
-                #     sens_gmdf.loc[sens_gmdf['Node Type'] == 'Item', '# Del Edges']
-                # )
+                s_attr_df = df.set_index(['Dataset', 'Sens Attr', 'Model', 'Policy', 'Metric']).loc[
+                    tuple([_dataset, _s_attr, _model, _policy] + ['NDCG'])  # metric not relevant here
+                ].copy(deep=True)
+                s_attr_df['user_id'] -= 1  # reindexing to zero
+                sens_gmdf = graph_mdf.join(
+                    s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
+                    on='Node'
+                ).fillna('Item')
+
+                # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
+                # Paper that states how select number of neighbors, repetitions and usage of median
+                for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
+                    mi_res = np.zeros((args.iterations, 3), dtype=float)
+                    for mi_i in range(args.iterations):
+                        mi_res[mi_i] = sk_feats.mutual_info_regression(
+                            gm_dgdf.loc[:, gm_heat_order],
+                            gm_dgdf.loc[:, '# Del Edges'],
+                            n_neighbors=3
+                        )
+                    mi_res = np.median(mi_res, axis=0)
+                    gm_heat_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
 
                 for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
                     gm_policy_data = gm_data.setdefault(graph_metric, [])
@@ -961,12 +965,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             else:
                 pca_ax.get_legend().remove()
 
-        # gmk, gmv = zip(*gm_data.items())
-        # gmv = [pd.DataFrame(gmd, columns=["x", k, "Node Type", "Policy"]) for gmd, k in zip(gmv, gmk)]
-        # gmj = gmv[0]
-        # for _gmv in gmv[1:]:
-        #     gmj = gmj.join(_gmv.set_index(["x", "Node Type", "Policy"]), on=["x", "Node Type", "Policy"])
-
         for graph_metric, gm_plot_data in gm_data.items():
             gm_ax = fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')].subfigs[
                 unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
@@ -1024,6 +1022,59 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             bbox_inches="tight"
         )
     plt.close("all")
+
+    gm_heat_df = pd.DataFrame(
+        gm_heat_data,
+        columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_heat_order]
+    ).drop_duplicates(subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
+    gm_heat_df = gm_heat_df.melt(
+        ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
+        var_name="Graph Metric", value_name="Value"
+    )
+    # vmin, vmax = gm_heat_df["Value"].min(), gm_heat_df["Value"].max()
+    # gm_heat_df["Policy"] = gm_heat_df["Policy"].map({'MonDel': 'MD', 'MonDel+DelCons': 'MD+DC'})
+    # gm_heat_df = gm_heat_df.set_index('Sens Attr')
+    # for gm_sens_attr in unique_sens_attrs:
+    #     fig_heat_gm, axs_heat_gm = plt.subplots(2, len(unique_datasets), sharex=True, sharey=True, figsize=(40, 15), squeeze=False)
+    #     for nt_i, nt in enumerate(["User", "Item"]):
+    #         for _dset_j, _dset in enumerate(unique_datasets):
+    #             gm_heat_pivot = gm_heat_df.loc[gm_sens_attr.title().replace('_', ' ')].pivot(
+    #                 index=['Node Type', 'Dataset', 'Model', "Policy"],
+    #                 columns="Graph Metric"
+    #             ).loc[(nt, _dset)].droplevel(0, axis=1)
+    #             sns.heatmap(
+    #                 gm_heat_pivot, vmin=vmin, vmax=vmax, ax=axs_heat_gm[nt_i, _dset_j],
+    #                 cbar=_dset == 'insurance', yticklabels=_dset == 'ml-100k'# 'ml-1m'
+    #             )
+    #             axs_heat_gm[nt_i, _dset_j].set_ylabel("")
+    #             axs_heat_gm[nt_i, _dset_j].set_xlabel("")
+    #             if _dset == 'ml-100k': # 'ml-1m':
+    #                 plot_utils.hierarchical_labels(axs_heat_gm[nt_i, _dset_j], axis="y", offset=0.1)
+    #     plt.tight_layout()
+    #     fig_heat_gm.savefig(
+    #         os.path.join(plots_path, f'mi_graph_metrics_heatmap_{gm_sens_attr}_{exp_data_name}.png'),
+    #         bbox_inches="tight",
+    #         pad_inches=0
+    #     )
+    #     plt.close()
+    for gm_sa, gmh_sa_df in gm_heat_df.groupby('Sens Attr'):
+        # for RQ3
+        gmh_df = gmh_sa_df[(gmh_sa_df["Model"] != 'NGCF') & (gmh_sa_df["Policy"] == 'MonDel')]
+        #####
+        gm_heat_pivot = gmh_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
+            index=['Model'],
+            columns=['Dataset', 'Graph Metric', 'Demo Group']
+        ).droplevel(0, axis=1).reindex(
+            gm_heat_order, axis=1, level=1
+        ).reindex(
+            ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
+        )
+        gm_heat_pivot.columns = gm_heat_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
+        gm_heat_pivot.round(2).to_latex(
+            os.path.join(plots_path, f"mi_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
+            multicolumn_format="c",
+            escape=False
+        )
 
     table_gm_df = pd.DataFrame(
         table_gm,
@@ -1188,6 +1239,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     # sorted by x0 of the Bbox to ensure the order from left to right
                     patches = sorted(patches, key=lambda x: x.get_extents().x0)
                     stest_df = dset_box_bar_sattr_df.set_index(["Model", "Policy"])
+                    plt.rcParams['hatch.linewidth'] = 0.4
                     for mod, mod_ptcs in zip(unique_models, np.array_split(patches, len(unique_models))):
                         mod_ptcs_text = [''] * len(mod_ptcs)
                         data_ptcs = [stest_df.loc[(mod, pol), y_col] for pol in sorted(unique_policies)]
@@ -1200,13 +1252,28 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                 x, h = [], [height, height]
                                 for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
-                                dh, barh = .05, .05
+                                dh, barh = .05, .02
                                 ax_pol_t = plot_utils.annotate_brackets(
-                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE - 2
+                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=MEDIUM_SIZE
                                 )
                                 # yerr is updated such that next brackets are drawn over others
                                 offset_norm = abs(height)
                                 yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 5e-4
+
+                        for _ptc, _bxp, bxp_hatch in zip(mod_ptcs, bxp_stats, ['X', '/', '.']):
+                            x = np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]])
+                            med = _bxp["med"]
+                            med *= 1 + (0.05 * np.sign(med))
+                            med_text = ax_pol_box.text(
+                                x, med , f"{med:.2f}", fontsize=MEDIUM_SIZE, ha='center', color='w'
+                            )
+                            med_text.set_path_effects([
+                                mpl_path_eff.Stroke(linewidth=1.5, foreground='k'),
+                                mpl_path_eff.Normal(),
+                            ])
+
+                            _ptc.set_hatch(bxp_hatch)
+
                     left_xpatch, right_xpatch = zip(
                         *[(_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]) for _ptc in patches]
                     )
@@ -1221,7 +1288,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
                     if i == len(axs_pol_box) - 1 and dset == "ml-1m":
                         pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
-                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='upper center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.0])
+                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='lower center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.02])
                         box_handles, box_labels = ax_box.get_legend_handles_labels()
                         fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_pol_box.get_legend().remove()
@@ -1244,7 +1311,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
             fig_pol_box.tight_layout(pad=0)
-            fig_pol_box.savefig(os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"), bbox_inches='tight', pad_inches=0)
+            fig_pol_box.savefig(
+                os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"),
+                bbox_inches='tight', pad_inches=0, dpi=250
+            )
 
             fig_box.tight_layout()
             fig_box.savefig(os.path.join(plots_path, f"{sens_attr}_boxplot_MonDel_{exp_data_name}_{metric}_DP_random_samples.png"))

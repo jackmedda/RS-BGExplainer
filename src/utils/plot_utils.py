@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mpl_tick
 
 import src.utils as utils
 
@@ -668,3 +669,36 @@ def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, b
         kwargs['fontsize'] = fs
 
     return ax.text(*mid, text, **kwargs)
+
+
+def hierarchical_labels(ax, axis="x", tick_pos=None, label_sep='-', offset=-0.1):
+    if axis == "x":
+        twin = "twiny"
+        _axis = "xaxis"
+        spine = "bottom"
+        ticks = "xticklabels"
+        offset = -abs(offset)
+    else:
+        twin = "twinx"
+        _axis = "yaxis"
+        spine = "left"
+        ticks = "yticklabels"
+        offset = abs(offset)
+
+    labels = getattr(ax, f"get_{ticks}")()
+    levels = list(zip(*map(lambda x: x.get_text().split(label_sep), labels)))[::-1]
+    tick_pos = [np.linspace(0, 1, len(l) + 1) for l in levels] if tick_pos is None else tick_pos
+    for level, (level_labels, tick_p) in enumerate(zip(levels, tick_pos)):
+        twin_ax = getattr(ax, twin)() if level > 0 else ax
+
+        twin_ax.spines[spine].set_position(("axes", offset * (level + 1)))
+        twin_ax.tick_params('both', length=0, width=0, which='minor')
+        twin_ax.tick_params('both', direction='in', which='major')
+        getattr(twin_ax, _axis).set_ticks_position(spine)
+        getattr(twin_ax, _axis).set_label_position(spine)
+
+        twin_ax.set_xticks(tick_p)
+        getattr(twin_ax, _axis).set_major_formatter(mpl_tick.NullFormatter())
+        loc = [np.mean(tick_p[i - 1:i + 1]) for i in range(1, len(tick_p))]
+        getattr(twin_ax, _axis).set_minor_locator(mpl_tick.FixedLocator(loc))
+        getattr(twin_ax, _axis).set_minor_formatter(mpl_tick.FixedFormatter(level_labels))
