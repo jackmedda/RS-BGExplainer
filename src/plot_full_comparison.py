@@ -1200,13 +1200,12 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                 x, h = [], [height, height]
                                 for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
-                                dh, barh = .1, .05
+                                dh, barh = .05, .05
                                 ax_pol_t = plot_utils.annotate_brackets(
                                     ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE
                                 )
                                 # yerr is updated such that next brackets are drawn over others
-                                ax_pol_y0, ax_pol_y1 = ax_pol_box.get_ylim()
-                                offset_norm = ax_pol_y0 - ax_pol_y1
+                                offset_norm = abs(height)
                                 yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 1e-4
 
                     dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']

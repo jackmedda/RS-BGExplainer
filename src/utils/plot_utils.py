@@ -636,9 +636,8 @@ def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, b
         ly += yerr[num1]
         ry += yerr[num2]
 
-    ax_y0, ax_y1 = ax.get_ylim()
-    dh *= (ax_y1 - ax_y0)
-    barh *= (ax_y1 - ax_y0)
+    dh *= max(ly, ry)
+    barh *= max(ly, ry)
 
     if same_h:
         y = max(ly, ry) + dh
