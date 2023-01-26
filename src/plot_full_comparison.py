@@ -1093,8 +1093,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         #     plt.close()
         for gm_sa, gmd_sa_df in gm_dep_df.groupby('Sens Attr'):
             # for RQ3
-            # gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == 'MonDel')]
-            gmd_df = gmd_sa_df
+            gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == 'MonDel')]
             #####
             gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
                 index=['Model'],
