@@ -261,7 +261,6 @@ def create_table_best_explanations_per_group(_metric_df):
         columns=["Sens Attr", "Demo Group", "Status"],
         values=metric_col
     )
-    metr_df_pivot.index = metr_df_pivot.index.map(lambda x: (dataset_map[x[0]], *x[1:]))
 
     table_df = metr_df_pivot.reindex(
         ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
@@ -296,6 +295,7 @@ def create_table_best_explanations_per_group(_metric_df):
             table_out_bar_df = pd.melt(final_table_df, ignore_index=False).reset_index()
             table_out_bar_df.to_csv(os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
             final_table_df.columns.names = [''] * len(final_table_df.columns.names)
+            final_table_df.index = final_table_df.index.map(lambda x: (dataset_map[x[0]], *x[1:]))
             final_table_df.replace('%', '\%', regex=True).to_latex(
                 os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.tex"),
                 multicolumn_format="c",
