@@ -38,7 +38,14 @@ print(args)
 
 check_datasets = []
 out_data = []
-out_columns = ['# Interactions', '# Users', '# Items', 'Avg. Users Degree', 'Avg. Items Degree', 'Sparsity', 'Sens Attr Distrib']
+out_columns = [
+    '# Users',
+    '# Items',
+    '# Interactions',
+    'Gender Repr.',
+    'Age Repr.',
+    'Min. Degree per user',
+]
 for model_path in os.listdir(args.saved_path):
     if 'perturbed' not in model_path and os.path.isfile(os.path.join(args.saved_path, model_path)):
         dset_name = model_path.replace('GCMC-', '').replace('LightGCN-', '').replace('NGCF-', '')  # removes model name
@@ -58,30 +65,35 @@ for model_path in os.listdir(args.saved_path):
             )
 
             user_feat = pd.DataFrame(dataset.user_feat.numpy()).iloc[1:]
-            sens_cols = user_feat.columns[~user_feat.columns.str.contains('_id')]
-            sens_info = ""
+            sens_cols = user_feat.columns[user_feat.columns.isin(['gender', 'age'])]
+            sens_info = dict.fromkeys(['Gender', 'Age'])
             for col in sens_cols:
-                if col in dataset.field2id_token:
+                if col in dataset.field2id_token and col in ['age', 'gender']:
                     user_feat[col] = user_feat[col].map(dataset.field2id_token[col].__getitem__)
                     col_info = (user_feat[[col]].value_counts() / len(user_feat) * 100).map(lambda x: f"{x:.1f}%")
-                    col_info = col_info.reset_index().to_dict(orient="list")
-                    sens_info += str(col_info) + "\n"
+                    sens_info[col.title()] = '; '.join(
+                        col_info.to_frame().reset_index().apply(
+                            lambda x: f"{x[col]} : {x[0]}".replace('%', '\%'), axis=1
+                        ).values
+                    )
+                else:
+                    sens_info[col] = 'NA'
 
             out_data.append([
-                dataset.inter_num,
                 dataset.user_num - 1,
                 dataset.item_num - 1,
-                round(dataset.avg_actions_of_users, 1),
-                round(dataset.avg_actions_of_items, 1),
-                f"{dataset.sparsity * 100:.1f}%",
-                sens_info
+                dataset.inter_num,
+                sens_info['Gender'],
+                sens_info['Age'],
+                dataset.history_item_matrix()[2][1:].min().item()
             ])
 
 df = pd.DataFrame(out_data, columns=out_columns, index=check_datasets)
+df.index.name = "Dataset"
+df = df.T
 print(df)
 df.to_csv(os.path.join(get_plots_path(), 'datasets_stats.csv'))
 with pd.option_context('max_colwidth', None):
-    df.index.name = "Dataset"
-    df.reset_index().replace('%', '\%', regex=True).to_latex(
+    df.reset_index().to_latex(
         os.path.join(get_plots_path(), 'datasets_stats.tex'), index=None, escape=False
     )

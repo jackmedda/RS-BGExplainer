@@ -7,6 +7,7 @@ import itertools
 
 import tqdm
 import scipy
+import sklearn
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -833,8 +834,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
     _metr_df_gby = df.groupby("Metric")
     _metr_del_df_gby = del_df.groupby("Metric")
 
-    gm_heat_data = []
-    gm_heat_order = ['Degree', 'Sparsity', 'Reachability']
+    gm_mi_data = []
+    gm_wasser_data = []
+    gm_dep_order = ['Degree', 'Sparsity', 'Reachability']
     m_dset_attr_groups = list(mds_gby.groups.keys())
     for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
         gm_data = {}
@@ -880,18 +882,48 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     on='Node'
                 ).fillna('Item')
 
+                dset_stats = os.path.join(script_path, os.pardir, f'dp_plots', 'datasets_stats.csv')
+                if os.path.exists(dset_stats):
+                    dsets_df = pd.read_csv(dset_stats, index_col=0)
+                    if _dataset in dsets_df.columns:
+                        graph_stats_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
+                        for gm in gm_dep_order:
+                            gm_str = f"Avg. {gm} per user"
+                            gm_stat_dg = "" if gm_str not in dsets_df.index else dsets_df.loc[gm_str, _dataset]
+                            gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
+
+                            gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
+                                lambda x: f"{x['Demo Group']} : {x['Degree']:.1f}\%", axis=1
+                            ).values)
+                            dsets_df.loc[gm_str, _dataset] = gm_stat_dg
+
+                            dsets_df.to_csv(dset_stats)
+
                 # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
                 # Paper that states how select number of neighbors, repetitions and usage of median
                 for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
-                    mi_res = np.zeros((args.iterations, 3), dtype=float)
+                    mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
+                    wd_res = [np.inf] * len(gm_dep_order)
+
+                    degree_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                        gm_dgdf.loc[:, ['Degree']].to_numpy()
+                    ).squeeze()
+                    n_del_edges_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                        gm_dgdf.loc[:, ['# Del Edges']].to_numpy()
+                    ).squeeze()
+                    for gm_i, gm in enumerate(gm_dep_order):
+                        wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
+                        wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
+
                     for mi_i in range(args.iterations):
                         mi_res[mi_i] = sk_feats.mutual_info_regression(
-                            gm_dgdf.loc[:, gm_heat_order],
+                            gm_dgdf.loc[:, gm_dep_order],
                             gm_dgdf.loc[:, '# Del Edges'],
                             n_neighbors=3
                         )
                     mi_res = np.median(mi_res, axis=0)
-                    gm_heat_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
+                    gm_mi_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
+                    gm_wasser_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *wd_res])
 
                 for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
                     gm_policy_data = gm_data.setdefault(graph_metric, [])
@@ -1024,58 +1056,60 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         )
     plt.close("all")
 
-    gm_heat_df = pd.DataFrame(
-        gm_heat_data,
-        columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_heat_order]
-    ).drop_duplicates(subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
-    gm_heat_df = gm_heat_df.melt(
-        ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
-        var_name="Graph Metric", value_name="Value"
-    )
-    # vmin, vmax = gm_heat_df["Value"].min(), gm_heat_df["Value"].max()
-    # gm_heat_df["Policy"] = gm_heat_df["Policy"].map({'MonDel': 'MD', 'MonDel+DelCons': 'MD+DC'})
-    # gm_heat_df = gm_heat_df.set_index('Sens Attr')
-    # for gm_sens_attr in unique_sens_attrs:
-    #     fig_heat_gm, axs_heat_gm = plt.subplots(2, len(unique_datasets), sharex=True, sharey=True, figsize=(40, 15), squeeze=False)
-    #     for nt_i, nt in enumerate(["User", "Item"]):
-    #         for _dset_j, _dset in enumerate(unique_datasets):
-    #             gm_heat_pivot = gm_heat_df.loc[gm_sens_attr.title().replace('_', ' ')].pivot(
-    #                 index=['Node Type', 'Dataset', 'Model', "Policy"],
-    #                 columns="Graph Metric"
-    #             ).loc[(nt, _dset)].droplevel(0, axis=1)
-    #             sns.heatmap(
-    #                 gm_heat_pivot, vmin=vmin, vmax=vmax, ax=axs_heat_gm[nt_i, _dset_j],
-    #                 cbar=_dset == 'insurance', yticklabels=_dset == 'ml-100k'# 'ml-1m'
-    #             )
-    #             axs_heat_gm[nt_i, _dset_j].set_ylabel("")
-    #             axs_heat_gm[nt_i, _dset_j].set_xlabel("")
-    #             if _dset == 'ml-100k': # 'ml-1m':
-    #                 plot_utils.hierarchical_labels(axs_heat_gm[nt_i, _dset_j], axis="y", offset=0.1)
-    #     plt.tight_layout()
-    #     fig_heat_gm.savefig(
-    #         os.path.join(plots_path, f'mi_graph_metrics_heatmap_{gm_sens_attr}_{exp_data_name}.png'),
-    #         bbox_inches="tight",
-    #         pad_inches=0
-    #     )
-    #     plt.close()
-    for gm_sa, gmh_sa_df in gm_heat_df.groupby('Sens Attr'):
-        # for RQ3
-        gmh_df = gmh_sa_df[(gmh_sa_df["Model"] != 'NGCF') & (gmh_sa_df["Policy"] == 'MonDel')]
-        #####
-        gm_heat_pivot = gmh_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
-            index=['Model'],
-            columns=['Dataset', 'Graph Metric', 'Demo Group']
-        ).droplevel(0, axis=1).reindex(
-            gm_heat_order, axis=1, level=1
-        ).reindex(
-            ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
+    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data], ["mi", "wd"]):
+        gm_dep_df = pd.DataFrame(
+            gm_dep_data,
+            columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
+        ).drop_duplicates(subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
+        gm_dep_df = gm_dep_df.melt(
+            ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
+            var_name="Graph Metric", value_name="Value"
         )
-        gm_heat_pivot.columns = gm_heat_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
-        gm_heat_pivot.round(2).to_latex(
-            os.path.join(plots_path, f"mi_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
-            multicolumn_format="c",
-            escape=False
-        )
+        # vmin, vmax = gm_heat_df["Value"].min(), gm_heat_df["Value"].max()
+        # gm_heat_df["Policy"] = gm_heat_df["Policy"].map({'MonDel': 'MD', 'MonDel+DelCons': 'MD+DC'})
+        # gm_heat_df = gm_heat_df.set_index('Sens Attr')
+        # for gm_sens_attr in unique_sens_attrs:
+        #     fig_heat_gm, axs_heat_gm = plt.subplots(2, len(unique_datasets), sharex=True, sharey=True, figsize=(40, 15), squeeze=False)
+        #     for nt_i, nt in enumerate(["User", "Item"]):
+        #         for _dset_j, _dset in enumerate(unique_datasets):
+        #             gm_heat_pivot = gm_heat_df.loc[gm_sens_attr.title().replace('_', ' ')].pivot(
+        #                 index=['Node Type', 'Dataset', 'Model', "Policy"],
+        #                 columns="Graph Metric"
+        #             ).loc[(nt, _dset)].droplevel(0, axis=1)
+        #             sns.heatmap(
+        #                 gm_heat_pivot, vmin=vmin, vmax=vmax, ax=axs_heat_gm[nt_i, _dset_j],
+        #                 cbar=_dset == 'insurance', yticklabels=_dset == 'ml-100k'# 'ml-1m'
+        #             )
+        #             axs_heat_gm[nt_i, _dset_j].set_ylabel("")
+        #             axs_heat_gm[nt_i, _dset_j].set_xlabel("")
+        #             if _dset == 'ml-100k': # 'ml-1m':
+        #                 plot_utils.hierarchical_labels(axs_heat_gm[nt_i, _dset_j], axis="y", offset=0.1)
+        #     plt.tight_layout()
+        #     fig_heat_gm.savefig(
+        #         os.path.join(plots_path, f'mi_graph_metrics_heatmap_{gm_sens_attr}_{exp_data_name}.png'),
+        #         bbox_inches="tight",
+        #         pad_inches=0
+        #     )
+        #     plt.close()
+        for gm_sa, gmd_sa_df in gm_dep_df.groupby('Sens Attr'):
+            # for RQ3
+            # gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == 'MonDel')]
+            gmd_df = gmd_sa_df
+            #####
+            gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
+                index=['Model'],
+                columns=['Dataset', 'Graph Metric', 'Demo Group']
+            ).droplevel(0, axis=1).reindex(
+                gm_dep_order, axis=1, level=1
+            ).reindex(
+                ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
+            )
+            gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
+            gm_dep_pivot.round(2).to_latex(
+                os.path.join(plots_path, f"{dep_type}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
+                multicolumn_format="c",
+                escape=False
+            )
 
     table_gm_df = pd.DataFrame(
         table_gm,
@@ -1266,7 +1300,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                             med = _bxp["med"]
                             med *= 1 + (0.05 * np.sign(med))
                             med_text = ax_pol_box.text(
-                                x, med , f"{med:.2f}", fontsize=MEDIUM_SIZE, ha='center', color='w'
+                                x, med, f"{med:.3f}", fontsize=MEDIUM_SIZE, ha='center', color='w'
                             )
                             med_text.set_path_effects([
                                 mpl_path_eff.Stroke(linewidth=1.5, foreground='k'),
@@ -1289,7 +1323,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
                     if i == len(axs_pol_box) - 1 and dset == "ml-1m":
                         pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
-                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='lower center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.02])
+                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='lower center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.01])
                         box_handles, box_labels = ax_box.get_legend_handles_labels()
                         fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_pol_box.get_legend().remove()
