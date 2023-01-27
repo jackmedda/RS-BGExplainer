@@ -836,6 +836,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
     gm_mi_data = []
     gm_wasser_data = []
+    gm_kl_data = []
     gm_dep_order = np.array(['Degree', 'Sparsity', 'Reachability'])
     m_dset_attr_groups = list(mds_gby.groups.keys())
     for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
@@ -909,6 +910,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
                     mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
                     wd_res = [np.inf] * len(gm_dep_order)
+                    kl_res = [0] * len(gm_dep_order)
 
                     degree_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
                         gm_dgdf.loc[:, ['Degree']].to_numpy()
@@ -919,6 +921,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     for gm_i, gm in enumerate(gm_dep_order):
                         wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
                         wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
+                        kl_res[gm_i] = scipy.stats.entropy(gm_dgdf.loc[:, gm], gm_dgdf.loc[:, '# Del Edges'])
 
                     for mi_i in range(args.iterations):
                         mi_res[mi_i] = sk_feats.mutual_info_regression(
@@ -929,6 +932,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     mi_res = np.median(mi_res, axis=0)
                     gm_mi_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
                     gm_wasser_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *wd_res])
+                    gm_kl_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *kl_res])
 
                 for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
                     gm_policy_data = gm_data.setdefault(graph_metric, [])
@@ -1061,7 +1065,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         )
     plt.close("all")
 
-    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data], ["mi", "wd"]):
+    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data, gm_kl_data], ["mi", "wd", "kl"]):
         gm_dep_df = pd.DataFrame(
             gm_dep_data,
             columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
