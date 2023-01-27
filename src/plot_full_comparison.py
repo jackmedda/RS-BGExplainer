@@ -923,7 +923,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
                         wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
                         kl_res[gm_i] = scipy.stats.entropy(
-                            gm_dgdf.loc[:, gm] + kl_eps, gm_dgdf.loc[:, '# Del Edges'] + kl_eps, base=2
+                            gm_dgdf.loc[:, '# Del Edges'] + kl_eps, gm_dgdf.loc[:, gm] + kl_eps, base=2
                         )
 
                     for mi_i in range(args.iterations):
