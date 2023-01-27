@@ -1340,7 +1340,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     ax_pol_box.get_legend().remove()
                     ax_box.get_legend().remove()
 
-                    if dset == 'insurance':
+                    if dset != 'insurance':
                         ax_pol_box.tick_params('x', bottom=False, labelbottom=False)
 
                 if (sens_attr, dset) in plot_table_df_bar_gby.groups:
