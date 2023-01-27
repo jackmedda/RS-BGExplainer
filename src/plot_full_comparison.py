@@ -836,7 +836,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
     gm_mi_data = []
     gm_wasser_data = []
-    gm_dep_order = ['Degree', 'Sparsity', 'Reachability']
+    gm_dep_order = np.array(['Degree', 'Sparsity', 'Reachability'])
     m_dset_attr_groups = list(mds_gby.groups.keys())
     for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
         gm_data = {}
@@ -889,8 +889,13 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         graph_stats_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
                         for gm in gm_dep_order:
                             gm_str = f"Avg. {gm} per user"
-                            gm_stat_dg = "" if gm_str not in dsets_df.index else dsets_df.loc[gm_str, _dataset]
-                            gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
+                            if gm_str not in dsets_df.index:
+                                gm_stat_dg = ""
+                                gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
+                            else:
+                                gm_stat_dg = dsets_df.loc[gm_str, _dataset]
+                                if _s_attr in gm_stat_dg:
+                                    continue
 
                             gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
                                 lambda x: f"{x['Demo Group']} : {x[gm]:.1f}\%", axis=1
@@ -916,9 +921,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
 
                     for mi_i in range(args.iterations):
+                        import pdb; pdb.set_trace()
                         mi_res[mi_i] = sk_feats.mutual_info_regression(
-                            gm_dgdf.loc[:, gm_dep_order],
-                            gm_dgdf.loc[:, '# Del Edges'],
+                            np.c_[degree_scaled, gm_dgdf.loc[:, gm_dep_order[gm_dep_order != 'Degree']].values],
+                            n_del_edges_scaled,
                             n_neighbors=3
                         )
                     mi_res = np.median(mi_res, axis=0)
