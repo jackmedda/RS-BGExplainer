@@ -563,7 +563,7 @@ else:
         model_name = model.__class__.__name__
         sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
         cf_topk = config['cf_topk']
-        policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'][p]])
+        policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'].get(p, False)])
         incdisp[(dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
         all_batch_exps[dataset_name] = batch_exp
 
