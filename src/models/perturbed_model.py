@@ -6,6 +6,8 @@ import src.utils.utils as utils
 
 
 class PerturbedModel(object):
+    RANDOM_POLICY = 'RANDOM'
+
     # missing attributes are obtained by multiple inheritance
     def __init__(self, config, adv_group=None, filtered_users=None):
         self.num_all = self.n_users + self.n_items
@@ -21,6 +23,7 @@ class PerturbedModel(object):
         self.pred_same = config['pred_same']
 
         self.edge_additions = config['edge_additions']
+        self.random_perturb_p = config['random_perturbation_p'] or 0.05
         self.P_symm = None
         self.mask_sub_adj = None
         self.force_removed_edges = None
@@ -28,7 +31,13 @@ class PerturbedModel(object):
         self.D_indices = None
 
         self.adv_group = adv_group
-        self.filtered_users: torch.Tensor = filtered_users.to(self.device) if filtered_users is not None else None
+        self.filtered_users = filtered_users
+        if self.filtered_users is not None:
+            if isinstance(self.filtered_users, str):
+                if self.filtered_users != self.RANDOM_POLICY:
+                    raise AttributeError(f'filtered_users can be a tensor of user ids or `{self.RANDOM_POLICY}`')
+            else:
+                self.filtered_users = self.filtered_users.to(self.device)
         self.mask_filter = None
 
         self.Graph, self.sub_Graph = utils.get_adj_matrix(
@@ -39,7 +48,6 @@ class PerturbedModel(object):
 
         self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
 
-        # TODO: the code that generates the mask and mask_filter takes too much memory. Check to reduce it
         self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
@@ -62,7 +70,7 @@ class PerturbedModel(object):
             self.mask_sub_adj = self.sub_Graph
             self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device)
 
-            if self.filtered_users is not None:
+            if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
                 try:
                     user_filter = torch.isin(self.mask_sub_adj, self.filtered_users).any(dim=0)
                 except AttributeError:
@@ -77,7 +85,7 @@ class PerturbedModel(object):
             if config['explainer_policies']['force_removed_edges']:
                 self.force_removed_edges = torch.FloatTensor(torch.ones(P_symm_size)).to(self.device)
 
-        self.P_symm = nn.Parameter(torch.FloatTensor(getattr(torch, P_symm_func)(P_symm_size)) - P_symm_init)
+        self.P_symm = nn.Parameter(torch.FloatTensor(getattr(torch, P_symm_func)(P_symm_size)) + P_symm_init)
 
         self._P_loss = None
         self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
@@ -121,8 +129,19 @@ class PerturbedModel(object):
     def perturbate_adj_matrix(self, Graph, pred=False):
         P_symm = self.P_symm
         if not self.edge_additions and self.force_removed_edges is not None:
-            self.force_removed_edges = (torch.sigmoid(self.P_symm.detach()) >= 0.5).float() * self.force_removed_edges
-            P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
+            if self.filtered_users == self.RANDOM_POLICY:
+                if not pred:
+                    p = self.random_perturb_p
+                    random_perb = torch.FloatTensor(
+                        np.random.choice([0, 1], size=self.force_removed_edges.size(0), p=[p, 1 - p])
+                    ).to(self.force_removed_edges.device)
+                    self.force_removed_edges = self.force_removed_edges * random_perb
+                # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
+                P_symm = self.force_removed_edges - 1
+            else:
+                self.force_removed_edges = (torch.sigmoid(self.P_symm.detach()) >= 0.5).float() * self.force_removed_edges
+                # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
+                P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
 
         perturb_matrix, P_loss = utils.perturbate_adj_matrix(
             Graph,

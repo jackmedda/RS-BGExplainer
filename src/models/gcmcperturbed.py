@@ -28,7 +28,6 @@ class GCMCPerturbed(PerturbedModel, GCMC):
             dense_output_dim=self.dense_output_dim,
             drop_prob=self.dropout_prob,
             device=self.device,
-            perturb_adj=self.P_symm,
             edge_additions=self.edge_additions,
             mask_sub_adj=self.mask_sub_adj,
             only_subgraph=self.only_subgraph,
@@ -37,9 +36,6 @@ class GCMCPerturbed(PerturbedModel, GCMC):
             sparse_feature=self.sparse_feature
         ).to(self.device)
         self.loss_function = utils.NDCGApproxLoss()
-
-    def P_loss(self):
-        return self.GcEncoder.P_loss
 
     def forward(self, user_X, item_X, user, item, pred=False):
         # Graph autoencoders are comprised of a graph encoder model and a pairwise decoder model.
@@ -80,7 +76,6 @@ class GcEncoderPerturbated(GcEncoder):
         dense_output_dim,
         drop_prob,
         device,
-        perturb_adj,
         edge_additions,
         mask_sub_adj,
         only_subgraph,
@@ -108,7 +103,6 @@ class GcEncoderPerturbated(GcEncoder):
         )
         self.num_all = self.num_users + self.num_items
 
-        self.P_symm = perturb_adj
         self.edge_additions = edge_additions
         self.P_hat_symm, self.P = None, None
 

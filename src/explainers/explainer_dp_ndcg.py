@@ -96,6 +96,7 @@ class DPBGExplainer:
 
         self.increase_disparity = config['explainer_policies']['increase_disparity']
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
+        self.random_perturbation = config['explainer_policies']['random_perturbation']
 
         wandb.config.update(config.final_config_dict)
         # wandb.watch(self.cf_model)
@@ -451,12 +452,16 @@ class DPBGExplainer:
             filtered_users = batched_data
 
         self.determine_adv_group(batched_data, rec_model_topk)
-
-        if self.group_deletion_constraint:
+        if self.group_deletion_constraint and self.random_perturbation:
+            raise NotImplementedError('The policies `group_deletion_constraint` and `random_perturbation` cannot be both True')
+        elif self.group_deletion_constraint:
             if filtered_users is None:
                 filtered_users = batched_data
 
             filtered_users = filtered_users[self.dataset.user_feat[self.sensitive_attribute][filtered_users] == self.adv_group]
+        elif self.random_perturbation:
+            # overwrites `increase_disparity` policy
+            filtered_users = exp_models.PerturbedModel.RANDOM_POLICY
 
         self.initialize_cf_model(filtered_users=filtered_users)
 

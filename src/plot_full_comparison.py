@@ -454,7 +454,8 @@ print(args)
 
 policy_map = {
     'force_removed_edges': 'MonDel',   # Monotonic Deletions
-    'group_deletion_constraint': 'DelCons'  # Deletion Constraint
+    'group_deletion_constraint': 'DelCons',  # Deletion Constraint
+    'random_perturbation': 'Random'  # Random Perturbation
 }
 
 dataset_map = {

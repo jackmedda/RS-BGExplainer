@@ -87,8 +87,11 @@ early_stopping:
 previous_ndcg: False
 previous_batch_LR_scaling: False
 
+random_perturbation_p: 0.0001
+
 # Policies
 explainer_policies:
     increase_disparity: False
     force_removed_edges: True
-    group_deletion_constraint: True
+    group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
+    random_perturbation: True
