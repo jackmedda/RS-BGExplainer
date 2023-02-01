@@ -109,7 +109,7 @@ def filter_min_interactions(interactions, by='user_id', min_interactions=20):
 
 if __name__ == "__main__":
     r"""
-    python -m src.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type timestamp --user_field user_id:token --item_field course_id:token --time_field timestamp:float --in_filepath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_5_America\coco_5_America.inter --user_filepath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_5_America\coco_5_America.user --out_folderpath C:\Users\Giacomo\PycharmProjects\BDExplainer\dataset\coco_7_America\ --dataset_name coco_7_America --min_interactions 7
+    python -m src.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type timestamp --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset\lastfm_1k\lastfm_1k.inter --user_filepath dataset\lastfm_1k\lastfm_1k.user --out_folderpath lastfm_1k\ --dataset_name lastfm_1k --min_interactions 20
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--in_filepath', required=True)

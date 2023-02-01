@@ -42,13 +42,6 @@ EXPS_COLUMNS = [
 def wandb_init(config, **kwargs):
     config['wandb_tags'] = [k for k in config['explainer_policies'] if config['explainer_policies'][k]]
 
-    wandb.init(
-        project="B-GEM",
-        entity="fairrec",
-        tags=config['wandb_tags'],
-        **kwargs
-    )
-
 
 def load_data_and_model(model_file, explainer_config_file=None):
     r"""Load filtered dataset, split dataloaders and saved model.
