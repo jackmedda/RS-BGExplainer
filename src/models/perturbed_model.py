@@ -143,7 +143,7 @@ class PerturbedModel(object):
                 # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
                 P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
 
-        perturb_matrix, P_loss = utils.perturbate_adj_matrix(
+        perturb_matrix, P_loss = utils.perturb_adj_matrix(
             Graph,
             P_symm,
             self.mask_sub_adj,

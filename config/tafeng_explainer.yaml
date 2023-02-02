@@ -23,7 +23,7 @@ cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
 cf_topk: 10
 
-# loss weight for the fairness loss (used only if `explain_fairness` == True)
+# loss weight for the fairness loss
 fair_beta: 0.5
 dropout_prob: 0.3
 
@@ -52,8 +52,6 @@ not_user_sub_matrix: False
 # does not perform perturbation, uses only the subgraph of the user to `explain` (used for analysis)
 only_subgraph: False
 
-# if to use fairness loss
-explain_fairness: True
 # sensitive attributes to be used in the fairness losses and for following analysis
 sensitive_attribute: age
 

@@ -19,17 +19,6 @@ from src.explainers.explainer_dp_ndcg import DPBGExplainer
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
-def load_already_done_exps_user_id(base_exps_file):
-    """
-    Only used for `individual` or 'group' explanations. It prevents the code from re-explaining already explained users.
-    :param base_exps_file:
-    :return:
-    """
-    files = [f for f in os.listdir(base_exps_file) if re.match(r'user_\d+', f) is not None]
-
-    return [int(_id) for f in files for _id in f.split('_')[1].split('.')[0].split('#')]
-
-
 def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file=""):
     """
     return the filepath where explanations are saved
@@ -42,12 +31,10 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
     epochs = config['cf_epochs']
     model_name = model_name or config['model']
     base_exps_file = os.path.join(script_path, 'dp_ndcg_explanations', config['dataset'], model_name)
-    if config['explain_fairness']:
-        fair_metadata = config["sensitive_attribute"]
-        fair_loss = 'FairDP'
-        base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
-    else:
-        base_exps_file = os.path.join(base_exps_file, 'pred_explain', f"epochs_{epochs}")
+
+    fair_metadata = config["sensitive_attribute"]
+    fair_loss = 'FairDP'
+    base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
@@ -147,7 +134,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
 def execute_explanation(model_file,
                         explainer_config_file=os.path.join("config", "explainer.yaml"),
-                        load=False,
                         config_id=-1,
                         verbose=False):
     # load trained model, config, dataset
@@ -166,34 +152,26 @@ def execute_explanation(model_file,
 
     base_exps_filepath = get_base_exps_filepath(config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file)
 
-    if not load:
-        kwargs = dict(
-            verbose=verbose,
-            explainer_config_file=explainer_config_file
-        )
+    kwargs = dict(
+        verbose=verbose,
+        explainer_config_file=explainer_config_file
+    )
 
-        explain(
-            config,
-            model,
-            train_data.dataset,
-            rec_data,
-            test_data,
-            base_exps_filepath,
-            **kwargs
-        )
-    else:
-        with open(os.path.join(base_exps_filepath, "config.pkl"), 'rb') as config_file:
-            config = pickle.load(config_file)
-
-    # exps_data = utils.load_exps_file(base_exps_filepath)
-    # save_exps_df(base_exps_filepath, exps_data)
+    explain(
+        config,
+        model,
+        train_data.dataset,
+        rec_data,
+        test_data,
+        base_exps_filepath,
+        **kwargs
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_file', required=True)
     parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
-    parser.add_argument('--load', action='store_true')
     parser.add_argument('--config_id', default=-1)
     parser.add_argument('--verbose', action='store_true')
 
@@ -203,6 +181,5 @@ if __name__ == "__main__":
 
     execute_explanation(args.model_file,
                         explainer_config_file=args.explainer_config_file,
-                        load=args.load,
                         config_id=args.config_id,
                         verbose=args.verbose)

@@ -1,5 +1,6 @@
 # %%
 import os
+import gc
 import pickle
 import argparse
 import inspect
@@ -68,7 +69,8 @@ def update_plot_data(_test_df_data, _rec_df_data, additional_best_cols=None):
         test_zip_data = [
             test_uid,
             [sens_attr.title().replace('_', ' ')] * len(test_uid),
-            user_df.set_index(uid_field).loc[test_uid, sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr]),
+            user_df.set_index(uid_field).loc[test_uid, sens_attr].map(attr_map.__getitem__).map(
+                real_group_map[sens_attr]),
             [model_name] * len(test_uid),
             [dataset_name] * len(test_uid),
             [metric.upper()] * len(test_uid)
@@ -155,17 +157,20 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
             ).set_index(['n_del_edges', 'user_id']),
             on=['n_del_edges', 'user_id']
         ).join(user_df.set_index(uid_field), on='user_id')
+        exp_test_df[sens_attr] = exp_test_df[sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr])
     exp_rec_df = exp_rec_df.join(
         pd.DataFrame(
             result_rec_df_data, columns=['n_del_edges', 'user_id', 'Value', 'Metric']
         ).set_index(['n_del_edges', 'user_id']),
         on=['n_del_edges', 'user_id']
     ).join(user_df.set_index(uid_field), on='user_id')
+    exp_rec_df[sens_attr] = exp_rec_df[sens_attr].map(attr_map.__getitem__).map(real_group_map[sens_attr])
 
     _test_result = exp_test_df.pop("Value") if exp_test_df is not None else None
     _rec_result = exp_rec_df.pop("Value")
 
-    test_orig_total_metric = best_test_exp_result[model_name][metric][:, -1] if best_test_exp_result is not None else None
+    test_orig_total_metric = best_test_exp_result[model_name][metric][:,
+                             -1] if best_test_exp_result is not None else None
     rec_orig_total_metric = best_rec_exp_result[model_name][metric][:, -1]
 
     unique_test_del_edges = len(test_result_all_data[model_dp_s]) if test_result_all_data is not None else None
@@ -217,10 +222,13 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     )
 
 
-def create_table_best_explanations_per_group(_metric_df):
+def create_del_table_best_explanations_per_group(_metric_df):
     nop_mask = _metric_df["Policy"] == no_pert_col
     metr_df_nop = _metric_df[nop_mask].copy()
     metr_df_p = _metric_df[~nop_mask].copy()
+
+    metr_df_nop = metr_df_nop[["Dataset", "Model", "Policy", "Sens Attr", "Demo Group", metric]]
+    metr_df_p = metr_df_p[["Dataset", "Model", "Policy", "Sens Attr", "Demo Group", metric]]
 
     metr_df_nop["Status"] = "Before"
     metr_df_p["Status"] = "After"
@@ -295,7 +303,100 @@ def create_table_best_explanations_per_group(_metric_df):
             final_table_df = pd.concat(final_table_df, axis=1)
             final_table_df.columns = final_table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1])))
             table_out_bar_df = pd.melt(final_table_df, ignore_index=False).reset_index()
-            table_out_bar_df.to_csv(os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
+            table_out_bar_df.to_csv(
+                os.path.join(plots_path, f"total_del_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
+            final_table_df.columns.names = [''] * len(final_table_df.columns.names)
+            final_table_df.index = final_table_df.index.map(lambda x: (dataset_map[x[0]], *x[1:]))
+            final_table_df.replace('%', '\%', regex=True).to_latex(
+                os.path.join(plots_path, f"total_del_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.tex"),
+                multicolumn_format="c",
+                escape=False
+            )
+
+
+def create_table_best_explanations_per_group(_metric_df):
+    nop_mask = _metric_df["Policy"] == no_pert_col
+    metr_df_nop = _metric_df[nop_mask].copy()
+    metr_df_p = _metric_df[~nop_mask].copy()
+
+    metr_df_nop = metr_df_nop[["Dataset", "Model", "Policy", "Sens Attr", "Demo Group", metric]]
+    metr_df_p = metr_df_p[["Dataset", "Model", "Policy", "Sens Attr", "Demo Group", metric]]
+
+    metr_df_nop["Status"] = "Before"
+    metr_df_p["Status"] = "After"
+
+    metr_df = pd.concat(
+        [metr_df_p] + [metr_df_nop.copy().replace(no_pert_col, p) for p in metr_df_p.Policy.unique()],
+        ignore_index=True
+    )
+
+    metr_df_mean = metr_df.groupby(
+        ["Dataset", "Model", "Policy", "Status", "Sens Attr", "Demo Group"]
+    ).mean()
+
+    metric_col = metr_df_mean.columns[0]
+
+    metr_stest = {}
+    metr_df_gb = metr_df.groupby(
+        ["Dataset", "Model", "Policy", "Sens Attr"]
+    )
+    for mdf_stat_cols, mdf_stat in metr_df_gb:
+        stat_dg_gby = mdf_stat.groupby("Demo Group")
+        s_attr_stat = dict.fromkeys(stat_dg_gby.groups.keys())
+        tot_val = dict.fromkeys(["Before", "After"])
+        for stat_dg, stat_dg_df in stat_dg_gby:
+            after_mask = stat_dg_df["Status"] == "After"
+            after_stat_val = stat_dg_df.loc[after_mask, metric_col]
+            before_stat_val = stat_dg_df.loc[~after_mask, metric_col]
+            for stat_status, stat_status_val in zip(["Before", "After"], [before_stat_val, after_stat_val]):
+                if tot_val[stat_status] is None:
+                    tot_val[stat_status] = stat_status_val
+                else:
+                    tot_val[stat_status] = (tot_val[stat_status].to_numpy() + stat_status_val.to_numpy()) / 2
+            s_attr_stat[stat_dg] = scipy.stats.ttest_rel(before_stat_val, after_stat_val)
+        s_attr_stat["Total"] = scipy.stats.ttest_rel(*tot_val.values())
+        metr_stest[mdf_stat_cols] = s_attr_stat
+
+    metr_df_pivot = metr_df_mean.reset_index().pivot(
+        index=["Dataset", "Model", "Policy"],
+        columns=["Sens Attr", "Demo Group", "Status"],
+        values=metric_col
+    )
+
+    table_df = metr_df_pivot.reindex(
+        ['Gender', 'Age', 'User Wide Zone'], axis=1, level=0
+    ).reindex(
+        ["M", "F", "Y", "O", "America", "Other"], axis=1, level=1
+    ).reindex(
+        ['Before', 'After'], axis=1, level=2
+    )
+    level_attrs = ["Gender", "Age", "User Wide Zone"]
+    attrs_demo_groups = [["M", "F"], ["Y", "O"], ["America", "Other"]]
+
+    def relative_change(row, l_attr, row_dg):
+        v1, v2 = row.loc["After"].item(), row.loc["Before"].item()
+        ch = v1 - v2
+        stat_pv = metr_stest[(*row.name, l_attr)][row_dg].pvalue
+        stat_s = '*' if stat_pv < P_VALUE else '\hspace{3pt}'
+        zeros = "04.1f" if ch >= 0 else "05.1f"
+        return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:{zeros}}%)'
+
+    for level_attr, demo_groups in zip(level_attrs, attrs_demo_groups):
+        final_table_df = []
+        if level_attr in table_df:
+            table_total_df = (table_df[(level_attr, demo_groups[0])] + table_df[(level_attr, demo_groups[1])]) / 2
+            for tab_dg in demo_groups + ["Total"]:
+                curr_tab_df = table_df[(level_attr, tab_dg)] if tab_dg in demo_groups else table_total_df
+
+                tab_dg_df = curr_tab_df.apply(lambda row: relative_change(row, level_attr, tab_dg), axis=1).to_frame()
+                tab_dg_df.columns = pd.MultiIndex.from_product([[level_attr], [tab_dg]])
+
+                final_table_df.append(tab_dg_df)
+            final_table_df = pd.concat(final_table_df, axis=1)
+            final_table_df.columns = final_table_df.columns.map(lambda x: (x[0], group_name_map.get(x[1], x[1])))
+            table_out_bar_df = pd.melt(final_table_df, ignore_index=False).reset_index()
+            table_out_bar_df.to_csv(
+                os.path.join(plots_path, f"total_table_{level_attr}_{exp_data_name}_{metric}_best_epoch.csv"))
             final_table_df.columns.names = [''] * len(final_table_df.columns.names)
             final_table_df.index = final_table_df.index.map(lambda x: (dataset_map[x[0]], *x[1:]))
             final_table_df.replace('%', '\%', regex=True).to_latex(
@@ -437,10 +538,12 @@ def clean_quantile_ax(_fig, _ax, _model, iteration, max_iteration, bbox_to_ancho
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
 parser.add_argument('--explainer_config_files', required=True, nargs='+', type=str)
-parser.add_argument('--iterations', default=100)
+parser.add_argument('--iterations', default=100, type=int)
 parser.add_argument('--overwrite_plot_data', '--opd', action="store_true")
 parser.add_argument('--overwrite_extracted_data', '--oed', action="store_true")
 parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
+parser.add_argument('--utility_metrics', '--um', nargs='+', default=None)
+parser.add_argument('--add_plot_table', '--apt', action="store_true")
 
 args = parser.parse_args()
 
@@ -452,10 +555,17 @@ script_path = os.path.join(script_path, 'src') if 'src' not in script_path else 
 
 print(args)
 
+mondel_pol = 'GNNUERS'
+delcons_pol = 'GNNUERS+CN'
+random_pol = 'RND-P'
+no_pert_col = "NP"  # NoPerturbation
+
+policy_order = [mondel_pol, delcons_pol, random_pol, no_pert_col]
+
 policy_map = {
-    'force_removed_edges': 'MonDel',   # Monotonic Deletions
-    'group_deletion_constraint': 'DelCons',  # Deletion Constraint
-    'random_perturbation': 'Random'  # Random Perturbation
+    'force_removed_edges': mondel_pol,  # Monotonic Deletions
+    'group_deletion_constraint': delcons_pol,  # Deletion Constraint
+    'random_perturbation': random_pol  # Random Perturbation
 }
 
 dataset_map = {
@@ -468,7 +578,6 @@ dataset_map = {
     "rent_the_runway": "Rent The Runway",
     "tafeng": "Ta Feng"
 }
-
 
 real_group_map = {
     'gender': {'M': 'M', 'F': 'F'},
@@ -491,8 +600,6 @@ colors = {
 }
 
 P_VALUE = 0.05
-
-no_pert_col = "NoPerturbation"
 
 exp_epochs, config_ids, datasets_list, models_list, sens_attrs = [], [], [], [], []
 for exp_config_file in args.explainer_config_files:
@@ -537,6 +644,9 @@ if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and \
     with open(os.path.join(plots_path, 'del_edges.pkl'), 'rb') as f:
         del_edges = pickle.load(f)
 
+    with open(os.path.join(plots_path, 'all_del_edges.pkl'), 'rb') as f:
+        all_del_edges = pickle.load(f)
+
     with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'rb') as f:
         all_batch_exps = pickle.load(f)
 
@@ -550,6 +660,7 @@ else:
     # %%
     incdisp = {}
     del_edges = {}
+    all_del_edges = {}
     no_policies = set()
     all_batch_exps = {}
     train_datasets = {}
@@ -563,8 +674,12 @@ else:
         model_name = model.__class__.__name__
         sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
         cf_topk = config['cf_topk']
-        policy = '+'.join([pm for p, pm in policy_map.items() if config['explainer_policies'].get(p, False)])
-        incdisp[(dataset_name, model_name)] = 'IncDisp' if config['explainer_policies']['increase_disparity'] else ''  # Increase Disparity
+        for p, pm in policy_map.items():
+            if config['explainer_policies'].get(p, False):  # if next policies are true `policy` is overwritten
+                policy = pm
+        policy = random_pol if random_pol in policy else policy
+        incdisp[(dataset_name, model_name)] = 'IncDisp' if config['explainer_policies'][
+            'increase_disparity'] else ''  # Increase Disparity
         all_batch_exps[dataset_name] = batch_exp
 
         train_datasets[dataset_name] = train_data.dataset
@@ -588,7 +703,7 @@ else:
         f_idx, m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
         user_num, item_num = dataset.user_num, dataset.item_num
 
-        config['metrics'] = ['Recall', 'NDCG', 'MRR', 'Hit']  # force all these metrics if does not have them in its config
+        config['metrics'] = args.utility_metrics or ['Recall', 'NDCG', 'MRR', 'Hit']
         evaluator = Evaluator(config)
 
         metrics = evaluator.metrics
@@ -620,22 +735,6 @@ else:
             additional_cols=additional_best_cols[1:]
         )
 
-        for exp_df in [best_test_exp_df, best_rec_exp_df]:
-            if exp_df is not None:
-                set_dist = np.array([
-                    cf_topk - len(set(orig) & set(pred))
-                    for orig, pred in zip(exp_df[model_dp_s]['topk_pred'], exp_df[model_dp_s]['topk_pred'])
-                ])
-                exp_df[model_dp_s]['set_dist'] = set_dist
-
-        # the deleted edges are repeated for each row, so take the first is the same
-        test_del_edges = best_test_exp_df[model_dp_s]['del_edges'].iloc[0].tolist() if best_test_exp_df is not None else None
-        rec_del_edges = best_rec_exp_df[model_dp_s]['del_edges'].iloc[0].tolist()
-        for exp_data_name, exp_del_edges in zip(["test", exp_rec_data], [test_del_edges, rec_del_edges]):
-            if exp_del_edges is not None:
-                for policy_type in [no_pert_col, policy]:
-                    del_edges[(exp_data_name, dataset_name, model_name, policy_type, sens_attr.title().replace('_', ' '))] = exp_del_edges
-
         test_uid = best_test_exp_df[model_dp_s]['user_id'].to_numpy() if best_test_exp_df is not None else None
         rec_uid = best_rec_exp_df[model_dp_s]['user_id'].to_numpy()
 
@@ -662,15 +761,26 @@ else:
             overwrite=args.overwrite_extracted_data
         )
 
+        for all_exp_data_name, all_exp_del_edges in zip(["test", exp_rec_data], [all_exp_test_dfs, all_exp_rec_dfs]):
+            if all_exp_del_edges is not None:
+                for all_n_del_edges, all_n_del_edges_df in all_exp_del_edges[model_dp_s].groupby('n_del_edges'):
+                    for policy_type in [no_pert_col, policy]:
+                        all_del_edges[
+                            (all_exp_data_name, dataset_name, model_name, policy_type,
+                             sens_attr.title().replace('_', ' '), all_n_del_edges)
+                        ] = all_n_del_edges_df['del_edges'].iloc[0].tolist()
+
         for metric in metrics:
-            group_edge_del = update_plot_data(
-                test_df_data,
-                rec_df_data,
-                additional_best_cols=additional_best_cols + ["set_dist"]
-            )
+            # group_edge_del = update_plot_data(
+            #     test_df_data,
+            #     rec_df_data,
+            #     additional_best_cols=additional_best_cols + ["set_dist"]
+            # )
             update_plot_del_data(test_del_df_data, rec_del_df_data)
 
         no_policies.add((dataset_name, model_name, sens_attr))
+
+        gc.collect()
 
     cols = ['user_id', 'Sens Attr', 'Demo Group', 'Model', 'Dataset', 'Metric', 'Value', 'Policy',
             'Edit Dist', 'Set Dist']
@@ -722,6 +832,9 @@ else:
     with open(os.path.join(plots_path, 'del_edges.pkl'), 'wb') as f:
         pickle.dump(del_edges, f)
 
+    with open(os.path.join(plots_path, 'all_del_edges.pkl'), 'wb') as f:
+        pickle.dump(all_del_edges, f)
+
     with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'wb') as f:
         pickle.dump(all_batch_exps, f)
 
@@ -742,12 +855,12 @@ SMALL_SIZE = 12
 MEDIUM_SIZE = 14
 BIGGER_SIZE = 16
 
-plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
-plt.rc('axes', titlesize=BIGGER_SIZE)     # fontsize of the axes title
-plt.rc('axes', labelsize=BIGGER_SIZE)    # fontsize of the x and y labels
-plt.rc('xtick', labelsize=BIGGER_SIZE)    # fontsize of the tick labels
-plt.rc('ytick', labelsize=BIGGER_SIZE)    # fontsize of the tick labels
-plt.rc('legend', fontsize=BIGGER_SIZE)    # legend fontsize
+plt.rc('font', size=SMALL_SIZE)  # controls default text sizes
+plt.rc('axes', titlesize=BIGGER_SIZE)  # fontsize of the axes title
+plt.rc('axes', labelsize=BIGGER_SIZE)  # fontsize of the x and y labels
+plt.rc('xtick', labelsize=BIGGER_SIZE)  # fontsize of the tick labels
+plt.rc('ytick', labelsize=BIGGER_SIZE)  # fontsize of the tick labels
+plt.rc('legend', fontsize=BIGGER_SIZE)  # legend fontsize
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
 for _dataset in unique_datasets:
@@ -781,444 +894,63 @@ if exp_rec_data != "test":
     test_df["Policy"] = test_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
     test_del_df["Policy"] = test_del_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
 
+old_new_policy_map = {
+    'MonDel': mondel_pol,
+    'MonDel+DelCons': delcons_pol,
+    'MonDel+Random': random_pol,
+    'NoPerturbation': no_pert_col
+}
+rec_df["Policy"] = rec_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
+rec_del_df["Policy"] = rec_del_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
+if exp_rec_data != "test":
+    test_df["Policy"] = test_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
+    test_del_df["Policy"] = test_del_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
+
 qnt_size = 100
 ch_quantile = 95
 hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
-unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
+if not rec_df.empty:
+    unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
+else:
+    unique_policies = sorted(rec_del_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
 for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
     if df is None or del_df is None:
         continue
 
-    gm_metrics = next(graph_metrics_dfs.values().__iter__()).columns
-    gm_metrics = gm_metrics[~gm_metrics.isin(['Node', '# Del Edges', 'Node Type'])]
-    fig_gm = {}
-    table_gm = []
-    for gm in gm_metrics:
-        fig_gm[gm] = {}
-        for gm_s_attr in unique_sens_attrs:
-            fig_gm[gm][gm_s_attr] = plt.figure(figsize=(40, 15), constrained_layout=True)
-            fig_gm[gm][gm_s_attr].subfigures(len(unique_datasets), 1)
-            for dset, subfig in zip(unique_datasets, fig_gm[gm][gm_s_attr].subfigs):
-                subfig.suptitle(dataset_map[dset])
-                subfig.subplots(1, len(unique_models), sharey=True)
-
-    fig_heat = {}
-    for heat_s_attr in unique_sens_attrs:
-        fig_heat[heat_s_attr] = plt.figure(figsize=(15, 8), constrained_layout=True)
-        fig_heat[heat_s_attr].subfigures(len(unique_datasets), 1)
-        len_pol = len(unique_policies[1:])
-
-        mosaic = list(map(str, range(len_pol * len(unique_models))))
-        for dset, subfig in zip(unique_datasets, fig_heat[heat_s_attr].subfigs):
-            subfig.suptitle(dataset_map[dset])
-            subfig.subplot_mosaic(
-                f"""
-                {'.'.join([''.join(mosaic[i * len_pol:(i + 1) * len_pol]) for i in range(len(unique_models))])}
-                """,
-                sharey=True
-            )
-
-    fig_pca = {}
-    for pca_s_attr in unique_sens_attrs:
-        fig_pca[pca_s_attr] = plt.figure(figsize=(15, 22), constrained_layout=True)
-        fig_pca[pca_s_attr].subfigures(len(unique_datasets), 1)
-        for dset, subfig in zip(unique_datasets, fig_pca[pca_s_attr].subfigs):
-            subfig.suptitle(dataset_map[dset])
-            subfig.subplots(len(unique_models), len(unique_policies), sharex=True, sharey=True)
-
-    topk_dist_data = {}
-    for s_attr in unique_sens_attrs:
-        topk_dist_data[s_attr] = []
-
-    mds_gby = df.groupby(["Model", "Dataset", "Sens Attr"])
-    del_mds_gby = del_df.groupby(["Model", "Dataset", "Sens Attr"])
-    _metr_df_gby = df.groupby("Metric")
     _metr_del_df_gby = del_df.groupby("Metric")
 
-    gm_mi_data = []
-    gm_wasser_data = []
-    gm_kl_data = []
-    gm_dep_order = np.array(['Degree', 'Sparsity', 'Reachability'])
-    m_dset_attr_groups = list(mds_gby.groups.keys())
-    for groups_it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_groups):
-        gm_data = {}
-        len_pol = len(unique_policies[1:])
-        for _policy in unique_policies:
-            if _policy != no_pert_col:  # without perturbation that are no perturbed edges
-                de = np.array(del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)])
-
-                pert_train_dataset = utils.get_dataset_with_perturbed_edges(de.copy(), train_datasets[_dataset])
-                train_adj = train_datasets[_dataset].inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
-                pert_train_adj = pert_train_dataset.inter_matrix(form='csr').astype(np.float32)[1:, 1:].todense()
-
-                heat_ax = fig_heat[_s_attr.lower().replace(' ', '_')].subfigs[
-                    unique_datasets.index(_dataset)].axes[
-                    unique_models.index(_model) * len(unique_policies[1:]) + unique_policies[1:].index(_policy)
-                ]
-
-                kernel = tuple(map(lambda x: max(min(x, 40), round(x / 40)), train_adj.shape))
-                del_heatmap = utils.rolling_window(train_adj - pert_train_adj, kernel, kernel, op="sum")
-
-                sns.heatmap(del_heatmap, ax=heat_ax, cbar=False, xticklabels=False, yticklabels=False)
-                heat_ax.set_xlabel(_policy)
-
-                if len_pol % 2 == 0 and unique_policies[1:].index(_policy) == len_pol // 2 - 1:
-                    heat_ax.set_title(_model, loc='right')
-                elif len_pol % 2 == 1 and unique_policies[1:].index(_policy) == (len_pol - 1) // 2:
-                    heat_ax.set_title(_model)
-
-                # remove user and item id 0 padding
-                de -= 1
-                de[1] -= 1
-
-                graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
-                # each edge is counted once for one node and once for the other (it is equal to a bincount)
-                graph_mdf['# Del Edges'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
-
-                s_attr_df = df.set_index(['Dataset', 'Sens Attr', 'Model', 'Policy', 'Metric']).loc[
-                    tuple([_dataset, _s_attr, _model, _policy] + ['NDCG'])  # metric not relevant here
-                ].copy(deep=True)
-                s_attr_df['user_id'] -= 1  # reindexing to zero
-                sens_gmdf = graph_mdf.join(
-                    s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
-                    on='Node'
-                ).fillna('Item')
-
-                dset_stats = os.path.join(script_path, os.pardir, f'dp_plots', 'datasets_stats.csv')
-                if os.path.exists(dset_stats):
-                    dsets_df = pd.read_csv(dset_stats, index_col=0)
-                    if _dataset in dsets_df.columns:
-                        graph_stats_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
-                        for gm in gm_dep_order:
-                            gm_str = f"Avg. {gm} per user"
-                            if gm_str not in dsets_df.index:
-                                gm_stat_dg = ""
-                            else:
-                                gm_stat_dg = dsets_df.loc[gm_str, _dataset]
-                                gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
-                                if _s_attr in gm_stat_dg:
-                                    continue
-
-                            gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
-                                lambda x: f"{x['Demo Group']} : {x[gm] * (100 if gm != 'Degree' else 1):.1f}\%", axis=1
-                            ).values)
-                            dsets_df.loc[gm_str, _dataset] = gm_stat_dg
-
-                            dsets_df.to_csv(dset_stats)
-
-                # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
-                # Paper that states how select number of neighbors, repetitions and usage of median
-                for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
-                    mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
-                    wd_res = [np.inf] * len(gm_dep_order)
-                    kl_res = [0] * len(gm_dep_order)
-                    kl_eps = 1e-8  # avoids NaN
-
-                    degree_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                        gm_dgdf.loc[:, ['Degree']].to_numpy()
-                    ).squeeze()
-                    n_del_edges_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                        gm_dgdf.loc[:, ['# Del Edges']].to_numpy()
-                    ).squeeze()
-                    for gm_i, gm in enumerate(gm_dep_order):
-                        wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
-                        wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
-                        kl_res[gm_i] = scipy.stats.entropy(
-                            gm_dgdf.loc[:, '# Del Edges'] + kl_eps, gm_dgdf.loc[:, gm] + kl_eps, base=2
-                        )
-
-                    for mi_i in range(args.iterations):
-                        mi_res[mi_i] = sk_feats.mutual_info_regression(
-                            np.c_[degree_scaled, gm_dgdf.loc[:, gm_dep_order[gm_dep_order != 'Degree']].values],
-                            n_del_edges_scaled,
-                            n_neighbors=3
-                        )
-                    mi_res = np.median(mi_res, axis=0)
-                    gm_mi_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
-                    gm_wasser_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *wd_res])
-                    gm_kl_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *kl_res])
-
-                for graph_metric in graph_mdf.columns[~graph_mdf.columns.isin(['Node', '# Del Edges', 'Node Type'])]:
-                    gm_policy_data = gm_data.setdefault(graph_metric, [])
-                    nt_gmdfby = graph_mdf.groupby('Node Type')
-                    for nt, node_type in enumerate(['User', 'Item']):
-                        nt_gmdf = nt_gmdfby.get_group(node_type)
-                        gm_values = nt_gmdf.sort_values(graph_metric)['# Del Edges']
-                        gm_policy_data.extend([
-                            (i, pct.sum() * ((-1) ** nt), node_type, _policy)
-                            for i, pct in enumerate(np.array_split(gm_values, qnt_size))
-                        ])
-
-                del_mds_df = del_mds_gby.get_group((_model, _dataset, _s_attr))
-                topk_dist_data[_s_attr.lower().replace(' ', '_')].append(
-                    [_model, _dataset, _s_attr, del_mds_df]
-                )
-
-            pca_ax = fig_pca[_s_attr.lower().replace(' ', '_')].subfigs[unique_datasets.index(_dataset)].axes[
-                unique_models.index(_model) * len(unique_policies) + unique_policies.index(_policy)
-            ]
-            try:
-                pca_del_edges = del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr)]
-            except KeyError:
-                pca_del_edges = del_edges[(exp_data_name, _dataset, _model, "NoPolicy", _s_attr)]
-            train_pca, pert_train_pca = utils.get_decomposed_adj_matrix(
-                pca_del_edges,
-                train_datasets[_dataset]
-            )
-
-            f_idx = (train_datasets[_dataset].field2id_token[_s_attr.lower().replace(' ', '_')] == 'F').nonzero()[0][0]
-            sens_data = train_datasets[_dataset].user_feat[_s_attr.lower().replace(' ', '_')].numpy()[1:]
-            sens_data = np.array(
-                [group_name_map[real_group_map[_s_attr.lower().replace(' ', '_')]['F' if idx == f_idx else 'M']]
-                 for idx in sens_data]
-            )
-
-            if _policy != no_pert_col:
-                changes = np.abs(train_pca - pert_train_pca)
-                mask = changes > np.percentile(changes, ch_quantile)
-                rel_chs, = np.bitwise_or.reduce(mask, axis=1).nonzero()
-                irrel_chs, = np.bitwise_or.reduce(~mask, axis=1).nonzero()
-
-                sns.scatterplot(x=pert_train_pca[irrel_chs, 0], y=pert_train_pca[irrel_chs, 1],
-                                hue=sens_data[irrel_chs],
-                                marker='o', ax=pca_ax, zorder=1, alpha=0.2, hue_order=hue_order[_s_attr], legend=False)
-                sns.scatterplot(x=pert_train_pca[rel_chs, 0], y=pert_train_pca[rel_chs, 1], hue=sens_data[rel_chs],
-                                marker='o', zorder=3, ax=pca_ax, hue_order=hue_order[_s_attr])
-
-                for rel_tr_pca, rel_pert_tr_pca in zip(train_pca[rel_chs], pert_train_pca[rel_chs]):
-                    pca_ax.annotate(
-                        "",
-                        xy=rel_pert_tr_pca, xytext=rel_tr_pca,
-                        arrowprops=dict(arrowstyle='->', lw=0.5, connectionstyle='arc3', zorder=2)
-                    )
-
-                utils.legend_without_duplicate_labels(pca_ax)
-            elif not pca_ax.collections:
-                sns.scatterplot(x=train_pca[:, 0], y=train_pca[:, 1], hue=sens_data, marker='o', ax=pca_ax,
-                                hue_order=hue_order[_s_attr])
-                pca_ax.set_ylabel(_model)
-
-            pca_ax.set_title(_policy)
-            if groups_it == len(m_dset_attr_groups) - 1 and unique_policies.index(_policy) == len(unique_policies) - 1:
-                pca_handles, pca_labels = pca_ax.get_legend_handles_labels()
-                pca_ax.get_legend().remove()
-                pca_legend = fig_pca[_s_attr.lower().replace(' ', '_')].legend(
-                    pca_handles, pca_labels, loc="center right",
-                    bbox_to_anchor=(1.1, 0.5),
-                    bbox_transform=fig_pca[_s_attr.lower().replace(' ', '_')].transFigure
-                )
-                pca_legend.set_zorder(10)
-            else:
-                pca_ax.get_legend().remove()
-
-        for graph_metric, gm_plot_data in gm_data.items():
-            gm_ax = fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')].subfigs[
-                unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
-            gm_df = pd.DataFrame(gm_plot_data, columns=["x", graph_metric.title(), "Node Type", "Policy"])
-
-            for (gm_nt, gm_pol), gm_nt_pol_df in gm_df.groupby(["Node Type", "Policy"]):
-                # to mimic the sorting of the number of deleted edges over the graph metric, the "x" of the quantile
-                # is repeated based on the number of deleted edges
-                gm_distrib = gm_nt_pol_df["x"].repeat(gm_nt_pol_df[graph_metric.title()].abs())
-
-                for stat, stat_f in zip(
-                        ['Skewness', 'Kurtosis'],
-                        [lambda x: scipy.stats.skew(x), lambda x: scipy.stats.kurtosis(x, fisher=False)]
-                ):
-                    table_gm.append((
-                        _model,
-                        _dataset,
-                        _s_attr,
-                        gm_pol,
-                        graph_metric.title(),
-                        gm_nt,
-                        stat,
-                        stat_f(gm_distrib)
-                    ))
-
-            sns.lineplot(x="x", y=graph_metric.title(), data=gm_df, ax=gm_ax,
-                         hue="Node Type", hue_order=["User", "Item"],
-                         style="Policy", style_order=unique_policies[1:])
-
-            clean_quantile_ax(
-                fig_gm[graph_metric][_s_attr.lower().replace(' ', '_')], gm_ax, _model, groups_it,
-                len(m_dset_attr_groups)
-            )
-
-            if unique_models.index(_model) == 0:
-                gm_ax.text(-0.4, 0.01, f"$-$ # Del Edges", transform=gm_ax.transAxes)
-                gm_ax.text(-0.4, 0.99, f"# Del Edges", transform=gm_ax.transAxes)
-
-    for gm in fig_gm:
-        for gm_s_attr in fig_gm[gm]:
-            fig_gm[gm][gm_s_attr].savefig(
-                os.path.join(plots_path, f'{gm_s_attr}_graph_metric_({gm.title()})_plot_{exp_data_name}.png'),
-                bbox_inches="tight"
-            )
-
-    for heat_s_attr in fig_heat:
-        fig_heat[heat_s_attr].savefig(
-            os.path.join(plots_path, f'{heat_s_attr}_heatmap_del_edges_{exp_data_name}.png'),
-            bbox_inches="tight"
-        )
-
-    for pca_s_attr in fig_pca:
-        fig_pca[pca_s_attr].savefig(
-            os.path.join(plots_path, f'{pca_s_attr}_adj_matrix_decomposition_{exp_data_name}.png'),
-            bbox_inches="tight"
-        )
-    plt.close("all")
-
-    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data, gm_kl_data], ["mi", "wd", "kl"]):
-        gm_dep_df = pd.DataFrame(
-            gm_dep_data,
-            columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
-        ).drop_duplicates(subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
-        gm_dep_df = gm_dep_df.melt(
-            ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
-            var_name="Graph Metric", value_name="Value"
-        )
-        # vmin, vmax = gm_heat_df["Value"].min(), gm_heat_df["Value"].max()
-        # gm_heat_df["Policy"] = gm_heat_df["Policy"].map({'MonDel': 'MD', 'MonDel+DelCons': 'MD+DC'})
-        # gm_heat_df = gm_heat_df.set_index('Sens Attr')
-        # for gm_sens_attr in unique_sens_attrs:
-        #     fig_heat_gm, axs_heat_gm = plt.subplots(2, len(unique_datasets), sharex=True, sharey=True, figsize=(40, 15), squeeze=False)
-        #     for nt_i, nt in enumerate(["User", "Item"]):
-        #         for _dset_j, _dset in enumerate(unique_datasets):
-        #             gm_heat_pivot = gm_heat_df.loc[gm_sens_attr.title().replace('_', ' ')].pivot(
-        #                 index=['Node Type', 'Dataset', 'Model', "Policy"],
-        #                 columns="Graph Metric"
-        #             ).loc[(nt, _dset)].droplevel(0, axis=1)
-        #             sns.heatmap(
-        #                 gm_heat_pivot, vmin=vmin, vmax=vmax, ax=axs_heat_gm[nt_i, _dset_j],
-        #                 cbar=_dset == 'insurance', yticklabels=_dset == 'ml-100k'# 'ml-1m'
-        #             )
-        #             axs_heat_gm[nt_i, _dset_j].set_ylabel("")
-        #             axs_heat_gm[nt_i, _dset_j].set_xlabel("")
-        #             if _dset == 'ml-100k': # 'ml-1m':
-        #                 plot_utils.hierarchical_labels(axs_heat_gm[nt_i, _dset_j], axis="y", offset=0.1)
-        #     plt.tight_layout()
-        #     fig_heat_gm.savefig(
-        #         os.path.join(plots_path, f'mi_graph_metrics_heatmap_{gm_sens_attr}_{exp_data_name}.png'),
-        #         bbox_inches="tight",
-        #         pad_inches=0
-        #     )
-        #     plt.close()
-        for gm_sa, gmd_sa_df in gm_dep_df.groupby('Sens Attr'):
-            # for RQ3
-            gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == 'MonDel')]
-            #####
-            gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
-                index=['Model'],
-                columns=['Dataset', 'Graph Metric', 'Demo Group']
-            ).droplevel(0, axis=1).reindex(
-                gm_dep_order, axis=1, level=1
-            ).reindex(
-                ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
-            )
-            gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
-            gm_dep_pivot.round(2).to_latex(
-                os.path.join(plots_path, f"{dep_type}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
-                multicolumn_format="c",
-                escape=False
-            )
-
-    table_gm_df = pd.DataFrame(
-        table_gm,
-        columns=["Model", "Dataset", "Sens Attr", "Policy", "Graph Metric", "Node Type", "Statistic", "Value"]
-    )
-    table_gm_pivot = table_gm_df.pivot(
-        index=['Sens Attr', 'Dataset', 'Model', 'Policy'],
-        columns=['Graph Metric', 'Statistic', 'Node Type'],
-        values='Value'
-    )
-    table_gm_final = table_gm_pivot.reindex(
-        ['Degree', 'Reachability', 'Sparsity', 'Sharing Potentiality'], axis=1, level=0
-    ).reindex(
-        ["Skewness", "Kurtosis"], axis=1, level=1
-    ).reindex(
-        ['User', 'Item'], axis=1, level=2
-    )
-    table_gm_final.to_csv(os.path.join(plots_path, 'graph_metric_statistics.csv'))
-    table_gm_final.round(2).to_latex(
-        os.path.join(plots_path, 'graph_metric_statistics.tex'),
-        multicolumn_format="c",
-        escape=False
-    )
-
-    _metrics = list(_metr_df_gby.groups.keys())
+    _metrics = args.utility_metrics or list(_metr_del_df_gby.groups.keys())
     for metric in _metrics:
-        metric_df = _metr_df_gby.get_group(metric)
         metric_del_df = _metr_del_df_gby.get_group(metric)
-
-        table_bar_df = create_table_best_explanations(metric_df)
-
-        if _metrics.index(metric) == 0:
-            if 'Edit Dist' in df.columns:
-                create_table_topk_list_change(metric_df, 'Edit Dist')
-            if 'Set Dist' in df.columns:
-                create_table_topk_list_change(metric_df, 'Set Dist')
-
         plot_df_data = []
         dp_df_data_per_group = []
         plot_del_df_data = []
+        plot_del_df_data_per_group = []
         y_col = f"$\Delta$ {metric.upper()}"
         plot_columns = ["Model", "Dataset", "Policy", "Sens Attr", y_col]
         data_columns_per_group = ["Model", "Dataset", "Policy", "Sens Attr", "Demo Group", metric.upper()]
-        plot_del_columns = ["Model", "Dataset", "Policy", "% Del Edges", "Sens Attr", y_col]
+        plot_del_columns = ["Model", "Dataset", "Policy", "# Del Edges", "Sens Attr", y_col]
+        del_data_columns_per_group = ["Model", "Dataset", "Policy", "# Del Edges", "Sens Attr", "Demo Group", metric.upper()]
+
         palette = dict(zip(unique_policies, sns.color_palette("colorblind")))
-        _m_dset_df_gby = metric_df.groupby(["Model", "Dataset", "Sens Attr"])
-        _m_dset_pol_del_df = metric_del_df.groupby(["Model", "Dataset", "Policy", "Sens Attr"])
+        m_dset_del_gby = metric_del_df.groupby(["Model", "Dataset", "Sens Attr"])
 
-        fig_qnt = {}
-        for qnt_s_attr in unique_sens_attrs:
-            fig_qnt[qnt_s_attr] = plt.figure(figsize=(15, 15), constrained_layout=True)
-            fig_qnt[qnt_s_attr].subfigures(len(unique_datasets), 1)
-            for dset, subfig in zip(unique_datasets, fig_qnt[qnt_s_attr].subfigs):
-                subfig.suptitle(dataset_map[dset])
-                subfig.subplots(1, len(unique_models), sharey=True)
-
-        m_dset_attr_list = list(_m_dset_df_gby.groups.keys())
-        for it, (_model, _dataset, _s_attr) in enumerate(tqdm.tqdm(m_dset_attr_list, desc="Extracting DP across random samples")):
-            sub_df = _m_dset_df_gby.get_group((_model, _dataset, _s_attr))
+        m_dset_attr_list = list(m_dset_del_gby.groups.keys())
+        for it, (_model, _dataset, _s_attr) in enumerate(
+                tqdm.tqdm(m_dset_attr_list, desc="Extracting DP across random samples")):
+            sub_del_df = m_dset_del_gby.get_group((_model, _dataset, _s_attr))
 
             qnt_data = []
-            for _policy, sub_policy_df in sub_df.groupby("Policy"):
-                for dg_i, (dg, dg_df) in enumerate(sub_policy_df.groupby("Demo Group")):
-                    qnt_values = dg_df.sort_values("Value", ascending=False)["Value"]
-                    qnt_data.extend([
-                        (i, pct.mean() * (1 if dg_i == 0 else -1), group_name_map[dg], _policy)
-                        for i, pct in enumerate(np.array_split(qnt_values, qnt_size))
-                    ])
+            for _policy, sub_del_policy_df in sub_del_df.groupby("Policy"):
 
-                dp_samples, dgs_order = utils.compute_DP_across_random_samples(
-                    sub_policy_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
-                )
-
-                plot_df_data.extend(list(zip(
-                    [_model] * args.iterations,
-                    [_dataset] * args.iterations,
-                    [_policy] * args.iterations,
-                    [_s_attr] * args.iterations,
-                    dp_samples[:, -1]
-                )))
-
-                dp_df_data_per_group.extend(list(zip(
-                    [_model] * args.iterations * len(dgs_order),
-                    [_dataset] * args.iterations * len(dgs_order),
-                    [_policy] * args.iterations * len(dgs_order),
-                    [_s_attr] * args.iterations * len(dgs_order),
-                    np.repeat(dgs_order, args.iterations),
-                    np.concatenate(dp_samples[:, :-1].T)
-                )))
-
-                sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
-                n_del_df_gby = sub_del_df.groupby("# Del Edges")
-                sorted_del_edges = sub_del_df.sort_values("# Del Edges")["# Del Edges"].unique()
+                # sub_del_df = _m_dset_pol_del_df.get_group((_model, _dataset, _policy, _s_attr))
+                n_del_df_gby = sub_del_policy_df.groupby("# Del Edges")
+                sorted_del_edges = sub_del_policy_df.sort_values("# Del Edges")["# Del Edges"].unique()
                 for n_del in sorted_del_edges:
                     n_del_df = n_del_df_gby.get_group(n_del)
-                    del_dp_samples, _ = utils.compute_DP_across_random_samples(
-                        n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset], iterations=args.iterations
+                    del_dp_samples, dgs_order = utils.compute_DP_across_random_samples(
+                        n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset],
+                        iterations=args.iterations
                     )
 
                     plot_del_df_data.extend(list(zip(
@@ -1230,41 +962,42 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         del_dp_samples[:, -1]
                     )))
 
-            qnt_ax = fig_qnt[_s_attr.lower().replace(' ', '_')].subfigs[
-                unique_datasets.index(_dataset)].axes[unique_models.index(_model)]
-            qnt_df = pd.DataFrame(qnt_data, columns=["x", metric.upper(), "Demo Group", "Policy"])
-
-            sns.lineplot(x="x", y=metric.upper(), data=qnt_df, ax=qnt_ax,
-                         hue="Demo Group", hue_order=hue_order[_s_attr], style="Policy", style_order=unique_policies)
-
-            if unique_models.index(_model) == 0:
-                qnt_ax.text(-0.29, 0.01, f"$-${metric.upper()}", transform=qnt_ax.transAxes)
-                qnt_ax.text(-0.29, 0.99, f"{metric.upper()}", transform=qnt_ax.transAxes)
-
-            clean_quantile_ax(fig_qnt[_s_attr.lower().replace(' ', '_')], qnt_ax, _model, it, len(m_dset_attr_list))
-
-        for qnt_s_attr in fig_qnt:
-            fig_qnt[qnt_s_attr].savefig(
-                os.path.join(plots_path, f'{qnt_s_attr}_percentile_plot_{exp_data_name}_{metric}.png'),
-                bbox_inches="tight"
-            )
-        plt.close("all")
+                    plot_del_df_data_per_group.extend(list(zip(
+                        [_model] * args.iterations * len(dgs_order),
+                        [_dataset] * args.iterations * len(dgs_order),
+                        [_policy] * args.iterations * len(dgs_order),
+                        [n_del] * args.iterations * len(dgs_order),
+                        [_s_attr] * args.iterations * len(dgs_order),
+                        np.repeat(dgs_order, args.iterations),
+                        np.concatenate(del_dp_samples[:, :-1].T)
+                    )))
 
         hatches = ['//', 'o']
         fig_bar2, axs_bar2 = plt.subplots(len(unique_sens_attrs), len(unique_datasets), squeeze=False, figsize=(10, 6))
         axs_bar2 = [axs_bar2] if not isinstance(axs_bar2, np.ndarray) else axs_bar2
-        table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = no_pert_col
-        table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
+        # table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = no_pert_col
+        # table_bar_df = table_bar_df.drop("Status", axis=1).rename(columns={'value': y_col})
 
+        index_cols = ['Dataset', 'Model', 'Policy', 'Sens Attr', '# Del Edges']
         plot_del_df_line = pd.DataFrame(plot_del_df_data, columns=plot_del_columns)
-        plot_df_box_bar = pd.DataFrame(plot_df_data, columns=plot_columns)
-        dp_df_per_group = pd.DataFrame(dp_df_data_per_group, columns=data_columns_per_group)
+
+        fairest_del_edge_df = plot_del_df_line.groupby(index_cols).mean().sort_values(y_col)
+        fairest_del_edge_df = fairest_del_edge_df.reset_index().groupby(index_cols[:-1]).first()
+        plot_df_box_bar = plot_del_df_line.set_index(index_cols).loc[
+            fairest_del_edge_df.reset_index().set_index(index_cols).index].reset_index()
+
+        dp_df_per_group = pd.DataFrame(plot_del_df_data_per_group, columns=del_data_columns_per_group)
+        dp_df_per_group = dp_df_per_group.set_index(index_cols).loc[
+            fairest_del_edge_df.reset_index().set_index(index_cols).index].reset_index()
 
         create_table_best_explanations_per_group(dp_df_per_group)
 
-        plot_table_df_bar_gby = table_bar_df.groupby(["Sens Attr", "Dataset"])
+        #         plot_table_df_bar_gby = table_bar_df.groupby(["Sens Attr", "Dataset"])
         plot_del_df_line_gby = plot_del_df_line.groupby(["Sens Attr", "Dataset", "Model"])
         plot_df_box_bar_gby = plot_df_box_bar.groupby(["Sens Attr", "Dataset"])
+
+        metr_df_plot_table_gby = metric_del_df.groupby(index_cols)
+
         for s_attr_i, orig_sens_attr in enumerate(unique_sens_attrs):
             sens_attr = orig_sens_attr.title().replace('_', ' ')
 
@@ -1274,22 +1007,41 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             fig_box, axs_box = plt.subplots(1, len(unique_datasets), figsize=(10, 6))
             axs_box = [axs_box] if not isinstance(axs_box, np.ndarray) else axs_box
 
+            # col_widhts = [0.07, 0.07, 0.07, 0.09, 0.09, 0.07, 0.07, 0.09, 0.09, 0.07, 0.07, 0.07]
+            under_plot_table_data = [[], []]
+
             s_attr_dgs = []
             for i, (dset, ax_pol_box, ax_box) in enumerate(zip(unique_datasets, axs_pol_box, axs_box)):
                 if (sens_attr, dset) in plot_df_box_bar_gby.groups:
                     dset_box_bar_sattr_df = plot_df_box_bar_gby.get_group((sens_attr, dset))
-                    box = sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_df, hue="Policy", ax=ax_pol_box, palette=palette, showfliers=False)
+                    box = sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_df, hue="Policy",
+                                      hue_order=policy_order, ax=ax_pol_box, palette=palette, showfliers=False)
                     # ax_bar.set_title(dataset_map[dset], pad=30)
                     ax_pol_box.set_xlabel("")
 
                     patches = [artist for artist in box.get_children() if isinstance(artist, mpatches.PathPatch)]
                     # sorted by x0 of the Bbox to ensure the order from left to right
                     patches = sorted(patches, key=lambda x: x.get_extents().x0)
-                    stest_df = dset_box_bar_sattr_df.set_index(["Model", "Policy"])
+                    stest_df = dset_box_bar_sattr_df.set_index(["Dataset", "Model", "Policy", "Sens Attr"])
                     plt.rcParams['hatch.linewidth'] = 0.4
                     for mod, mod_ptcs in zip(unique_models, np.array_split(patches, len(unique_models))):
                         mod_ptcs_text = [''] * len(mod_ptcs)
-                        data_ptcs = [stest_df.loc[(mod, pol), y_col] for pol in sorted(unique_policies)]
+                        data_ptcs = [stest_df.loc[(dset, mod, pol, sens_attr), y_col] for pol in policy_order if
+                                     (dset, mod, pol, sens_attr) in stest_df.index]
+
+                        if len(under_plot_table_data[0]) > 0:
+                            under_plot_table_data[0] += ['']
+                            under_plot_table_data[1] += ['']
+
+                        under_plot_table_data[0] += [
+                            f"{metr_df_plot_table_gby.get_group((dset, mod, pol, sens_attr, stest_df.loc[(dset, mod, pol, sens_attr), '# Del Edges'].iloc[0]))['Value'].mean():.2f}"
+                            for pol in policy_order if (dset, mod, pol, sens_attr) in stest_df.index
+                        ]
+                        under_plot_table_data[1] += [
+                            f"{stest_df.loc[(dset, mod, pol, sens_attr), '# Del Edges'].iloc[0] / train_datasets[dset].inter_num * 100:.1f}%" if pol != no_pert_col else ''
+                            for pol in policy_order if (dset, mod, pol, sens_attr) in stest_df.index
+                        ]
+
                         bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
                         height = max([_bxps['whishi'] for _bxps in bxp_stats])
                         yerr = 0
@@ -1299,20 +1051,20 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                 x, h = [], [height, height]
                                 for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
-                                dh, barh = .05, .02
+                                dh, barh = .06, .02
                                 ax_pol_t = plot_utils.annotate_brackets(
                                     ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=MEDIUM_SIZE
                                 )
                                 # yerr is updated such that next brackets are drawn over others
                                 offset_norm = abs(height)
-                                yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 5e-4
+                                yerr += dh * offset_norm + barh * offset_norm + offset_norm * MEDIUM_SIZE * 5e-4
 
-                        for _ptc, _bxp, bxp_hatch in zip(mod_ptcs, bxp_stats, ['X', '/', '.']):
+                        for _ptc, _bxp, bxp_hatch in zip(mod_ptcs, bxp_stats, ['X', '.', '/', 'O']):
                             x = np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]])
                             med = _bxp["med"]
                             med *= 1 + (0.05 * np.sign(med))
                             med_text = ax_pol_box.text(
-                                x, med, f"{med:.3f}", fontsize=MEDIUM_SIZE, ha='center', color='w'
+                                x, med, f"{med:.3f}", fontsize=SMALL_SIZE, ha='center', color='w'
                             )
                             med_text.set_path_effects([
                                 mpl_path_eff.Stroke(linewidth=1.5, foreground='k'),
@@ -1328,14 +1080,30 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     offset_xlim = 0.005 * (right_max - left_min)
                     ax_pol_box.set_xlim(left_min - offset_xlim, right_max + offset_xlim)
 
-                    dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != 'MonDel+DelCons']
-                    sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box, palette=palette)
+                    if args.add_plot_table:
+                        ax_pol_table = ax_pol_box.table(
+                            under_plot_table_data,
+                            rowLabels=[f"{metric.upper()}@10", '% Del Edges'],
+                            # colWidths=col_widhts,
+                            loc='upper left',
+                            bbox=[0, -0.1, 1, 0.1]
+                        )
+
+                        if dset == "insurance":
+                            for tick in ax_pol_box.xaxis.get_major_ticks():
+                                tick.set_pad(42)
+                    ax_pol_box.tick_params(axis='x', length=0)
+
+                    dset_box_bar_sattr_mondel_df = dset_box_bar_sattr_df[dset_box_bar_sattr_df["Policy"] != delcons_pol]
+                    sns.boxplot(x="Model", y=y_col, data=dset_box_bar_sattr_mondel_df, hue="Policy", ax=ax_box,
+                                palette=palette)
                     # ax_box.set_title(dataset_map[dset], pad=30)
                     ax_box.set_xlabel("")
 
                     if i == len(axs_pol_box) - 1 and dset == "ml-1m":
                         pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
-                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='lower center', ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.01])
+                        fig_pol_box.legend(pol_box_handles, pol_box_labels, loc='lower center',
+                                           ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.01])
                         box_handles, box_labels = ax_box.get_legend_handles_labels()
                         fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_pol_box.get_legend().remove()
@@ -1344,30 +1112,22 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     if dset != 'insurance':
                         ax_pol_box.tick_params('x', bottom=False, labelbottom=False)
 
-                if (sens_attr, dset) in plot_table_df_bar_gby.groups:
-                    plot_tdf_bar_sattr_df = plot_table_df_bar_gby.get_group((sens_attr, dset))
-                    _ax = axs_bar2[s_attr_i, i]
-                    dg_df_gby = plot_tdf_bar_sattr_df.groupby("Demo Group")
-                    s_attr_dgs = [x for x in sorted(dg_df_gby.groups) if 'Delta' not in x]
-                    for dg, hatch in zip(s_attr_dgs, hatches):
-                        dg_df = dg_df_gby.get_group(dg)
-                        sns.barplot(x="Model", y=y_col, data=dg_df, hue="Policy", ax=_ax, palette=palette, edgecolor='black', alpha=0.6, hatch=hatch)
-                        _ax.get_legend().remove()
-                        _ax.set_title(dataset_map[dset])
-
-            create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
+            # create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
             fig_pol_box.tight_layout(pad=0)
+            # fig_pol_box.subplots_adjust(left=0.2, bottom=0.2)
             fig_pol_box.savefig(
-                os.path.join(plots_path, f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"),
+                os.path.join(plots_path,
+                             f"{sens_attr}_all_policies_boxplot_{exp_data_name}_{metric}_DP_random_samples.png"),
                 bbox_inches='tight', pad_inches=0, dpi=250
             )
 
             fig_box.tight_layout()
-            fig_box.savefig(os.path.join(plots_path, f"{sens_attr}_boxplot_MonDel_{exp_data_name}_{metric}_DP_random_samples.png"))
+            fig_box.savefig(os.path.join(plots_path,
+                                         f"{sens_attr}_boxplot_{mondel_pol}_{exp_data_name}_{metric}_DP_random_samples.png"))
 
-        fig_bar2.tight_layout()
-        fig_bar2.savefig(os.path.join(plots_path, f"overlapping_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+        # fig_bar2.tight_layout()
+        # fig_bar2.savefig(os.path.join(plots_path, f"overlapping_barplot_{exp_data_name}_{metric}_DP_random_samples.png"))
         plt.close("all")
 
         # need to be done here due to maximum number of axes opened simultaneously
@@ -1379,16 +1139,143 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             for i, dset in enumerate(unique_datasets):
                 subfigs[i].suptitle(dset.upper())
-                axs_line = subfigs[i].subplots(1, len(unique_models))
+                axs_line = subfigs[i].subplots(1, len(unique_models), sharey=True)
                 axs_line = [axs_line] if not isinstance(axs_line, np.ndarray) else axs_line
                 for m, ax_line in zip(unique_models, axs_line):
                     if (sens_attr, dset, m) in plot_del_df_line_gby.groups:
                         dset_model_line_df = plot_del_df_line_gby.get_group((sens_attr, dset, m))
-                        sns.lineplot(x="% Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line, palette=palette, ci=None)
-                        ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
-                        ax_line.xaxis.set_major_formatter(mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
+                        sns.lineplot(x="# Del Edges", y=y_col, data=dset_model_line_df, hue="Policy", ax=ax_line,
+                                     palette=palette, ci=None)
+                        # ax_line.set_title(m.upper() + (f'+{incdisp[(dset, m)]}' if incdisp[(dset, m)] else ''))
+                        ax_line.xaxis.set_major_formatter(
+                            mpl_tick.FuncFormatter(lambda x, pos: f"{x / datasets_train_inter_sizes[dset] * 100:.2f}%"))
+                    if m == unique_models[-1] and dset == "ml-1m":
+                        line_handles, line_labels = ax_line.get_legend_handles_labels()
+                        fig_line.legend(line_handles, line_labels, loc='lower center', ncol=len(line_labels),
+                                        bbox_to_anchor=[0.5, 1.01])
+                    ax_line.get_legend().remove()
 
-            fig_line.suptitle(sens_attr.title().replace('_', ' '))
-            fig_line.savefig(os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"))
+            # fig_line.suptitle(sens_attr.title().replace('_', ' '))
+            fig_line.tight_layout()
+            fig_line.savefig(
+                os.path.join(plots_path, f"{sens_attr}_lineplot_{exp_data_name}_{metric}_DP_random_samples.png"),
+                bbox_inches="tight", pad_inches=0, dpi=250
+            )
 
         plt.close("all")
+
+    gm_mi_data = []
+    gm_wasser_data = []
+    gm_kl_data = []
+    gm_dep_order = np.array(['Degree', 'Sparsity', 'Reachability'])
+    fairest_del_gby = plot_df_box_bar.groupby(['Model', 'Dataset', 'Sens Attr', 'Policy', '# Del Edges'])
+    m_dset_attr_groups = list(fairest_del_gby.groups.keys())
+    indexed_del_df = del_df.set_index(
+        ['Dataset', 'Sens Attr', 'Model', 'Policy', '# Del Edges', 'Metric'])  # .sort_index()
+    for groups_it, (_model, _dataset, _s_attr, _policy, _n_del) in enumerate(m_dset_attr_groups):
+        gm_data = {}
+        # len_pol = len(unique_policies[1:])
+        if _policy != no_pert_col:  # without perturbation that are no perturbed edges
+            de = np.array(all_del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr, _n_del)])
+
+            # remove user and item id 0 padding
+            de -= 1
+            de[1] -= 1
+
+            graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
+            # each edge is counted once for one node and once for the other (it is equal to a bincount)
+            graph_mdf['# Del Edges'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
+
+            s_attr_df = indexed_del_df.loc[
+                tuple([_dataset, _s_attr, _model, _policy, _n_del, 'NDCG'])  # metric not relevant here
+            ].copy(deep=True)
+            s_attr_df['user_id'] -= 1  # reindexing to zero
+            sens_gmdf = graph_mdf.join(
+                s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
+                on='Node'
+            ).fillna('Item')
+
+            dset_stats = os.path.join(script_path, os.pardir, f'dp_plots', 'datasets_stats.csv')
+            if os.path.exists(dset_stats):
+                dsets_df = pd.read_csv(dset_stats, index_col=0)
+                if _dataset in dsets_df.columns:
+                    graph_stats_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
+                    for gm in gm_dep_order:
+                        gm_str = f"Avg. {gm} per user"
+                        if gm_str not in dsets_df.index:
+                            gm_stat_dg = ""
+                        else:
+                            gm_stat_dg = dsets_df.loc[gm_str, _dataset]
+                            gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
+                            if _s_attr in gm_stat_dg:
+                                continue
+
+                        gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
+                            lambda x: f"{x['Demo Group']} : {x[gm] * (100 if gm != 'Degree' else 1):.1f}\%", axis=1
+                        ).values)
+                        dsets_df.loc[gm_str, _dataset] = gm_stat_dg
+
+                        dsets_df.to_csv(dset_stats)
+
+            # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
+            # Paper that states how select number of neighbors, repetitions and usage of median
+            for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
+                mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
+                wd_res = [np.inf] * len(gm_dep_order)
+                kl_res = [0] * len(gm_dep_order)
+                kl_eps = 1e-8  # avoids NaN
+
+                degree_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                    gm_dgdf.loc[:, ['Degree']].to_numpy()
+                ).squeeze()
+                n_del_edges_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                    gm_dgdf.loc[:, ['# Del Edges']].to_numpy()
+                ).squeeze()
+                for gm_i, gm in enumerate(gm_dep_order):
+                    wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
+                    wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
+                    kl_res[gm_i] = scipy.stats.entropy(
+                        gm_dgdf.loc[:, '# Del Edges'] + kl_eps, gm_dgdf.loc[:, gm] + kl_eps, base=2
+                    )
+
+                for mi_i in range(args.iterations):
+                    mi_res[mi_i] = sk_feats.mutual_info_regression(
+                        np.c_[degree_scaled, gm_dgdf.loc[:, gm_dep_order[gm_dep_order != 'Degree']].values],
+                        n_del_edges_scaled,
+                        n_neighbors=3
+                    )
+                mi_res = np.median(mi_res, axis=0)
+                gm_mi_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
+                gm_wasser_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *wd_res])
+                gm_kl_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *kl_res])
+
+    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data, gm_kl_data], ["mi", "wd", "kl"]):
+        gm_dep_df = pd.DataFrame(
+            gm_dep_data,
+            columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
+        ).drop_duplicates(
+            subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
+        gm_dep_df = gm_dep_df.melt(
+            ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
+            var_name="Graph Metric", value_name="Value"
+        )
+
+        for gm_sa, gmd_sa_df in gm_dep_df.groupby('Sens Attr'):
+            # for RQ3
+            # gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == mondel_pol)]
+            gmd_df = gmd_sa_df[(gmd_sa_df["Policy"] == mondel_pol)]
+            #####
+            gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
+                index=['Model'],
+                columns=['Dataset', 'Graph Metric', 'Demo Group']
+            ).droplevel(0, axis=1).reindex(
+                gm_dep_order, axis=1, level=1
+            ).reindex(
+                ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
+            )
+            gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
+            gm_dep_pivot.round(2).to_latex(
+                os.path.join(plots_path, f"{dep_type}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
+                multicolumn_format="c",
+                escape=False
+            )
