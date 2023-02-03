@@ -16,7 +16,7 @@ from src.explain_dp_ndcg import execute_explanation
 from src.utils import utils
 
 
-def training(_model, _dataset, _config, saved=True, _yaml_config=None):
+def training(_model, _dataset, _config, saved=True):
     logger = logging.getLogger()
     # dataset splitting
     train_data, valid_data, test_data = data_preparation(_config, _dataset)
@@ -100,7 +100,6 @@ if __name__ == "__main__":
     train_group.add_argument('--dataset', default='ml-100k')
     train_group.add_argument('--config_file_list', nargs='+', default=None)
     train_group.add_argument('--config_dict', default=None)
-    train_group.add_argument('--saved', action='store_true')
     explain_group.add_argument('--model_file')
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
     explain_group.add_argument('--load', action='store_true')

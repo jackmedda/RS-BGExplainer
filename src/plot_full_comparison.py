@@ -169,8 +169,7 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
     _test_result = exp_test_df.pop("Value") if exp_test_df is not None else None
     _rec_result = exp_rec_df.pop("Value")
 
-    test_orig_total_metric = best_test_exp_result[model_name][metric][:,
-                             -1] if best_test_exp_result is not None else None
+    test_orig_total_metric = best_test_exp_result[model_name][metric][:, -1] if best_test_exp_result is not None else None
     rec_orig_total_metric = best_rec_exp_result[model_name][metric][:, -1]
 
     unique_test_del_edges = len(test_result_all_data[model_dp_s]) if test_result_all_data is not None else None
@@ -764,11 +763,10 @@ else:
         for all_exp_data_name, all_exp_del_edges in zip(["test", exp_rec_data], [all_exp_test_dfs, all_exp_rec_dfs]):
             if all_exp_del_edges is not None:
                 for all_n_del_edges, all_n_del_edges_df in all_exp_del_edges[model_dp_s].groupby('n_del_edges'):
-                    for policy_type in [no_pert_col, policy]:
-                        all_del_edges[
-                            (all_exp_data_name, dataset_name, model_name, policy_type,
-                             sens_attr.title().replace('_', ' '), all_n_del_edges)
-                        ] = all_n_del_edges_df['del_edges'].iloc[0].tolist()
+                    all_del_edges[
+                        (all_exp_data_name, dataset_name, model_name, policy,
+                         sens_attr.title().replace('_', ' '), all_n_del_edges)
+                    ] = all_n_del_edges_df['del_edges'].iloc[0].tolist()
 
         for metric in metrics:
             # group_edge_del = update_plot_data(
