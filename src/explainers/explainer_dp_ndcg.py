@@ -104,7 +104,7 @@ class DPBGExplainer:
     @property
     def cf_model(self):
         if self._cf_model is None:
-            print("Counterfactual Model Explainer is not initalized yet. Execute 'explain' to initialize it.")
+            print("Counterfactual Model Explainer is not initialized yet. Execute 'explain' to initialize it.")
         else:
             return self._cf_model
 

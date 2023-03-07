@@ -146,6 +146,7 @@ def execute_explanation(model_file,
             if config['exp_rec_data'] == 'train':
                 rec_data = FullSortEvalDataLoader(config, train_data.dataset, train_data.sampler)
         else:
+            # TODO: it should be train + valid
             rec_data = valid_data
     else:
         rec_data = valid_data
