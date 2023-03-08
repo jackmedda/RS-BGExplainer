@@ -16,7 +16,7 @@ import igraph as ig
 import networkx as nx
 import recbole.evaluator.collector as recb_collector
 from sklearn.decomposition import PCA
-from torch_geometric.utils import k_hop_subgraph, subgraph
+# from torch_geometric.utils import k_hop_subgraph, subgraph
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, init_seed
 from recbole.data.interaction import Interaction
@@ -390,37 +390,37 @@ def get_degree_matrix(adj):
     return torch.diag(adj.sum(dim=1))
 
 
-def get_neighbourhood(node_idx,
-                      edge_index,
-                      n_hops,
-                      neighbors_hops=False,
-                      only_last_level=False,
-                      not_user_sub_matrix=False,
-                      max_num_nodes=None):
-    def hop_difference(_node_idx, _edge_index, edge_s, _n_hops):
-        _edge_subset = k_hop_subgraph(_node_idx, _n_hops, _edge_index)
-        _edge_subset = subgraph(_edge_subset[0], _edge_index)  # Get subset of edges
-
-        # takes the non-intersection between last level subgraph and lower hop subgraph
-        unique, counts = torch.cat((edge_s[0], _edge_subset[0]), dim=1).unique(dim=1, return_counts=True)
-        edge_s = [unique[:, counts == 1]]
-        return edge_s
-
-    if neighbors_hops:
-        n_hops = n_hops * 2
-
-    edge_subset = k_hop_subgraph(node_idx, n_hops, edge_index)  # Get all nodes involved
-    edge_subset = subgraph(edge_subset[0], edge_index)  # Get subset of edges
-    if n_hops > 1:
-        if only_last_level:
-            edge_subset = hop_difference(node_idx, edge_index, edge_subset, n_hops - 1)
-        if not_user_sub_matrix:
-            edge_subset = hop_difference(node_idx, edge_index, edge_subset, 1)
-
-    # sub_adj = to_dense_adj(edge_subset[0], max_num_nodes=max_num_nodes).squeeze().to_sparse()
-
-    # return sub_adj, edge_subset
-    return edge_subset
+# def get_neighbourhood(node_idx,
+#                       edge_index,
+#                       n_hops,
+#                       neighbors_hops=False,
+#                       only_last_level=False,
+#                       not_user_sub_matrix=False,
+#                       max_num_nodes=None):
+#     def hop_difference(_node_idx, _edge_index, edge_s, _n_hops):
+#         _edge_subset = k_hop_subgraph(_node_idx, _n_hops, _edge_index)
+#         _edge_subset = subgraph(_edge_subset[0], _edge_index)  # Get subset of edges
+#
+#         # takes the non-intersection between last level subgraph and lower hop subgraph
+#         unique, counts = torch.cat((edge_s[0], _edge_subset[0]), dim=1).unique(dim=1, return_counts=True)
+#         edge_s = [unique[:, counts == 1]]
+#         return edge_s
+#
+#     if neighbors_hops:
+#         n_hops = n_hops * 2
+#
+#     edge_subset = k_hop_subgraph(node_idx, n_hops, edge_index)  # Get all nodes involved
+#     edge_subset = subgraph(edge_subset[0], edge_index)  # Get subset of edges
+#     if n_hops > 1:
+#         if only_last_level:
+#             edge_subset = hop_difference(node_idx, edge_index, edge_subset, n_hops - 1)
+#         if not_user_sub_matrix:
+#             edge_subset = hop_difference(node_idx, edge_index, edge_subset, 1)
+#
+#     # sub_adj = to_dense_adj(edge_subset[0], max_num_nodes=max_num_nodes).squeeze().to_sparse()
+#
+#     # return sub_adj, edge_subset
+#     return edge_subset
 
 
 def is_symmetrically_sorted(idxs: torch.Tensor):
@@ -632,7 +632,16 @@ def damerau_levenshtein_distance(s1, s2):
 
     out = np.zeros((len(s1, )), dtype=int)
     for i, (_s1, _s2) in enumerate(zip(s1, s2)):
-        out[i] = _damerau_levenshtein_distance(numba.typed.List(_s1), numba.typed.List(_s2))
+        try:
+            numb_s1, numb_s2 = numba.typed.List(_s1), numba.typed.List(_s2)
+        except TypeError:
+            numb_s1, numb_s2 = numba.typed.List(), numba.typed.List()
+            for el in _s1:
+                numb_s1.append(el)
+            for el in _s2:
+                numb_s2.append(el)
+
+        out[i] = _damerau_levenshtein_distance(numb_s1, numb_s2)
 
     return out.item() if out.shape == (1,) else out
 

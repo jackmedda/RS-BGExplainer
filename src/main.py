@@ -102,14 +102,14 @@ if __name__ == "__main__":
     train_group.add_argument('--config_dict', default=None)
     explain_group.add_argument('--model_file')
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
-    explain_group.add_argument('--load', action='store_true')
+    # explain_group.add_argument('--load', action='store_true')
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
 
     args = parser.parse_args()
     print(args)
 
-    explain_args = [args.model_file, args.explainer_config_file, args.load, args.explain_config_id, args.verbose]
+    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose]
 
     if args.run == 'train':
         runner = training

@@ -9,6 +9,7 @@ from typing import Tuple, Callable, Dict
 
 import tqdm
 import wandb
+import gmpy2
 import torch
 import torch.nn as nn
 import numpy as np
@@ -23,7 +24,7 @@ from recbole.data.interaction import Interaction
 
 sys.path.append('..')
 
-import src.utils as utils
+import src.utils.utils as utils
 import src.models as exp_models
 from src.utils.early_stopping import EarlyStopping
 
@@ -551,12 +552,13 @@ class DPBGExplainer:
                     *new_example[4:]
                 ]
 
+                # TODO: early stopping should use
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
                     best_epoch = epoch + 1 - self.earlys.patience
                     self.logger.info(f"Early Stopping: best epoch {best_epoch}")
 
-                    # stub exampled added to find again the best epoch when explanations are loaded
+                    # stub example added to find again the best epoch when explanations are loaded
                     best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss, force_update=True)
 
                     break
@@ -789,4 +791,4 @@ class DPNDCGLoss(torch.nn.modules.loss._Loss):
                     else:
                         loss += (l_val - r_val).abs()
 
-        return loss / max(math.comb(len(groups), 2), 1)
+        return loss / max(int(gmpy2.comb(len(groups), 2)), 1)

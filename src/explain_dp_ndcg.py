@@ -12,7 +12,7 @@ import pandas as pd
 
 from recbole.data.dataloader import FullSortEvalDataLoader
 
-import src.utils as utils
+import src.utils.utils as utils
 from src.explainers.explainer_dp_ndcg import DPBGExplainer
 
 
