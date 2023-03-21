@@ -87,6 +87,9 @@ previous_batch_LR_scaling: False
 
 random_perturbation_p: 0.000014
 
+# use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
+perturbation_initialization: 'static'
+
 # Policies
 explainer_policies:
     increase_disparity: False

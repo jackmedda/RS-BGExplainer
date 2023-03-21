@@ -11,7 +11,7 @@ momentum: 0.0
 # epochs to generate explanations
 cf_epochs: 800
 # how many users should be considered to explain?
-user_batch_exp: 64
+user_batch_exp: 32
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
@@ -30,7 +30,7 @@ dropout_prob: 0.3
 edge_additions: False
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
-exp_rec_data: "test"
+exp_rec_data: "valid"
 
 # device: cpu
 
@@ -87,9 +87,12 @@ previous_batch_LR_scaling: False
 
 random_perturbation_p: 0.0005
 
+# use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
+perturbation_initialization: 'static'
+
 # Policies
 explainer_policies:
     increase_disparity: False
     force_removed_edges: True
-    group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
-    random_perturbation: True
+    group_deletion_constraint: True   # this and `random_perturbation` cannot be both True
+    random_perturbation: False
