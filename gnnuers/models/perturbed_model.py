@@ -40,6 +40,7 @@ class PerturbedModel(object):
             else:
                 self.filtered_users = self.filtered_users.to(self.device)
         self.mask_filter = None
+        self.mask_neighborhood = None
 
         self.Graph, self.sub_Graph = model_utils.get_adj_matrix(
             self.interaction_matrix,
@@ -74,14 +75,14 @@ class PerturbedModel(object):
         else:
             self.mask_sub_adj = self.sub_Graph
             self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device)
+            if config['explainer_policies']['neighborhood_perturbation']:
+                self.mask_neighborhood = torch.ones_like(self.mask_filter, dtype=torch.bool, device=self.device)
 
             if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
-                try:
-                    user_filter = torch.isin(self.mask_sub_adj, self.filtered_users).any(dim=0)
-                except AttributeError:
-                    user_filter = (self.mask_sub_adj[0][:, None] == self.filtered_users).any(-1) | \
-                                  (self.mask_sub_adj[1][:, None] == self.filtered_users).any(-1)
+                user_filter = model_utils.edges_filter_nodes(self.mask_sub_adj, self.filtered_users)
                 self.mask_filter &= user_filter
+                if self.mask_neighborhood is not None:
+                    self.mask_neighborhood &= user_filter
 
             if self.initialization != 'random':
                 P_symm_init = 0
@@ -135,22 +136,43 @@ class PerturbedModel(object):
 
         return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, orig_dist
 
+    def update_neighborhood(self, nodes: torch.Tensor):
+        if self.mask_neighborhood is None:
+            raise NotImplementedError(
+                "neighborhood can be updated only on edge deletion and if the config parameter is set"
+            )
+        nodes = nodes.flatten().to(self.mask_sub_adj.device)
+        nodes_filter = model_utils.edges_filter_nodes(self.mask_sub_adj[:, :self.mask_neighborhood.shape[0]], nodes)
+        self._update_neighborhood(nodes_filter)
+
+    def _update_neighborhood(self, nhood: torch.Tensor):
+        if not nhood.dtype == torch.bool:
+            raise TypeError(f"neighborhood update except a bool Tensor, got {nhood.dtype}")
+        self.mask_neighborhood &= nhood
+
     def perturbate_adj_matrix(self, Graph, pred=False):
         P_symm = self.P_symm
-        if not self.edge_additions and self.force_removed_edges is not None:
-            if self.filtered_users == self.RANDOM_POLICY:
-                if not pred:
-                    p = self.random_perturb_p
-                    random_perb = torch.FloatTensor(
-                        np.random.choice([0, 1], size=self.force_removed_edges.size(0), p=[p, 1 - p])
-                    ).to(self.force_removed_edges.device)
-                    self.force_removed_edges = self.force_removed_edges * random_perb
-                # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
-                P_symm = self.force_removed_edges - 1
-            else:
-                self.force_removed_edges = (torch.sigmoid(self.P_symm.detach()) >= 0.5).float() * self.force_removed_edges
-                # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
-                P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, self.P_symm)
+        if not self.edge_additions:
+            if self.force_removed_edges is not None:
+                if self.mask_neighborhood is not None:
+                    if (self.mask_filter != self.mask_neighborhood).any():
+                        filtered_idxs_asymm = self.mask_filter.nonzero().T.squeeze()[:P_symm.shape[0]]
+                        P_symm_nhood_mask = self.mask_neighborhood[filtered_idxs_asymm]
+                        P_symm = torch.where(P_symm_nhood_mask, P_symm, torch.ones_like(P_symm, device=P_symm.device))
+
+                if self.filtered_users == self.RANDOM_POLICY:
+                    if not pred:
+                        p = self.random_perturb_p
+                        random_perb = torch.FloatTensor(
+                            np.random.choice([0, 1], size=self.force_removed_edges.size(0), p=[p, 1 - p])
+                        ).to(self.force_removed_edges.device)
+                        self.force_removed_edges = self.force_removed_edges * random_perb
+                    # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
+                    P_symm = self.force_removed_edges - 1
+                else:
+                    self.force_removed_edges = (torch.sigmoid(P_symm.detach()) >= 0.5).float() * self.force_removed_edges
+                    # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
+                    P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, P_symm)
 
         perturb_matrix, P_loss = model_utils.perturb_adj_matrix(
             Graph,

@@ -107,11 +107,13 @@ if __name__ == "__main__":
     # explain_group.add_argument('--load', action='store_true')
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
+    explain_group.add_argument('--wandb_online', action='store_true')
 
     args = parser.parse_args()
     print(args)
 
-    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose]
+    args.wandb_online = {False: "offline", True: "online"}[args.wandb_online]
+    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose, args.wandb_online]
 
     if args.run == 'train':
         runner = training

@@ -36,6 +36,7 @@ _EXPS_COLUMNS = [
     "loss_total",
     "loss_graph_dist",
     "fair_loss",
+    "fair_metric",
     "del_edges",
     "epoch",
     "first_fair_loss"
@@ -54,7 +55,7 @@ def wandb_init(config, **kwargs):
     config['wandb_tags'] = [k for k in config['explainer_policies'] if config['explainer_policies'][k]]
 
     wandb.init(
-        project="B-GEM",
+        project="Mit-GNNUERS",  # "B-GEM",
         entity="fairrec",
         tags=config['wandb_tags'],
         **kwargs
@@ -137,7 +138,7 @@ def get_best_exp_early_stopping(exps, config_dict):
     except TypeError:
         patience = config_dict['earlys_patience']
 
-    return max([e[_EXPS_COLUMNS.index('epoch')] for e in exps]) - patience
+    return max([e[exp_col_index('epoch')] for e in exps]) - patience
 
 
 def get_decomposed_adj_matrix(del_edges, train_dataset, method='PCA'):
@@ -437,55 +438,6 @@ def _damerau_levenshtein_distance(s1, s2):
         da[s1[i - 1]] = i
 
     return score[len1 + 1][len2 + 1]
-
-
-class NDCGApproxLoss(torch.nn.modules.loss._Loss):
-    __constants__ = ['reduction']
-
-    __MAX_TOPK_ITEMS__ = 10000
-
-    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
-        super(NDCGApproxLoss, self).__init__(size_average, reduce, reduction)
-        self.topk = topk
-        self.temperature = temperature
-
-    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if _input.shape[1] > self.__MAX_TOPK_ITEMS__:
-            topk = self.topk or target.shape[1]
-            _, _input_topk = torch.topk(_input, dim=1, k=topk)
-            _input = _input[torch.arange(_input.shape[0])[:, None], _input_topk]
-            target = target[torch.arange(target.shape[0])[:, None], _input_topk]
-
-        _input_temp = torch.nn.ReLU()(_input) / self.temperature
-
-        def approx_ranks(inp):
-            shape = inp.shape[1]
-
-            a = torch.tile(torch.unsqueeze(inp, 2), [1, 1, shape])
-            a = torch.transpose(a, 1, 2) - a
-            return torch.sum(torch.sigmoid(a), dim=-1) + .5
-
-        def inverse_max_dcg(_target,
-                            gain_fn=lambda _target: torch.pow(2.0, _target) - 1.,
-                            rank_discount_fn=lambda rank: 1. / rank.log1p()):
-            topk = self.topk or _target.shape[1]
-            ideal_sorted_target = torch.topk(_target, topk).values
-            rank = (torch.arange(ideal_sorted_target.shape[1]) + 1).to(_target.device)
-            discounted_gain = gain_fn(ideal_sorted_target).to(_target.device) * rank_discount_fn(rank)
-            discounted_gain = torch.sum(discounted_gain, dim=1, keepdim=True)
-            return torch.where(discounted_gain > 0., 1. / discounted_gain, torch.zeros_like(discounted_gain))
-
-        def ndcg(_target, _ranks):
-            topk = self.topk or _target.shape[1]
-            sorted_target, sorted_idxs = torch.topk(_target, topk)
-            discounts = 1. / _ranks[torch.arange(_ranks.shape[0])[:, None], sorted_idxs].log1p()
-            gains = torch.pow(2., sorted_target).to(_target.device) - 1.
-            dcg = torch.sum(gains * discounts, dim=-1, keepdim=True)
-            return dcg * inverse_max_dcg(_target)
-
-        ranks = approx_ranks(_input_temp)
-
-        return -ndcg(target, ranks)
 
 
 def copytree(src, dst, symlinks=False, ignore=None):

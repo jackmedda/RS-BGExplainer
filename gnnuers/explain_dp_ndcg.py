@@ -98,6 +98,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     epochs = config['cf_epochs']
     topk = config['cf_topk']
     explainer_config_file = kwargs.get("explainer_config_file", None)
+    wandb_mode = kwargs.get("wandb_mode", "disabled")
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
@@ -118,7 +119,7 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
         name="Explanation",
         job_type="train",
         group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp={os.path.basename(base_exps_file)}",
-        mode="disabled"
+        mode=wandb_mode
     )
     wandb.config.update({"exp": os.path.basename(base_exps_file)})
 
@@ -139,7 +140,8 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 def execute_explanation(model_file,
                         explainer_config_file=os.path.join("config", "explainer.yaml"),
                         config_id=-1,
-                        verbose=False):
+                        verbose=False,
+                        wandb_mode="disabled"):
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
                                                                                           explainer_config_file)
@@ -159,7 +161,8 @@ def execute_explanation(model_file,
 
     kwargs = dict(
         verbose=verbose,
-        explainer_config_file=explainer_config_file
+        explainer_config_file=explainer_config_file,
+        wandb_mode=wandb_mode
     )
 
     explain(

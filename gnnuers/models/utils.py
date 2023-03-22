@@ -79,3 +79,11 @@ def perturb_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=F
 
     # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
     return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp), P_loss
+
+
+def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor):
+    try:
+        adj_filter = torch.isin(edges, nodes).any(dim=0)
+    except AttributeError:
+        adj_filter = (edges[0][:, None] == nodes).any(-1) | (edges[1][:, None] == nodes).any(-1)
+    return adj_filter

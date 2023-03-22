@@ -5,7 +5,6 @@ import sys
 import time
 import math
 from logging import getLogger
-from typing import Tuple, Callable, Dict
 
 import tqdm
 import wandb
@@ -26,6 +25,7 @@ import gnnuers.utils as utils
 import gnnuers.models as exp_models
 import gnnuers.evaluation as eval_utils
 from gnnuers.utils.early_stopping import EarlyStopping
+from gnnuers.losses import *
 
 
 class DPBGExplainer:
@@ -44,6 +44,7 @@ class DPBGExplainer:
         self.rec_data = rec_data.dataset
 
         self.cf_optimizer = None
+        self.mini_batch_descent = config['mini_batch_descent']
 
         self.beta = config['cf_beta']
         self.device = config['device']
@@ -73,6 +74,7 @@ class DPBGExplainer:
 
         self.only_adv_group = config['only_adv_group']
 
+        self.metric_loss = config['metric_loss'] or 'ndcg'
         self.evaluator = Evaluator(config)
 
         attr_map = dataset.field2id_token[self.sensitive_attribute]
@@ -89,14 +91,13 @@ class DPBGExplainer:
             delta=config['early_stopping']['delta']
         )
 
-        self.earlys_pvalue = config['early_stopping']['pvalue']
-
-        self.previous_ndcg = config['previous_ndcg']
+        self.previous_loss_value = config['previous_loss_value']
         self.previous_batch_LR_scaling = config['previous_batch_LR_scaling']
 
         self.increase_disparity = config['explainer_policies']['increase_disparity']
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
         self.random_perturbation = config['explainer_policies']['random_perturbation']
+        self.neighborhood_perturbation = config['explainer_policies']['neighborhood_perturbation']
 
         wandb.config.update(config.final_config_dict)
         # wandb.watch(self.cf_model)
@@ -152,11 +153,13 @@ class DPBGExplainer:
         # topk_idx contains the ids of the topk items
         self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
 
-    def logging_exp_ndcg_per_group(self, new_example):
+    def logging_exp_per_group(self, new_example):
+        ml_str = self.metric_loss.upper()
+
         pref_data = pd.DataFrame(zip(*new_example[:2], new_example[3]),
                                  columns=['user_id', 'topk_pred', 'cf_topk_pred'])
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
-        cf_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
+        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.metric_loss)
+        cf_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', self.metric_loss)
 
         user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
 
@@ -165,8 +168,33 @@ class DPBGExplainer:
 
         orig_f, orig_m = np.mean(orig_res[f_users, -1]), np.mean(orig_res[m_users, -1])
         cf_f, cf_m = np.mean(cf_res[f_users, -1]), np.mean(cf_res[m_users, -1])
-        self.logger.info(f"Original => NDCG F: {orig_f}, NDCG M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
-                         f"CF       => NDCG F: {cf_f}, NDCG M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+        self.logger.info(f"Original => {ml_str} F: {orig_f}, {ml_str} M: {orig_m}, Diff: {np.abs(orig_f - orig_m)} \n"
+                         f"CF       => {ml_str} F: {cf_f}, {ml_str} M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
+
+    def _compute_fair_metric(self, user_id, cf_topk):
+        sens_attr = self.sensitive_attribute
+        dset_name = self.rec_data.dataset_name
+
+        # minus 1 encodes the demographic groups to {0, 1} instead of {1, 2}
+        pref_data = pd.DataFrame(
+            zip(user_id, cf_topk, self.rec_data.user_feat[sens_attr][user_id].numpy() - 1),
+            columns=['user_id', 'cf_topk_pred', 'Demo Group']
+        )
+
+        result = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', self.metric_loss)
+        pref_data[self.metric_loss] = result[:, -1]
+
+        # it prevents from using memoization
+        if hasattr(eval_utils.compute_DP_across_random_samples, "generated_groups"):
+            if (dset_name, sens_attr) in eval_utils.compute_DP_across_random_samples.generated_groups:
+                del eval_utils.compute_DP_across_random_samples.generated_groups[(dset_name, sens_attr)]
+
+        fair_metric, _ = eval_utils.compute_DP_across_random_samples(
+            pref_data, sens_attr, 'Demo Group', dset_name, self.metric_loss,
+            iterations=100, batch_size=self.user_batch_exp
+        )
+
+        return fair_metric[:, -1].mean()
 
     def update_best_cf_example(self, best_cf_example, new_example, loss_total, best_loss, first_fair_loss, force_update=False):
         """
@@ -189,7 +217,7 @@ class DPBGExplainer:
             self.old_graph_dist = new_example[-4]
 
             if self.verbose:
-                self.logging_exp_ndcg_per_group(new_example)
+                self.logging_exp_per_group(new_example)
 
             if not self.unique_graph_dist_loss:
                 return abs(loss_total)
@@ -323,30 +351,11 @@ class DPBGExplainer:
         plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
         plt.close()
 
-    def _earlys_pvalue_check(self, new_example):
-        pref_data = pd.DataFrame(zip(new_example[0], new_example[3]), columns=['user_id', 'cf_topk_pred'])
-        cf_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', 'ndcg')
-
-        user_feat = Interaction(
-            {k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
-
-        m_users = user_feat[self.sensitive_attribute] == self.m_idx
-        f_users = user_feat[self.sensitive_attribute] == self.f_idx
-
-        cf_f, cf_m = cf_res[f_users, -1], cf_res[m_users, -1]
-
-        stat = sp_stats.f_oneway(cf_f, cf_m)
-        check = stat.pvalue > self.earlys_pvalue and len(self.earlys.history) > self.earlys.ignore
-        if check:
-            self.logger.info(f"Early Stopping with ANOVA test result: {stat}")
-
-        return check
-
     def determine_adv_group(self, batched_data, rec_model_topk):
         pref_users = batched_data.numpy()
         pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
 
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.metric_loss)
 
         pref_users_sens_attr = self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
 
@@ -363,7 +372,7 @@ class DPBGExplainer:
         pref_users = batched_data.numpy()
         pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
 
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', 'ndcg')
+        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.metric_loss)
 
         m_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.m_idx
         f_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.f_idx
@@ -463,12 +472,13 @@ class DPBGExplainer:
             # overwrites `increase_disparity` policy
             filtered_users = exp_models.PerturbedModel.RANDOM_POLICY
 
+        detached_batched_data = batched_data.detach().numpy()
         self.initialize_cf_model(filtered_users=filtered_users)
 
-        orig_ndcg_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
+        orig_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
         self.logger.info(self.results)
         self.logger.info(f"M idx: {self.m_idx}")
-        self.logger.info(f"Original Fair Loss: {orig_ndcg_loss}")
+        self.logger.info(f"Original Fair Loss: {orig_loss}")
 
         iter_epochs = tqdm.tqdm(
             range(epochs),
@@ -486,12 +496,15 @@ class DPBGExplainer:
 
             lr_scaling = np.linspace(0.1, 1, len(iter_data))
 
-            if self.previous_ndcg:
-                previous_ndcg = dict.fromkeys(self.dataset.user_feat[self.sensitive_attribute].unique().numpy())
-                for gr in previous_ndcg:
-                    previous_ndcg[gr] = np.array([])
+            if self.previous_loss_value:
+                previous_loss_value = dict.fromkeys(self.dataset.user_feat[self.sensitive_attribute].unique().numpy())
+                for gr in previous_loss_value:
+                    previous_loss_value[gr] = np.array([])
             else:
-                previous_ndcg = None
+                previous_loss_value = None
+
+            if not self.mini_batch_descent:
+                self.cf_optimizer.zero_grad()
 
             epoch_fair_loss = []
             for batch_idx, batch_user in enumerate(iter_data):
@@ -505,8 +518,11 @@ class DPBGExplainer:
                 self.compute_model_predictions(batch_scores_args, topk)
 
                 torch.cuda.empty_cache()
-                new_example, loss_total, fair_loss = self.train(epoch, batch_scores_args, batch_user, topk=topk, previous_ndcg=previous_ndcg)
+                new_example, loss_total, fair_loss = self.train(epoch, batch_scores_args, batch_user, topk=topk, previous_loss_value=previous_loss_value)
                 epoch_fair_loss.append(fair_loss)
+
+            if not self.mini_batch_descent:
+                self.cf_optimizer.step()
 
             if self.previous_batch_LR_scaling:
                 for pg_idx, pg in enumerate(self.cf_optimizer.param_groups):
@@ -519,10 +535,6 @@ class DPBGExplainer:
                 DPBGExplainer._verbose_plot(fair_losses, epoch)
 
             if new_example is not None:
-                new_example[6] = epoch_fair_loss
-
-                wandb.log({'loss': epoch_fair_loss, '# Del Edges': new_example[-2].shape[1]})
-
                 # Recommendations generated passing test set (items in train and validation are considered watched)
                 self.cf_model.eval()
                 with torch.no_grad():
@@ -541,8 +553,9 @@ class DPBGExplainer:
                     self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(rec_cf_topk_pred_idx, rec_model_topk)
                 ]
 
+                # TODO: detached_batched_data could be saved once and not repeated for each explanation
                 new_example = [
-                    batched_data.detach().numpy(),
+                    detached_batched_data,
                     # rec_model_topk,
                     # test_model_topk,
                     rec_cf_topk_pred_idx,
@@ -552,29 +565,41 @@ class DPBGExplainer:
                     *new_example[4:]
                 ]
 
-                # TODO: early stopping should use
+                epoch_fair_metric = self._compute_fair_metric(
+                    detached_batched_data,
+                    rec_cf_topk_pred_idx
+                )
+
+                new_example[utils.exp_col_index('fair_loss')] = epoch_fair_loss
+                new_example[utils.exp_col_index('fair_metric')] = epoch_fair_metric
+
+                wandb.log({
+                    'loss': epoch_fair_loss,
+                    'fair_metric': epoch_fair_metric,
+                    '# Del Edges': new_example[-2].shape[1]
+                })
+
+                # if self.earlys.check(epoch_fair_metric):
                 if self.earlys.check(epoch_fair_loss):
                     self.logger.info(self.earlys)
                     best_epoch = epoch + 1 - self.earlys.patience
                     self.logger.info(f"Early Stopping: best epoch {best_epoch}")
 
                     # stub example added to find again the best epoch when explanations are loaded
-                    best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss, force_update=True)
+                    best_loss = self.update_best_cf_example(
+                        best_cf_example, new_example, loss_total, best_loss, orig_loss, force_update=True
+                    )
 
                     break
 
-                if self.earlys_pvalue is not None:
-                    if self._earlys_pvalue_check(new_example):
-                        break
-
-                best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_ndcg_loss)
+                best_loss = self.update_best_cf_example(best_cf_example, new_example, loss_total, best_loss, orig_loss)
 
             self.logger.info("{} CF examples".format(len(best_cf_example)))
 
         return best_cf_example, (rec_model_topk, test_model_topk)
 
     # @profile
-    def train(self, epoch, scores_args, users_ids, topk=10, previous_ndcg=None):
+    def train(self, epoch, scores_args, users_ids, topk=10, previous_loss_value=None):
         """
         Training procedure of explanation
         :param epoch:
@@ -585,16 +610,17 @@ class DPBGExplainer:
 
         self.cf_model.eval()
 
-        # compute non-differentiable permutation of adj matrix
+        # compute non-differentiable perturbation of adj matrix
         with torch.no_grad():
             cf_scores_pred = self.get_scores(self.cf_model, *scores_args, pred=True)
             cf_scores_pred_topk, cf_topk_pred_idx = self.get_top_k(cf_scores_pred, **self.topk_args)
 
-        self.cf_optimizer.zero_grad()
+        if self.mini_batch_descent:
+            self.cf_optimizer.zero_grad()
         self.cf_model.train()
 
         # compute differentiable permutation of adj matrix
-        # cf_scores uses differentiable P_hat ==> adjacency matrix not binary, but needed for training
+        # cf_scores uses differentiable P_hat ---> adjacency matrix not binary, but needed for training
         cf_scores = self.get_scores(self.cf_model, *scores_args, pred=False)
 
         # remove neginf from output
@@ -611,12 +637,13 @@ class DPBGExplainer:
 
         loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, adj_sub_cf_adj = self.cf_model.loss(
             cf_scores,
-            DPNDCGLoss(
+            DPLoss(
                 self.sensitive_attribute,
                 user_feat,
                 topk=topk,
+                loss=NDCGApproxLoss,
                 adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]),
-                previous_ndcg=previous_ndcg
+                previous_loss_value=previous_loss_value
             ),
             target
         )
@@ -630,7 +657,8 @@ class DPBGExplainer:
         #         print(param.grad[param.grad])
 
         nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
-        self.cf_optimizer.step()
+        if self.mini_batch_descent:
+            self.cf_optimizer.step()
 
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
         self.logger.info(f"{self.cf_model.__class__.__name__} " +
@@ -665,7 +693,10 @@ class DPBGExplainer:
 
             cf_stats = [users_ids.detach().numpy(),
                         self.model_topk_idx.detach().cpu().numpy(), cf_topk_pred_idx.detach().cpu().numpy(),
-                        cf_dist, loss_total.item(), loss_graph_dist.item(), fair_loss, del_edges, epoch + 1]
+                        cf_dist, loss_total.item(), loss_graph_dist.item(), fair_loss, None, del_edges, epoch + 1]
+
+            if self.neighborhood_perturbation:
+                self.cf_model.update_neighborhood(torch.Tensor(del_edges))
 
         return cf_stats, loss_total.item(), fair_loss
 
@@ -718,78 +749,3 @@ class DPBGExplainer:
         scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
 
         return scores_top_k, topk_idx
-
-
-class DPNDCGLoss(torch.nn.modules.loss._Loss):
-    __constants__ = ['reduction']
-
-    def __init__(self,
-                 sensitive_attribute: str,
-                 user_feat,
-                 topk=10,
-                 adv_group_data: Tuple[str, int, float] = None,
-                 previous_ndcg: Dict[str, np.ndarray] = None,
-                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1) -> None:
-        super(DPNDCGLoss, self).__init__(size_average, reduce, reduction)
-
-        self.ndcg_loss: Callable = utils.NDCGApproxLoss(
-            size_average=size_average,
-            topk=topk,
-            reduce=reduce,
-            reduction=reduction,
-            temperature=temperature
-        )
-        self.sensitive_attribute = sensitive_attribute
-        self.user_feat = user_feat
-        self.adv_group_data = adv_group_data
-        self.previous_ndcg = previous_ndcg
-
-    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        groups = self.user_feat[self.sensitive_attribute].unique().numpy()
-        masks = []
-        for gr in groups:
-            masks.append((self.user_feat[self.sensitive_attribute] == gr).numpy())
-        masks = np.stack(masks)
-
-        ndcg_values = self.ndcg_loss(_input, target)
-
-        masked_ndcg = []
-        for gr, mask in zip(groups, masks):
-            if self.previous_ndcg is not None:
-                gr_ndcg = (ndcg_values[mask].sum() + self.previous_ndcg[gr].sum())
-                gr_ndcg = gr_ndcg / (ndcg_values[mask].shape[0] + self.previous_ndcg[gr].shape[0])
-                masked_ndcg.append(gr_ndcg.unsqueeze(dim=-1))
-                if self.previous_ndcg[gr].shape[0] > 0:
-                    self.previous_ndcg[gr] = np.concatenate([
-                        ndcg_values[mask].detach().cpu().numpy(),
-                        self.previous_ndcg[gr]
-                    ], axis=0)
-                else:
-                    self.previous_ndcg[gr] = ndcg_values[mask].detach().cpu().numpy()
-            else:
-                masked_ndcg.append(ndcg_values[mask].mean(dim=0))
-        masked_ndcg = torch.stack(masked_ndcg)
-
-        loss = None
-        for gr_i_idx in range(len(groups)):
-            gr_i = groups[gr_i_idx]
-            if self.adv_group_data[0] == "global":
-                # the loss works to optimize NDCG towards -1, the global NDCG is however positive
-                loss = (masked_ndcg[gr_i_idx] - (-self.adv_group_data[2])).abs()
-            else:
-                for gr_j_idx in range(gr_i_idx + 1, len(groups)):
-                    l_val = masked_ndcg[gr_i_idx]
-                    r_val = masked_ndcg[gr_j_idx]
-
-                    if self.adv_group_data[0] == "local":
-                        if self.adv_group_data[1] == gr_i:
-                            l_val = l_val.detach()
-                        else:
-                            r_val = r_val.detach()
-
-                    if loss is None:
-                        loss = (l_val - r_val).abs()
-                    else:
-                        loss += (l_val - r_val).abs()
-
-        return loss / max(int(gmpy2.comb(len(groups), 2)), 1)

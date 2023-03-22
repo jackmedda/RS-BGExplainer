@@ -6,6 +6,8 @@ neighbors_hops: True
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
 cf_learning_rate: 3000 # 1200 for NDCGApprox
+# set to update weights after each mini-batch, otherwise after a full batch
+mini_batch_descent: True
 
 momentum: 0.0
 # epochs to generate explanations
@@ -22,6 +24,9 @@ cf_beta: 0.5
 cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
 cf_topk: 10
+
+# metric used for demographic parity loss and debugging
+metric_loss: ndcg
 
 # loss weight for the fairness loss
 fair_beta: 0.5
@@ -80,9 +85,8 @@ early_stopping:
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
     delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
-    pvalue:
 
-previous_ndcg: False
+previous_loss_value: False
 previous_batch_LR_scaling: False
 
 random_perturbation_p: 0.0005
@@ -96,3 +100,4 @@ explainer_policies:
     force_removed_edges: True
     group_deletion_constraint: True   # this and `random_perturbation` cannot be both True
     random_perturbation: False
+    neighborhood_perturbation: True   # the perturbation spread from the first perturbed edges towards the neighbors
