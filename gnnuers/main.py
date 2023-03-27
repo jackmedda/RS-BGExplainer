@@ -12,7 +12,7 @@ from recbole.config import Config
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
-from gnnuers.explain_dp_ndcg import execute_explanation
+from gnnuers.explain import execute_explanation
 import gnnuers.utils as utils
 
 

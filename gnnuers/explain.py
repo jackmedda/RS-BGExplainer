@@ -13,7 +13,7 @@ import pandas as pd
 from recbole.data.dataloader import FullSortEvalDataLoader
 
 import gnnuers.utils as utils
-from gnnuers.explainers.explainer_dp_ndcg import DPBGExplainer
+from gnnuers.explainers import DPBGExplainer, BaB
 
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
@@ -123,7 +123,12 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     )
     wandb.config.update({"exp": os.path.basename(base_exps_file)})
 
-    bge = DPBGExplainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
+    explainer = {
+        "DPBGExplainer": DPBGExplainer,
+        "BaB": BaB
+    }.get(config["explainer"], DPBGExplainer)
+
+    bge = explainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
     exp, model_preds = bge.explain(user_data, _test_data, epochs, topk=topk)
 
     exps_filename = os.path.join(base_exps_file, f"cf_data.pkl")
@@ -145,6 +150,9 @@ def execute_explanation(model_file,
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
                                                                                           explainer_config_file)
+
+    # force these evaluation metrics to be ready to be computed
+    config['metrics'] = ['ndcg', 'recall', 'hit', 'mrr']
 
     if config['exp_rec_data'] is not None:
         if config['exp_rec_data'] != 'train+valid':

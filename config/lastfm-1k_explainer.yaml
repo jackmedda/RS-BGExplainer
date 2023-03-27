@@ -1,13 +1,11 @@
-# How many hops for the subgraph? (Only used if `user_batch_exp` == 1)
-n_hops: 2
-# `n_hops` is doubled such that each hop considers all the interactions of closest users in the bipartite graph
-neighbors_hops: True
+# choices ["DPBGExplainer", "BaB"]
+explainer: DPBGExplainer
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
 cf_learning_rate: 3000 # 1200 for NDCGApprox
 # set to update weights after each mini-batch, otherwise after a full batch
-mini_batch_descent: True
+mini_batch_descent: False
 
 momentum: 0.0
 # epochs to generate explanations
@@ -25,11 +23,14 @@ cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
 cf_topk: 10
 
-# metric used for demographic parity loss and debugging
-metric_loss: ndcg
+# metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
+metric_loss: softmax
+
+# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
+eval_metric: precision
 
 # loss weight for the fairness loss
-fair_beta: 0.5
+fair_beta: 4.0
 dropout_prob: 0.3
 
 edge_additions: False
@@ -39,9 +40,9 @@ exp_rec_data: "valid"
 
 # device: cpu
 
-# "local": the optimization uses the NDCG of the disadvantaged group computed locally for the current batch
-# "global": the optimization uses the NDCG of the disadvantaged group computed globally on the original model
-only_adv_group: "local"
+# "local": the optimization uses the ranking metric score of the disadvantaged group computed locally for the current batch
+# "global": the optimization uses the ranking metric score of the disadvantaged group computed globally on the original model
+only_adv_group: "global"
 # Choose if the edges of the advantaged group should be deleted or the opposite
 delete_adv_group: True
 
@@ -97,7 +98,7 @@ perturbation_initialization: 'static'
 # Policies
 explainer_policies:
     increase_disparity: False
-    force_removed_edges: True
+    force_removed_edges: False
     group_deletion_constraint: True   # this and `random_perturbation` cannot be both True
     random_perturbation: False
-    neighborhood_perturbation: True   # the perturbation spread from the first perturbed edges towards the neighbors
+    neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors

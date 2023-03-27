@@ -304,7 +304,7 @@ def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
     dataobject.set('rec.topk', pos_data)
 
     pos_index, pos_len = evaluator.metric_class[metric].used_info(dataobject)
-    if metric in ['hit', 'mrr']:
+    if metric in ['hit', 'mrr', 'precision']:
         result = evaluator.metric_class[metric].metric_info(pos_index)
     else:
         result = evaluator.metric_class[metric].metric_info(pos_index, pos_len)

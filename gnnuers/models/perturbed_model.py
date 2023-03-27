@@ -132,7 +132,7 @@ class PerturbedModel(object):
         orig_loss_graph_dist = torch.sum(orig_dist.values().abs()) / 2  # Number of edges changed (symmetrical)
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
-        loss_total = fair_loss + 0.01 * loss_graph_dist
+        loss_total = fair_loss + self.fair_beta * loss_graph_dist
 
         return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, orig_dist
 

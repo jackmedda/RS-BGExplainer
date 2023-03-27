@@ -1,7 +1,5 @@
-# How many hops for the subgraph? (Only used if `user_batch_exp` == 1)
-n_hops: 2
-# `n_hops` is doubled such that each hop considers all the interactions of closest users in the bipartite graph
-neighbors_hops: True
+# choices ["DPBGExplainer", "BaB"]
+explainer: DPBGExplainer
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
@@ -25,8 +23,11 @@ cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
 cf_topk: 10
 
-# metric used for demographic parity loss and debugging
-metric_loss: ndcg
+# metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
+metric_loss: softmax
+
+# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr"]
+eval_metric: hit
 
 # loss weight for the fairness loss
 fair_beta: 0.5
