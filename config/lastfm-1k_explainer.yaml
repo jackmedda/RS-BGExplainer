@@ -1,5 +1,5 @@
-# choices ["DPBGExplainer", "BaB"]
-explainer: DPBGExplainer
+# choices ["DPBG", "BaB"]
+explainer: BaB
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
@@ -24,13 +24,13 @@ cf_dist: damerau_levenshtein
 cf_topk: 10
 
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: softmax
+metric_loss: ndcg
 
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
-eval_metric: precision
+eval_metric: ndcg
 
 # loss weight for the fairness loss
-fair_beta: 4.0
+fair_beta: 0.01  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 dropout_prob: 0.3
 
 edge_additions: False
@@ -42,7 +42,7 @@ exp_rec_data: "valid"
 
 # "local": the optimization uses the ranking metric score of the disadvantaged group computed locally for the current batch
 # "global": the optimization uses the ranking metric score of the disadvantaged group computed globally on the original model
-only_adv_group: "global"
+only_adv_group: "local"
 # Choose if the edges of the advantaged group should be deleted or the opposite
 delete_adv_group: True
 

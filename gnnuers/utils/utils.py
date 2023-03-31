@@ -62,7 +62,7 @@ def wandb_init(config, **kwargs):
     )
 
 
-def load_data_and_model(model_file, explainer_config_file=None):
+def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=None):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -83,10 +83,29 @@ def load_data_and_model(model_file, explainer_config_file=None):
             explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
         config.final_config_dict.update(explain_config_dict)
 
+    if cmd_config_args is not None:
+        for arg, val in cmd_config_args.items():
+            if config[arg] is None:
+                try:
+                    new_val = float(val)
+                    new_val = int(new_val) if new_val.is_integer() else new_val
+                except ValueError:
+                    new_val = int(val) if val.isdigit() else val
+                config[arg] = new_val
+            else:
+                try:
+                    config[arg] = type(config[arg])(val)  # cast to same type in config
+                except Exception:
+                    pass
+
     config['data_path'] = config['data_path'].replace('\\', os.sep)
     config['device'] = 'cuda'
 
+    logger = getLogger()
+    logger.info(config)
+
     dataset = create_dataset(config)
+    logger.info(dataset)
 
     if 'group_explain' in config:
         config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
@@ -96,6 +115,8 @@ def load_data_and_model(model_file, explainer_config_file=None):
     model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
     model.load_state_dict(checkpoint['state_dict'])
     model.load_other_parameter(checkpoint.get('other_parameter'))
+
+    logger.info(model)
 
     return config, model, dataset, train_data, valid_data, test_data
 

@@ -10,11 +10,9 @@ import tqdm
 import wandb
 import gmpy2
 import torch
-import torch.nn as nn
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import scipy.stats as sp_stats
 import scipy.signal as sp_signal
 import matplotlib.pyplot as plt
 from recbole.evaluator import Evaluator
@@ -42,8 +40,9 @@ class Explainer:
         self._cf_model = None
 
         self.dataset = dataset
-        self.rec_data_loader = rec_data
-        self.rec_data = rec_data.dataset
+        self.rec_data = rec_data
+        self._pred_as_rec = config['exp_rec_data'] == 'rec'
+        self._test_history_matrix = None
 
         self.cf_optimizer = None
         self.mini_batch_descent = config['mini_batch_descent']
@@ -185,8 +184,8 @@ class Explainer:
         em_str = self.eval_metric.upper()
 
         pref_data = pd.DataFrame(zip(*new_example[:2], model_topk), columns=['user_id', 'cf_topk_pred', 'topk_pred'])
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.eval_metric)
-        cf_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'cf_topk_pred', self.eval_metric)
+        orig_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'topk_pred')
+        cf_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'cf_topk_pred')
 
         user_feat = Interaction({k: v[torch.tensor(new_example[0])] for k, v in self.dataset.user_feat.interaction.items()})
 
@@ -219,7 +218,10 @@ class Explainer:
                              )
         self.logger.info(" ")
 
-    def _compute_fair_metric(self, user_id, topk_pred, dataset):
+    def compute_eval_metric(self, dataset, pref_data, col):
+        return eval_utils.compute_metric(self.evaluator, dataset, pref_data, col, self.eval_metric)
+
+    def compute_fair_metric(self, user_id, topk_pred, dataset, iterations=100):
         sens_attr = self.sensitive_attribute
         dset_name = dataset.dataset_name
 
@@ -239,7 +241,7 @@ class Explainer:
 
         fair_metric, _ = eval_utils.compute_DP_across_random_samples(
             pref_data, sens_attr, 'Demo Group', dset_name, self.eval_metric,
-            iterations=100, batch_size=self.user_batch_exp
+            iterations=iterations, batch_size=self.user_batch_exp
         )
 
         return fair_metric[:, -1].mean()
@@ -305,10 +307,10 @@ class Explainer:
             *new_example[4:]
         ]
 
-        epoch_fair_metric = self._compute_fair_metric(
+        epoch_fair_metric = self.compute_fair_metric(
             detached_batched_data,
             rec_cf_topk_pred_idx,
-            self.rec_data
+            self.rec_data.dataset
         )
 
         new_example[utils.exp_col_index('fair_loss')] = epoch_fair_loss
@@ -320,7 +322,7 @@ class Explainer:
             '# Del Edges': new_example[-2].shape[1]
         })
 
-        return new_example
+        return new_example, epoch_fair_metric
 
     @staticmethod
     def prepare_batched_data(batched_data, data, item_data=None):
@@ -427,10 +429,21 @@ class Explainer:
             while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
                 iter_data = self.randperm2groups(batched_data)
         else:
-            batched_attr_data = self.rec_data_loader.dataset.user_feat[self.sensitive_attribute][batched_data]
+            batched_attr_data = self.dataset.user_feat[self.sensitive_attribute][batched_data]
             iter_data = batched_data[batched_attr_data == self.adv_group].split(self.user_batch_exp)
 
         return iter_data
+
+    def _prepare_test_history_matrix(self, test_data, topk=10):
+        uids = test_data.dataset.user_feat.interaction[test_data.dataset.uid_field][1:]
+
+        dset_scores_args, dset_model_topk = self._get_model_score_data(uids, test_data, topk)
+
+        # add -1 as item ids for the padding user
+        dset_model_topk = np.vstack((np.array([-1] * topk, dtype=dset_model_topk.dtype), dset_model_topk))
+        self._test_history_matrix = dset_model_topk
+
+        return dset_scores_args, dset_model_topk
 
     @staticmethod
     def _verbose_plot(fair_losses, epoch):
@@ -513,7 +526,7 @@ class Explainer:
         pref_users = batched_data.numpy()
         pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
 
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.eval_metric)
+        orig_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'topk_pred')
 
         pref_users_sens_attr = self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
 
@@ -530,7 +543,7 @@ class Explainer:
         pref_users = batched_data.numpy()
         pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
 
-        orig_res = eval_utils.compute_metric(self.evaluator, self.rec_data, pref_data, 'topk_pred', self.eval_metric)
+        orig_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'topk_pred')
 
         m_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.m_idx
         f_users_mask = self.dataset.user_feat[self.sensitive_attribute][pref_users] == self.f_idx
@@ -570,7 +583,7 @@ class Explainer:
 
         # recompute recommendations of original model
         test_scores_args, test_model_topk = self._get_model_score_data(batched_data, test_data, topk)
-        rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data_loader, topk)
+        rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data, topk)
 
         return batched_data, test_model_topk, test_scores_args, rec_model_topk, rec_scores_args
 
@@ -589,7 +602,7 @@ class Explainer:
             if self.previous_batch_LR_scaling:
                 self.lr_scaler.update(batch_idx)
 
-            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data_loader, topk)
+            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data, topk)
 
             torch.cuda.empty_cache()
             new_example, loss_total, fair_loss = self.train(
@@ -623,11 +636,20 @@ class Explainer:
         self._check_loss_trend_epoch_images()
 
         test_scores_args, test_model_topk = self._get_model_score_data(batched_data, test_data, topk)
-        rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data_loader, topk)
+
+        # recommendations generated by the model are considered the ground truth
+        if self._pred_as_rec:
+            rec_scores_args, rec_model_topk = self._prepare_test_history_matrix(test_data, topk=topk)
+        else:
+            rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data, topk)
 
         batched_data, filtered_users, inc_disp_model_data = self._check_policies(batched_data, rec_model_topk)
         if self.increase_disparity:
             test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = inc_disp_model_data
+
+        # logs of fairness consider validation as seen when model recommendations are used as ground truth
+        if self._pred_as_rec:
+            self.rec_data = test_data
 
         detached_batched_data = batched_data.detach().numpy()
         self.initialize_cf_model(filtered_users=filtered_users)
@@ -656,7 +678,7 @@ class Explainer:
                 Explainer._verbose_plot(fair_losses, epoch)
 
             if new_example is not None:
-                self.update_new_example(
+                new_example, epoch_fair_metric = self.update_new_example(
                     new_example,
                     detached_batched_data,
                     test_scores_args,
@@ -666,9 +688,13 @@ class Explainer:
                     epoch_fair_loss
                 )
 
+                earlys_check_value = epoch_fair_loss
+                if self._pred_as_rec and earlys_check_value == epoch_fair_metric:
+                    raise ValueError(f"`exp_rec_data` = `rec` stores test data to log fairness metric. "
+                                     f"Cannot be used as value for early stopping check")
+
                 update_best_example_args = [best_cf_example, new_example, loss_total, best_loss, orig_loss]
-                # if self._check_early_stopping(epoch_fair_metric, *update_best_example_args)
-                if self._check_early_stopping(epoch_fair_loss, *update_best_example_args):
+                if self._check_early_stopping(earlys_check_value, *update_best_example_args):
                     break
 
                 best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
@@ -726,7 +752,7 @@ class Explainer:
         #     if name == "P_symm":
         #         print(param.grad[param.grad])
 
-        nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
+        torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         if self.mini_batch_descent:
             self.cf_optimizer.step()
 
@@ -751,7 +777,11 @@ class Explainer:
 
     def get_target(self, cf_scores, user_feat):
         target = torch.zeros_like(cf_scores, dtype=torch.float, device=cf_scores.device)
-        rec_data_interactions = self.rec_data.history_item_matrix()[0][user_feat[self.dataset.uid_field]]
+        if not self._pred_as_rec:
+            hist_matrix, _, _ = self.rec_data.dataset.history_item_matrix()
+            rec_data_interactions = hist_matrix[user_feat[self.dataset.uid_field]]
+        else:
+            rec_data_interactions = self._test_history_matrix[user_feat[self.dataset.uid_field]]
         target[torch.arange(target.shape[0])[:, None], rec_data_interactions] = 1
         target[:, 0] = 0
 

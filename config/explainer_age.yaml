@@ -1,5 +1,5 @@
-# choices ["DPBGExplainer", "BaB"]
-explainer: DPBGExplainer
+# choices ["DPBG", "BaB"]
+explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
@@ -24,13 +24,13 @@ cf_dist: damerau_levenshtein
 cf_topk: 10
 
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: softmax
+metric_loss: ndcg
 
-# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr"]
-eval_metric: hit
+# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
+eval_metric: ndcg
 
 # loss weight for the fairness loss
-fair_beta: 0.5
+fair_beta: 0.01  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 dropout_prob: 0.3
 
 edge_additions: False

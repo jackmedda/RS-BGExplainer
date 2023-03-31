@@ -1,2 +1,2 @@
-from .dp_ndcg import DPBGExplainer
+from .dpbg import DPBG
 from .bab import BaB

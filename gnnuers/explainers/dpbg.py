@@ -1,5 +1,5 @@
 from .base import Explainer
 
 
-class DPBGExplainer(Explainer):
+class DPBG(Explainer):
     pass

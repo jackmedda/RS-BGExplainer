@@ -289,8 +289,10 @@ def compute_exp_stats_data(_result_all_data,
     return exp_data, stats_data, final_bins
 
 
-def compute_metric(evaluator, dataset, pref_data, pred_col, metric):
-    hist_matrix, _, _ = dataset.history_item_matrix()
+def compute_metric(evaluator, dataset, pref_data, pred_col, metric, hist_matrix=None):
+    # useful to use a different history from the dataset one
+    if hist_matrix is None:
+        hist_matrix, _, _ = dataset.history_item_matrix()
     dataobject = recb_collector.DataStruct()
     uid_list = pref_data['user_id'].to_numpy()
 
@@ -391,11 +393,17 @@ def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch
                 samples[gr_i][np.random.choice(groups[gr_i].nonzero()[0], sample_size, replace=False)] = True
             out_samples[i] = samples
 
-        gr1_mean = group_data[out_samples[i, 0]].mean()
-        gr2_mean = group_data[out_samples[i, 1]].mean()
-        out[i] = [gr1_mean, gr2_mean, np.abs(gr1_mean - gr2_mean)]
+        dp = compute_dp_with_masks(group_data, out_samples[i, 0], out_samples[i, 1])
+        out[i] = [gr1_mean, gr2_mean, dp]
 
     return out
+
+
+@numba.jit(nopython=True)
+def compute_dp_with_masks(eval_data, gr1_mask, gr2_mask):
+    gr1_mean = eval_data[gr1_mask].mean()
+    gr2_mean = eval_data[gr2_mask].mean()
+    return np.abs(gr1_mean - gr2_mean)
 
 
 def best_epoch_DP_across_samples(exp_path,

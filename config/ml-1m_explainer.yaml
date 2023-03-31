@@ -1,15 +1,15 @@
-# choices ["DPBGExplainer", "BaB"]
-explainer: DPBGExplainer
+# choices ["DPBG", "BaB"]
+explainer: BaB
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 3000 # 1200 for NDCGApprox
+cf_learning_rate: 300 # 3000 for NDCGApprox, 200 for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
 momentum: 0.0
 # epochs to generate explanations
-cf_epochs: 800
+cf_epochs: 1
 # how many users should be considered to explain?
 user_batch_exp: 64
 # not consider the prediction loss
@@ -26,11 +26,11 @@ cf_topk: 10
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
 metric_loss: softmax
 
-# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr"]
-eval_metric: hit
+# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
+eval_metric: precision
 
 # loss weight for the fairness loss
-fair_beta: 0.5
+fair_beta: 0.01  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 dropout_prob: 0.3
 
 edge_additions: False
@@ -45,6 +45,11 @@ exp_rec_data: "valid"
 only_adv_group: "local"
 # Choose if the edges of the advantaged group should be deleted or the opposite
 delete_adv_group: True
+
+# how many edges should be deleted for each batch before passing to the next one when BaB explainer is used
+bab_min_del_edges: 100
+
+bab_max_tries: 450
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
@@ -99,6 +104,6 @@ perturbation_initialization: 'static'
 explainer_policies:
     increase_disparity: False
     force_removed_edges: True
-    group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
+    group_deletion_constraint: True   # this and `random_perturbation` cannot be both True
     random_perturbation: False
     neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors

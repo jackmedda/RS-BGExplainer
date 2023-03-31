@@ -1,3 +1,13 @@
+import time
+
+import tqdm
+import torch
+import numpy as np
+import pandas as pd
+from recbole.utils import set_color
+
+import gnnuers.evaluation as eval_utils
+
 from .base import Explainer
 
 
@@ -8,6 +18,8 @@ class BaB(Explainer):
     def __init__(self, config, dataset, rec_data, model, dist="damerau_levenshtein", **kwargs):
         super(BaB, self).__init__(config, dataset, rec_data, model, dist=dist, **kwargs)
         self.mini_batch_descent = None
+        self.min_del_edges_batch = config['bab_min_del_edges'] or 1
+        self.max_tries_batch = config['bab_max_tries'] or 20
 
     def compute_rec_test_eval_metric_model_and_cf(self, new_example, test_data, test_model_topk, cf_test_topk):
         test_pref = pd.DataFrame(
@@ -24,12 +36,8 @@ class BaB(Explainer):
         rec_pref = pd.DataFrame(
             zip(*new_example[:3]), columns=['user_id', 'topk_pred', 'cf_topk_pred']
         )
-        orig_rec_res = eval_utils.compute_metric(
-            self.evaluator, self.rec_data, rec_pref, 'topk_pred', self.eval_metric
-        )
-        cf_rec_res = eval_utils.compute_metric(
-            self.evaluator, self.rec_data, rec_pref, 'cf_topk_pred', self.eval_metric
-        )
+        orig_rec_res = self.compute_eval_metric(self.rec_data, rec_pref, 'topk_pred')
+        cf_rec_res = self.compute_eval_metric(self.rec_data, rec_pref, 'cf_topk_pred')
 
         return orig_test_res, cf_test_res, orig_rec_res, cf_rec_res
 
@@ -39,33 +47,56 @@ class BaB(Explainer):
 
         bab_epoch_data = []
         epoch_fair_loss = []
-        new_example, loss_total = None, None
         for batch_idx, batch_user in enumerate(iter_data):
-            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data_loader, topk)
+            new_example, loss_total = None, None
+            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data.dataset, topk)
 
-            torch.cuda.empty_cache()
-            new_example, loss_total, fair_loss = self.train(
-                epoch, batch_scores_args, batch_user, topk=topk, previous_loss_value=previous_loss_value
-            )
+            def batch_check(ne, tc):
+                return ne is None or (ne[-2].shape[1] < self.min_del_edges_batch and tc < self.max_tries_batch)
+
+            tries_counter = 0
+            del_edges_batch_first_iter = False
+
+            while batch_check(new_example, tries_counter):
+                torch.cuda.empty_cache()
+                new_example, loss_total, fair_loss = self.train(
+                    epoch, batch_scores_args, batch_user, topk=topk, previous_loss_value=None
+                )
+
+                if batch_check(new_example, tries_counter):
+                    loss_total.backward()
+                    torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
+                    self.cf_optimizer.step()
+
+                    del_edges_batch_first_iter = True
+                tries_counter += 1
+
+            if del_edges_batch_first_iter:
+                self.cf_model.reset_param()
+
             epoch_fair_loss.append(fair_loss)
 
-            items_involved = np.asarray(np.unique(new_example[-2][1], return_counts=True))
-
-            batch_test_scores_args, test_model_topk_idx = self._get_model_score_data(new_example[0], test_data, topk)
-            cf_test_topk_pred_idx, _ = self._get_no_grad_pred_model_score_data(batch_test_scores_args)
-
-            orig_test_res, cf_test_res, orig_rec_res, cf_rec_res = self.compute_rec_test_eval_metric_model_and_cf(
-                new_example, test_data, test_model_topk_idx, cf_test_topk_pred_idx
-            )
-
-            fair_metric_data = []
-            for topk_pred, dset in zip(
-                [new_example[1], test_model_topk_idx, new_example[2], cf_test_topk_pred_idx],
-                [self.rec_data, test_data, self.rec_data, test_data]
-            ):
-                fair_metric_data.append(self._compute_fair_metric(new_example[0], topk_pred, dset))
-
             if new_example is not None:
+                uids = new_example[0]
+                items_involved = np.asarray(np.unique(new_example[-2][1], return_counts=True))
+
+                batch_test_scores_args, test_model_topk_idx = self._get_model_score_data(uids, test_data, topk)
+                cf_test_topk_pred_idx, _ = self._get_no_grad_pred_model_score_data(batch_test_scores_args)
+
+                orig_test_res, cf_test_res, orig_rec_res, cf_rec_res = self.compute_rec_test_eval_metric_model_and_cf(
+                    new_example, test_data.dataset, test_model_topk_idx, cf_test_topk_pred_idx
+                )
+
+                fair_metric_data = []
+                sens_attr = self.sensitive_attribute
+                for res, dset in zip(
+                    [orig_rec_res, orig_test_res, cf_rec_res, cf_test_res],
+                    [self.rec_data.dataset, test_data.dataset, self.rec_data.dataset, test_data.dataset]
+                ):
+                    gr1_mask = dset.user_feat[sens_attr][uids].numpy() == self.adv_group
+                    gr2_mask = dset.user_feat[sens_attr][uids].numpy() == self.disadv_group
+                    fair_metric_data.append(eval_utils.compute_dp_with_masks(res[:, -1], gr1_mask, gr2_mask))
+
                 bab_epoch_data.append([
                     new_example[0],
                     new_example[-2],
@@ -81,7 +112,7 @@ class BaB(Explainer):
         epoch_fair_loss = np.mean(epoch_fair_loss)
         fair_losses.append(epoch_fair_loss)
 
-        return new_example, loss_total, epoch_fair_loss
+        return bab_epoch_data, epoch_fair_loss
 
     def explain(self, batched_data, test_data, epochs, topk=10):
         """
@@ -93,18 +124,25 @@ class BaB(Explainer):
         :return:
         """
         best_cf_example = []
-        best_loss = np.inf
 
         self._check_loss_trend_epoch_images()
 
         test_scores_args, test_model_topk = self._get_model_score_data(batched_data, test_data, topk)
-        rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data_loader, topk)
+
+        # recommendations generated by the model are considered the ground truth
+        if self._pred_as_rec:
+            rec_scores_args, rec_model_topk = self._prepare_test_history_matrix(test_data, topk=topk)
+        else:
+            rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data, topk)
 
         batched_data, filtered_users, inc_disp_model_data = self._check_policies(batched_data, rec_model_topk)
         if self.increase_disparity:
             test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = inc_disp_model_data
 
-        detached_batched_data = batched_data.detach().numpy()
+        # logs of fairness consider validation as seen when model recommendations are used as ground truth
+        if self._pred_as_rec:
+            self.rec_data = test_data
+
         self.initialize_cf_model(filtered_users=filtered_users)
 
         orig_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
@@ -122,34 +160,36 @@ class BaB(Explainer):
         bab_data = []
         fair_losses = []
         for epoch in iter_epochs:
-            new_example, loss_total, epoch_fair_loss = self.run_epoch(
+            bab_epoch_data, epoch_fair_loss = self.run_epoch(
                 epoch, batched_data, test_data, fair_losses, topk=topk
             )
 
             if self.verbose:
                 self._verbose_plot(fair_losses, epoch)
 
-            if new_example is not None:
-                self.update_new_example(
-                    new_example,
-                    detached_batched_data,
-                    test_scores_args,
-                    test_model_topk,
-                    rec_scores_args,
-                    rec_model_topk,
-                    epoch_fair_loss
-                )
+            bab_data.append(bab_epoch_data)
 
-                update_best_example_args = [best_cf_example, new_example, loss_total, best_loss, orig_loss]
-                # if self._check_early_stopping(epoch_fair_metric, *update_best_example_args)
-                if self._check_early_stopping(epoch_fair_loss, *update_best_example_args):
-                    break
-
-                best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
+            # if new_example is not None:
+            #     self.update_new_example(
+            #         new_example,
+            #         detached_batched_data,
+            #         test_scores_args,
+            #         test_model_topk,
+            #         rec_scores_args,
+            #         rec_model_topk,
+            #         epoch_fair_loss
+            #     )
+            #
+            #     update_best_example_args = [best_cf_example, new_example, loss_total, best_loss, orig_loss]
+            #     # if self._check_early_stopping(epoch_fair_metric, *update_best_example_args)
+            #     if self._check_early_stopping(epoch_fair_loss, *update_best_example_args):
+            #         break
+            #
+            #     best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
 
             self.logger.info("{} CF examples".format(len(best_cf_example)))
 
-        return best_cf_example, (rec_model_topk, test_model_topk)
+        return bab_data, (rec_model_topk, test_model_topk)
 
     def train(self, epoch, scores_args, users_ids, topk=10, previous_loss_value=None):
         t = time.time()
@@ -205,4 +245,4 @@ class BaB(Explainer):
                 users_ids, adj_sub_cf_adj, cf_topk_pred_idx, loss_total, loss_graph_dist, fair_loss, epoch
             )
 
-        return cf_stats, loss_total.item(), fair_loss
+        return cf_stats, loss_total, fair_loss
