@@ -20,8 +20,8 @@ import matplotlib.patheffects as mpl_path_eff
 import sklearn.feature_selection as sk_feats
 from recbole.evaluator import Evaluator
 
-import src.utils as utils
-import src.utils.plot_utils as plot_utils
+import gnnuers.utils as utils
+import gnnuers.evaluation as eval_utils
 
 
 # %%
@@ -715,7 +715,7 @@ else:
 
         additional_best_cols = ['test_cf_dist', 'rec_cf_dist']
         if exp_rec_data != "test":
-            best_test_exp_df, best_test_exp_result = plot_utils.extract_best_metrics(
+            best_test_exp_df, best_test_exp_result = eval_utils.extract_best_metrics(
                 exp_paths,
                 'auto',
                 evaluator,
@@ -725,7 +725,7 @@ else:
             )
         else:
             best_test_exp_df, best_test_exp_result = None, None
-        best_rec_exp_df, best_rec_exp_result = plot_utils.extract_best_metrics(
+        best_rec_exp_df, best_rec_exp_result = eval_utils.extract_best_metrics(
             exp_paths,
             'auto',
             evaluator,
@@ -738,7 +738,7 @@ else:
         rec_uid = best_rec_exp_df[model_dp_s]['user_id'].to_numpy()
 
         if exp_rec_data != "test":
-            all_exp_test_dfs, test_result_all_data, _, _ = plot_utils.extract_all_exp_metrics_data(
+            all_exp_test_dfs, test_result_all_data, _, _ = eval_utils.extract_all_exp_metrics_data(
                 exp_paths,
                 train_data,
                 test_data.dataset,
@@ -750,7 +750,7 @@ else:
         else:
             all_exp_test_dfs, test_result_all_data = None, None
 
-        all_exp_rec_dfs, rec_result_all_data, _, _ = plot_utils.extract_all_exp_metrics_data(
+        all_exp_rec_dfs, rec_result_all_data, _, _ = eval_utils.extract_all_exp_metrics_data(
             exp_paths,
             train_data,
             rec_data.dataset,
@@ -863,7 +863,7 @@ plt.rc('figure', titlesize=BIGGER_SIZE)
 
 for _dataset in unique_datasets:
     if _dataset not in graph_metrics_dfs and not args.overwrite_graph_metrics:
-        graph_metrics_dfs[_dataset] = plot_utils.extract_graph_metrics_per_node(
+        graph_metrics_dfs[_dataset] = eval_utils.extract_graph_metrics_per_node(
             train_datasets[_dataset],
             remove_first_row_col=True,
             metrics="all"
@@ -946,7 +946,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 sorted_del_edges = sub_del_policy_df.sort_values("# Del Edges")["# Del Edges"].unique()
                 for n_del in sorted_del_edges:
                     n_del_df = n_del_df_gby.get_group(n_del)
-                    del_dp_samples, dgs_order = utils.compute_DP_across_random_samples(
+                    del_dp_samples, dgs_order = eval_utils.compute_DP_across_random_samples(
                         n_del_df, _s_attr, "Demo Group", _dataset, 'Value', batch_size=all_batch_exps[_dataset],
                         iterations=args.iterations
                     )
@@ -1050,7 +1050,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                                 for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
                                 dh, barh = .06, .02
-                                ax_pol_t = plot_utils.annotate_brackets(
+                                ax_pol_t = utils.annotate_brackets(
                                     ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=MEDIUM_SIZE
                                 )
                                 # yerr is updated such that next brackets are drawn over others

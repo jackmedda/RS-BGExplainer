@@ -12,12 +12,15 @@ from recbole.config import Config
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color
 
-from src.explain_dp_ndcg import execute_explanation
-from src.utils import utils
+from gnnuers.explain import execute_explanation
+import gnnuers.utils as utils
 
 
 def training(_model, _dataset, _config, saved=True):
     logger = logging.getLogger()
+    logger.info(_config)
+    logger.info(_dataset)
+
     # dataset splitting
     train_data, valid_data, test_data = data_preparation(_config, _dataset)
 
@@ -54,7 +57,7 @@ def training(_model, _dataset, _config, saved=True):
     }
 
 
-def main(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True):
+def main(model=None, dataset=None, config_file_list=None, config_dict=None, saved=True, seed=None):
     r""" A fast running api, which includes the complete process of
     training and testing a model on a specified dataset
     Args:
@@ -67,20 +70,18 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     # configurations initialization
     config = Config(model=model, dataset=dataset, config_file_list=config_file_list, config_dict=config_dict)
     config['data_path'] = os.path.join(config.file_config_dict['data_path'], config.dataset)
-    init_seed(config['seed'], config['reproducibility'])
+    seed = seed or config['seed']
+    init_seed(seed, config['reproducibility'])
     # logger initialization
     init_logger(config)
-    logger = logging.getLogger()
-    logger.info(config)
 
     # dataset filtering
     dataset = create_dataset(config)
-    logger.info(dataset)
 
     if args.run == 'train':
         runner(model, dataset, config, saved=saved)
     elif args.run == 'explain':
-        runner(*explain_args)
+        runner(*explain_args, cmd_config_args=unk_args)
 
 
 if __name__ == "__main__":
@@ -95,6 +96,7 @@ if __name__ == "__main__":
         "All the arguments related to create explanations"
     )
 
+    parser.add_argument('--seed', default=None, type=int)
     train_group.add_argument('--run', default='train', choices=['train', 'explain'], required=True)
     train_group.add_argument('--model', default='GCMC')
     train_group.add_argument('--dataset', default='ml-100k')
@@ -105,11 +107,17 @@ if __name__ == "__main__":
     # explain_group.add_argument('--load', action='store_true')
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
+    explain_group.add_argument('--wandb_online', action='store_true')
 
-    args = parser.parse_args()
+    args, unk_args = parser.parse_known_args()
     print(args)
 
-    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose]
+    unk_args[::2] = map(lambda s: s.replace('-', ''), unk_args[::2])
+    unk_args = dict(zip(unk_args[::2], unk_args[1::2]))
+    print("Unknown args", unk_args)
+
+    args.wandb_online = {False: "offline", True: "online"}[args.wandb_online]
+    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose, args.wandb_online]
 
     if args.run == 'train':
         runner = training
@@ -118,4 +126,4 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError(f"The run `{args.run}` is not supported.")
 
-    main(args.model, args.dataset, args.config_file_list, args.config_dict)
+    main(args.model, args.dataset, args.config_file_list, args.config_dict, seed=args.seed)

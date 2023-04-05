@@ -1,11 +1,11 @@
-# How many hops for the subgraph? (Only used if `user_batch_exp` == 1)
-n_hops: 2
-# `n_hops` is doubled such that each hop considers all the interactions of closest users in the bipartite graph
-neighbors_hops: True
+# choices ["DPBG", "BaB"]
+explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
 cf_learning_rate: 3000 # 1200 for NDCGApprox
+# set to update weights after each mini-batch, otherwise after a full batch
+mini_batch_descent: True
 
 momentum: 0.0
 # epochs to generate explanations
@@ -23,8 +23,14 @@ cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
 cf_topk: 10
 
+# metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
+metric_loss: ndcg
+
+# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
+eval_metric: ndcg
+
 # loss weight for the fairness loss
-fair_beta: 0.5
+fair_beta: 0.01  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 dropout_prob: 0.3
 
 edge_additions: False
@@ -80,16 +86,19 @@ early_stopping:
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
     delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
-    pvalue:
 
-previous_ndcg: False
+previous_loss_value: False
 previous_batch_LR_scaling: False
 
 random_perturbation_p: 0.0001
+
+# use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
+perturbation_initialization: 'static'
 
 # Policies
 explainer_policies:
     increase_disparity: False
     force_removed_edges: True
     group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
-    random_perturbation: True
+    random_perturbation: False
+    neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors

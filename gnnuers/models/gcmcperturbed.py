@@ -7,8 +7,8 @@ from recbole.model.general_recommender.gcmc import GCMC, GcEncoder
 
 sys.path.append('..')
 
-import src.utils as utils
-from src.models import PerturbedModel
+import gnnuers.utils as utils
+from gnnuers.models import PerturbedModel
 
 
 class GCMCPerturbed(PerturbedModel, GCMC):

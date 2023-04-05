@@ -7,7 +7,7 @@ from recbole.model.general_recommender import LightGCN
 
 sys.path.append('..')
 
-from src.models import PerturbedModel
+from gnnuers.models import PerturbedModel
 
 
 class LightGCNPerturbed(PerturbedModel, LightGCN):

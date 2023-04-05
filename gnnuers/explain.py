@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import pickle
 import logging
 import inspect
@@ -12,52 +11,63 @@ import pandas as pd
 
 from recbole.data.dataloader import FullSortEvalDataLoader
 
-import src.utils.utils as utils
-from src.explainers.explainer_dp_ndcg import DPBGExplainer
+import gnnuers.utils as utils
+from gnnuers.explainers import DPBG, BaB
 
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
-def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file=""):
+def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="", exp_content=None):
     """
     return the filepath where explanations are saved
     :param config:
     :param config_id:
     :param model_name:
     :param model_file:
+    :param exp_content: read content as string of the explainer_config_file
     :return:
     """
-    epochs = config['cf_epochs']
-    model_name = model_name or config['model']
-    base_exps_file = os.path.join(script_path, 'dp_ndcg_explanations', config['dataset'], model_name)
+    epochs = config["cf_epochs"]
+    model_name = model_name or config["model"]
+    explainer = config["explainer"].lower()
+    base_exps_file = os.path.join(script_path, "dp_explanations", config["dataset"], model_name, explainer)
 
-    fair_metadata = config["sensitive_attribute"]
-    fair_loss = 'FairDP'
+    fair_metadata = config["sensitive_attribute"].lower()
+    fair_loss = config["metric_loss"].lower() + "_loss"
     base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
             paths_c_ids = sorted(filter(str.isdigit, os.listdir(base_exps_file)), key=int)
+            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
+
             for path_c in paths_c_ids:
-                config_path = os.path.join(base_exps_file, path_c, 'config.pkl')
+                config_path = os.path.join(base_exps_file, path_c, "config.pkl")
                 if os.path.exists(config_path):
                     with open(config_path, 'rb') as f:
                         _c = pickle.load(f)
+
                     if config.final_config_dict == _c.final_config_dict:
-                        if model_file != "" and 'perturbed' in model_file:
+                        if model_file != "" and "perturbed" in model_file:
                             check_perturb = input("The explanations of the perturbed graph could overwrite the "
                                                   "explanations from which the perturbed graph was generated. Type "
                                                   "y/yes to confirm this outcome. Other inputs will assign a new id: ")
                             if check_perturb.lower() != "y" and check_perturb.lower() != "yes":
                                 continue
-                        return os.path.join(base_exps_file, str(path_c))
-
-            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
+                        config_id = os.path.join(base_exps_file, str(path_c))
+                        break
 
         base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
         base_exps_file = os.path.join(base_exps_file, "1")
+
+    if not os.path.exists(base_exps_file):
+        os.makedirs(base_exps_file)
+
+    if exp_content is not None:
+        with open(os.path.join(base_exps_file, "config.yaml"), 'w') as exp_file:
+            exp_file.write(exp_content)
 
     return base_exps_file
 
@@ -97,65 +107,85 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     """
     epochs = config['cf_epochs']
     topk = config['cf_topk']
-    explainer_config_file = kwargs.get("explainer_config_file", None)
+    wandb_mode = kwargs.get("wandb_mode", "disabled")
 
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
 
-    user_data = _rec_data.user_df[_rec_data.uid_field][torch.randperm(_rec_data.user_df.length)]
+    user_source = _rec_data if _rec_data is not None else _test_data
+    user_data = user_source.user_df[user_source.uid_field][torch.randperm(user_source.user_df.length)]
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
-
-    if explainer_config_file is not None:
-        try:
-            shutil.copy(explainer_config_file, os.path.join(base_exps_file, "config.yaml"))
-        except shutil.SameFileError as e:
-            print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
     utils.wandb_init(
         config,
         name="Explanation",
         job_type="train",
         group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp={os.path.basename(base_exps_file)}",
-        mode="disabled"
+        mode=wandb_mode
     )
     wandb.config.update({"exp": os.path.basename(base_exps_file)})
 
-    bge = DPBGExplainer(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
-    exp = bge.explain(user_data, _test_data, epochs, topk=topk)
+    explainer_model = {
+        "dpbg": DPBG,
+        "bab": BaB
+    }.get(config["explainer"].lower(), DPBG)
 
-    exps_file_user = os.path.join(base_exps_file, f"all_users.pkl")
+    explainer = explainer_model(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
+    exp, model_preds = explainer.explain(user_data, _test_data, epochs, topk=topk)
 
-    with open(exps_file_user, 'wb') as f:
+    exps_filename = os.path.join(base_exps_file, f"cf_data.pkl")
+    model_preds_file = os.path.join(base_exps_file, f"model_rec_test_preds.pkl")
+
+    with open(exps_filename, 'wb') as f:
         pickle.dump(exp, f)
-    logging.getLogger().info(f"Saved explanations at path {exps_file_user}")
+    with open(model_preds_file, 'wb') as f:
+        pickle.dump(model_preds, f)
+
+    logging.getLogger().info(f"Saved explanations at path {base_exps_file}")
 
 
 def execute_explanation(model_file,
                         explainer_config_file=os.path.join("config", "explainer.yaml"),
                         config_id=-1,
-                        verbose=False):
+                        verbose=False,
+                        wandb_mode="disabled",
+                        cmd_config_args=None):
     # load trained model, config, dataset
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file,
-                                                                                          explainer_config_file)
+    config, model, dataset, train_data, valid_data, test_data, exp_content = utils.load_data_and_model(
+        model_file,
+        explainer_config_file,
+        cmd_config_args=cmd_config_args,
+        return_exp_content=True
+    )
+
+    # force these evaluation metrics to be ready to be computed
+    config['metrics'] = ['ndcg', 'recall', 'hit', 'mrr', 'precision']
 
     if config['exp_rec_data'] is not None:
         if config['exp_rec_data'] != 'train+valid':
-            rec_data = locals()[f"{config['exp_rec_data']}_data"]
             if config['exp_rec_data'] == 'train':
                 rec_data = FullSortEvalDataLoader(config, train_data.dataset, train_data.sampler)
+            elif config['exp_rec_data'] == 'rec':  # model recommendations are used as target
+                rec_data = valid_data
+            else:
+                rec_data = locals()[f"{config['exp_rec_data']}_data"]
         else:
-            # TODO: it should be train + valid
-            rec_data = valid_data
+            valid_train_dataset = train_data.dataset.copy(
+                pd.concat([train_data.dataset.inter_feat, valid_data.dataset.inter_feat], ignore_index=True)
+            )
+            rec_data = FullSortEvalDataLoader(config, valid_train_dataset, valid_data.sampler)
     else:
         rec_data = valid_data
 
-    base_exps_filepath = get_base_exps_filepath(config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file)
+    base_exps_filepath = get_base_exps_filepath(
+        config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file, exp_content=exp_content
+    )
 
     kwargs = dict(
         verbose=verbose,
-        explainer_config_file=explainer_config_file
+        wandb_mode=wandb_mode
     )
 
     explain(

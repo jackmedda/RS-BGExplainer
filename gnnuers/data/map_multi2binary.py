@@ -4,7 +4,7 @@ import argparse
 
 import pandas as pd
 
-from src.utils.utils import copytree
+from gnnuers.utils import copytree
 
 
 def map_multi2binary(df, field, label):
@@ -47,17 +47,9 @@ if __name__ == "__main__":
             df = map_multi2binary(df, attr, label)
 
             dset_new_name = f"{args.dataset}_{attr.split(':')[0] if ':' in attr else attr}_{label}"
-            dst = os.path.join(datasets_path, dset_new_name)
-            copytree(os.path.join(datasets_path, args.dataset), dst, ignore=lambda x, y: ['splits_backup'])
+            copy_dataset(datasets_path, args.dataset, dset_new_name)
 
             df.to_csv(os.path.join(dst, f"{args.dataset}.user"), index=None, sep='\t')
-            for dirname, _, filename in os.walk(dst, topdown=True):
-                for data_type in recbole_extended_data_types:
-                    if f"{args.dataset}.{data_type}" == filename:
-                        os.rename(
-                            os.path.join(dirname, filename),
-                            os.path.join(dirname, f"{dset_new_name}.{data_type}")
-                        )
 
             print('-' * 50)
             print(f"Attr: {attr}    Label: {label}")
