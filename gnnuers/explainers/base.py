@@ -510,7 +510,7 @@ class Explainer:
 
         return previous_loss_value
 
-    def _check_early_stopping(self, check_value, *update_best_example_args):
+    def _check_early_stopping(self, check_value, epoch, *update_best_example_args):
         if self.earlys.check(check_value):
             self.logger.info(self.earlys)
             best_epoch = epoch + 1 - self.earlys.patience
@@ -694,7 +694,7 @@ class Explainer:
                                      f"Cannot be used as value for early stopping check")
 
                 update_best_example_args = [best_cf_example, new_example, loss_total, best_loss, orig_loss]
-                if self._check_early_stopping(earlys_check_value, *update_best_example_args):
+                if self._check_early_stopping(earlys_check_value, epoch, *update_best_example_args):
                     break
 
                 best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
@@ -747,10 +747,10 @@ class Explainer:
         torch.cuda.empty_cache()
         loss_total.backward()
 
-        # import pdb; pdb.set_trace()
         # for name, param in self.cf_model.named_parameters():
         #     if name == "P_symm":
-        #         print(param.grad[param.grad])
+        #         print(param.grad)
+        # import pdb; pdb.set_trace()
 
         torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
         if self.mini_batch_descent:
@@ -777,13 +777,14 @@ class Explainer:
 
     def get_target(self, cf_scores, user_feat):
         target = torch.zeros_like(cf_scores, dtype=torch.float, device=cf_scores.device)
+
         if not self._pred_as_rec:
             hist_matrix, _, _ = self.rec_data.dataset.history_item_matrix()
             rec_data_interactions = hist_matrix[user_feat[self.dataset.uid_field]]
         else:
             rec_data_interactions = self._test_history_matrix[user_feat[self.dataset.uid_field]]
         target[torch.arange(target.shape[0])[:, None], rec_data_interactions] = 1
-        target[:, 0] = 0
+        target[:, 0] = 0  # item 0 is a padding item
 
         return target
 

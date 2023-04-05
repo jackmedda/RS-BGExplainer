@@ -1,17 +1,17 @@
 # choices ["DPBG", "BaB"]
-explainer: BaB
+explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 300 # 3000 for NDCGApprox, 200 for SoftmaxLoss
+cf_learning_rate: 65000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
 momentum: 0.0
 # epochs to generate explanations
-cf_epochs: 1
+cf_epochs: 800
 # how many users should be considered to explain?
-user_batch_exp: 64
+user_batch_exp: 36
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
@@ -24,16 +24,16 @@ cf_dist: damerau_levenshtein
 cf_topk: 10
 
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: softmax
+metric_loss: ndcg
 
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
-eval_metric: precision
+eval_metric: ndcg
 
 # loss weight for the fairness loss
 fair_beta: 0.01  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 dropout_prob: 0.3
 
-edge_additions: False
+edge_additions: True
 
 # select which set need to be used to optimize the DP explainer. Choices ["train", "valid", "test"]
 exp_rec_data: "valid"
@@ -86,7 +86,7 @@ eval_args:
 
 # Early stopping parameters
 early_stopping:
-    patience: 40  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
+    patience: 15  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
     ignore: 0
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')

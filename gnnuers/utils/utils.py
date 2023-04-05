@@ -1,4 +1,5 @@
 import os
+import re
 import copy
 import stat
 import shutil
@@ -62,7 +63,7 @@ def wandb_init(config, **kwargs):
     )
 
 
-def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=None):
+def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=None, return_exp_content=False):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -78,9 +79,11 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
     checkpoint = torch.load(model_file)
     config = checkpoint['config']
 
+    exp_file_content = None
     if explainer_config_file is not None:
         with open(explainer_config_file, 'r', encoding='utf-8') as f:
-            explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
+            exp_file_content = f.read()
+            explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
         config.final_config_dict.update(explain_config_dict)
 
     if cmd_config_args is not None:
@@ -94,9 +97,13 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
                 config[arg] = new_val
             else:
                 try:
-                    config[arg] = type(config[arg])(val)  # cast to same type in config
-                except Exception:
-                    pass
+                    new_val = type(config[arg])(val)  # cast to same type in config
+                    config[arg] = new_val
+                except (ValueError, TypeError):
+                    new_val = None
+
+            if new_val is not None:
+                exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}", exp_file_content)
 
     config['data_path'] = config['data_path'].replace('\\', os.sep)
     config['device'] = 'cuda'
@@ -118,7 +125,9 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
 
     logger.info(model)
 
-    return config, model, dataset, train_data, valid_data, test_data
+    ret = [config, model, dataset, train_data, valid_data, test_data]
+    ret = ret + [exp_file_content] if return_exp_content else ret
+    return tuple(ret)
 
 
 def load_dp_exps_file(base_exps_file):

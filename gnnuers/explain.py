@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import pickle
 import logging
 import inspect
@@ -19,13 +18,14 @@ from gnnuers.explainers import DPBG, BaB
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
-def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file=""):
+def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="", exp_content=None):
     """
     return the filepath where explanations are saved
     :param config:
     :param config_id:
     :param model_name:
     :param model_file:
+    :param exp_content: read content as string of the explainer_config_file
     :return:
     """
     epochs = config["cf_epochs"]
@@ -40,11 +40,14 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
     if os.path.exists(base_exps_file):
         if config_id == -1:
             paths_c_ids = sorted(filter(str.isdigit, os.listdir(base_exps_file)), key=int)
+            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
+
             for path_c in paths_c_ids:
                 config_path = os.path.join(base_exps_file, path_c, "config.pkl")
                 if os.path.exists(config_path):
                     with open(config_path, 'rb') as f:
                         _c = pickle.load(f)
+
                     if config.final_config_dict == _c.final_config_dict:
                         if model_file != "" and "perturbed" in model_file:
                             check_perturb = input("The explanations of the perturbed graph could overwrite the "
@@ -52,13 +55,19 @@ def get_base_exps_filepath(config, config_id=-1, model_name=None, model_file="")
                                                   "y/yes to confirm this outcome. Other inputs will assign a new id: ")
                             if check_perturb.lower() != "y" and check_perturb.lower() != "yes":
                                 continue
-                        return os.path.join(base_exps_file, str(path_c))
-
-            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
+                        config_id = os.path.join(base_exps_file, str(path_c))
+                        break
 
         base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
         base_exps_file = os.path.join(base_exps_file, "1")
+
+    if not os.path.exists(base_exps_file):
+        os.makedirs(base_exps_file)
+
+    if exp_content is not None:
+        with open(os.path.join(base_exps_file, "config.yaml"), 'w') as exp_file:
+            exp_file.write(exp_content)
 
     return base_exps_file
 
@@ -98,7 +107,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     """
     epochs = config['cf_epochs']
     topk = config['cf_topk']
-    explainer_config_file = kwargs.get("explainer_config_file", None)
     wandb_mode = kwargs.get("wandb_mode", "disabled")
 
     if not os.path.exists(base_exps_file):
@@ -109,12 +117,6 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
-
-    if explainer_config_file is not None:
-        try:
-            shutil.copy(explainer_config_file, os.path.join(base_exps_file, "config.yaml"))
-        except shutil.SameFileError:
-            print(f"Overwriting config {os.path.basename(base_exps_file)}")
 
     utils.wandb_init(
         config,
@@ -151,10 +153,11 @@ def execute_explanation(model_file,
                         wandb_mode="disabled",
                         cmd_config_args=None):
     # load trained model, config, dataset
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(
+    config, model, dataset, train_data, valid_data, test_data, exp_content = utils.load_data_and_model(
         model_file,
         explainer_config_file,
-        cmd_config_args=cmd_config_args
+        cmd_config_args=cmd_config_args,
+        return_exp_content=True
     )
 
     # force these evaluation metrics to be ready to be computed
@@ -177,12 +180,11 @@ def execute_explanation(model_file,
         rec_data = valid_data
 
     base_exps_filepath = get_base_exps_filepath(
-        config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file
+        config, config_id=config_id, model_name=model.__class__.__name__, model_file=model_file, exp_content=exp_content
     )
 
     kwargs = dict(
         verbose=verbose,
-        explainer_config_file=explainer_config_file,
         wandb_mode=wandb_mode
     )
 

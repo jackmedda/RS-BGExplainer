@@ -1,5 +1,6 @@
 import scipy
 import torch
+import numba
 import numpy as np
 import igraph as ig
 import networkx as nx
@@ -81,9 +82,19 @@ def perturb_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=F
     return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp), P_loss
 
 
-def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor):
+def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor, edge_additions=False):
     try:
         adj_filter = torch.isin(edges, nodes).any(dim=0)
     except AttributeError:
-        adj_filter = (edges[0][:, None] == nodes).any(-1) | (edges[1][:, None] == nodes).any(-1)
+        if edge_additions:
+            adj_filter = torch.from_numpy(isin_backcomp(edges, nodes))
+        else:
+            adj_filter = torch.from_numpy(isin_backcomp(edges[0], nodes) | isin_backcomp(edges[1], nodes))
+            # adj_filter = (edges[0][:, None] == nodes).any(-1) | (edges[1][:, None] == nodes).any(-1)
     return adj_filter
+
+
+def isin_backcomp(ar1: torch.Tensor, ar2: torch.Tensor):
+    ar1 = ar1.detach().numpy()
+    ar2 = ar2.detach().numpy()
+    return np.in1d(ar1, ar2)

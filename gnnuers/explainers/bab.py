@@ -36,8 +36,8 @@ class BaB(Explainer):
         rec_pref = pd.DataFrame(
             zip(*new_example[:3]), columns=['user_id', 'topk_pred', 'cf_topk_pred']
         )
-        orig_rec_res = self.compute_eval_metric(self.rec_data, rec_pref, 'topk_pred')
-        cf_rec_res = self.compute_eval_metric(self.rec_data, rec_pref, 'cf_topk_pred')
+        orig_rec_res = self.compute_eval_metric(self.rec_data.dataset, rec_pref, 'topk_pred')
+        cf_rec_res = self.compute_eval_metric(self.rec_data.dataset, rec_pref, 'cf_topk_pred')
 
         return orig_test_res, cf_test_res, orig_rec_res, cf_rec_res
 
@@ -49,7 +49,7 @@ class BaB(Explainer):
         epoch_fair_loss = []
         for batch_idx, batch_user in enumerate(iter_data):
             new_example, loss_total = None, None
-            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data.dataset, topk)
+            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data, topk)
 
             def batch_check(ne, tc):
                 return ne is None or (ne[-2].shape[1] < self.min_del_edges_batch and tc < self.max_tries_batch)

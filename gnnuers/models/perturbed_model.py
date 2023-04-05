@@ -37,8 +37,6 @@ class PerturbedModel(object):
             if isinstance(self.filtered_users, str):
                 if self.filtered_users != self.RANDOM_POLICY:
                     raise AttributeError(f'filtered_users can be a tensor of user ids or `{self.RANDOM_POLICY}`')
-            else:
-                self.filtered_users = self.filtered_users.to(self.device)
         self.mask_filter = None
         self.mask_neighborhood = None
 
@@ -53,18 +51,41 @@ class PerturbedModel(object):
         self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
-            self.mask_sub_adj = self.mask_sub_adj[:, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)]
+            self.mask_sub_adj = self.mask_sub_adj[
+                :, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)
+            ]
             self.mask_sub_adj[1] += self.n_users
-            self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device=self.device)
+            self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int)
 
             if self.filtered_users is not None:
-                try:
-                    self.mask_sub_adj = torch.isin(self.mask_sub_adj[0], self.filtered_users).nonzero()[:, 0]
-                except AttributeError:
-                    self.mask_sub_adj = self.mask_sub_adj[
-                        (self.mask_sub_adj[0][:, None] == self.filtered_users).nonzero()[:, 0]
-                    ]
+                user_filter = model_utils.edges_filter_nodes(
+                    self.mask_sub_adj[0], self.filtered_users, edge_additions=True
+                )
+                self.mask_sub_adj = self.mask_sub_adj[:, user_filter]
 
+        else:
+            self.mask_sub_adj = self.sub_Graph.to('cpu')
+            self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool)
+
+            if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
+                user_filter = model_utils.edges_filter_nodes(self.mask_sub_adj, self.filtered_users)
+                self.mask_filter &= user_filter
+
+        self.mask_sub_adj = self.mask_sub_adj.to(self.device)
+
+        self._initialize_P_symm()
+
+        if not self.edge_additions:
+            if config['explainer_policies']['force_removed_edges']:
+                self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to(self.device)
+            if config['explainer_policies']['neighborhood_perturbation']:
+                self.mask_neighborhood = self.mask_filter.clone().detach()
+
+        self._P_loss = None
+        self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
+
+    def _initialize_P_symm(self):
+        if self.edge_additions:
             if self.initialization != 'random':
                 self.P_symm_init = -5  # to get sigmoid closer to 0
                 self.P_symm_func = "zeros"
@@ -73,13 +94,6 @@ class PerturbedModel(object):
                 self.P_symm_func = "rand"
             self.P_symm_size = self.mask_sub_adj.shape[1]
         else:
-            self.mask_sub_adj = self.sub_Graph
-            self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device=self.device)
-
-            if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
-                user_filter = model_utils.edges_filter_nodes(self.mask_sub_adj, self.filtered_users)
-                self.mask_filter &= user_filter
-
             if self.initialization != 'random':
                 self.P_symm_init = 0
                 self.P_symm_func = "ones"
@@ -88,17 +102,9 @@ class PerturbedModel(object):
                 self.P_symm_func = "rand"
             self.P_symm_size = self.mask_filter.nonzero().shape[0] // 2
 
-            if config['explainer_policies']['force_removed_edges']:
-                self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to(self.device)
-            if config['explainer_policies']['neighborhood_perturbation']:
-                self.mask_neighborhood = self.mask_filter.clone().detach()
-
         self.P_symm = nn.Parameter(
             torch.FloatTensor(getattr(torch, self.P_symm_func)(self.P_symm_size)) + self.P_symm_init
         )
-
-        self._P_loss = None
-        self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
 
     def reset_param(self):
         with torch.no_grad():

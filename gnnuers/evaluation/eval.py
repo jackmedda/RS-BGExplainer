@@ -393,6 +393,9 @@ def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch
                 samples[gr_i][np.random.choice(groups[gr_i].nonzero()[0], sample_size, replace=False)] = True
             out_samples[i] = samples
 
+        gr1_mean = group_data[out_samples[i, 0]].mean()
+        gr2_mean = group_data[out_samples[i, 1]].mean()
+
         dp = compute_dp_with_masks(group_data, out_samples[i, 0], out_samples[i, 1])
         out[i] = [gr1_mean, gr2_mean, dp]
 
