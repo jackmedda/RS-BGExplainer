@@ -7,6 +7,7 @@ import inspect
 import itertools
 
 import tqdm
+import dcor
 import scipy
 import sklearn
 import numpy as np
@@ -543,6 +544,7 @@ parser.add_argument('--overwrite_extracted_data', '--oed', action="store_true")
 parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
 parser.add_argument('--utility_metrics', '--um', nargs='+', default=None)
 parser.add_argument('--add_plot_table', '--apt', action="store_true")
+parser.add_argument('--plot_only_graph_metrics', '--pogm', action="store_true")
 
 args = parser.parse_args()
 
@@ -559,7 +561,7 @@ delcons_pol = 'GNNUERS+CN'
 random_pol = 'RND-P'
 no_pert_col = "NP"  # NoPerturbation
 
-policy_order = [mondel_pol, delcons_pol, random_pol, no_pert_col]
+policy_order_base = [mondel_pol, delcons_pol, random_pol, no_pert_col]
 
 policy_map = {
     'force_removed_edges': mondel_pol,  # Monotonic Deletions
@@ -715,7 +717,7 @@ else:
 
         additional_best_cols = ['test_cf_dist', 'rec_cf_dist']
         if exp_rec_data != "test":
-            best_test_exp_df, best_test_exp_result = eval_utils.extract_best_metrics(
+            best_test_exp_df, best_test_exp_result = eval_utils.old_extract_best_metrics(
                 exp_paths,
                 'auto',
                 evaluator,
@@ -725,7 +727,7 @@ else:
             )
         else:
             best_test_exp_df, best_test_exp_result = None, None
-        best_rec_exp_df, best_rec_exp_result = eval_utils.extract_best_metrics(
+        best_rec_exp_df, best_rec_exp_result = eval_utils.old_extract_best_metrics(
             exp_paths,
             'auto',
             evaluator,
@@ -738,7 +740,7 @@ else:
         rec_uid = best_rec_exp_df[model_dp_s]['user_id'].to_numpy()
 
         if exp_rec_data != "test":
-            all_exp_test_dfs, test_result_all_data, _, _ = eval_utils.extract_all_exp_metrics_data(
+            all_exp_test_dfs, test_result_all_data, _, _ = eval_utils.old_extract_all_exp_metrics_data(
                 exp_paths,
                 train_data,
                 test_data.dataset,
@@ -750,7 +752,7 @@ else:
         else:
             all_exp_test_dfs, test_result_all_data = None, None
 
-        all_exp_rec_dfs, rec_result_all_data, _, _ = eval_utils.extract_all_exp_metrics_data(
+        all_exp_rec_dfs, rec_result_all_data, _, _ = eval_utils.old_extract_all_exp_metrics_data(
             exp_paths,
             train_data,
             rec_data.dataset,
@@ -861,12 +863,14 @@ plt.rc('ytick', labelsize=BIGGER_SIZE)  # fontsize of the tick labels
 plt.rc('legend', fontsize=BIGGER_SIZE)  # legend fontsize
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
+gm_metrics_base = ['Degree', 'Sparsity', 'Reachability']
+gm_dep_order = np.array(gm_metrics_base)
 for _dataset in unique_datasets:
-    if _dataset not in graph_metrics_dfs and not args.overwrite_graph_metrics:
+    if _dataset not in graph_metrics_dfs or args.overwrite_graph_metrics:
         graph_metrics_dfs[_dataset] = eval_utils.extract_graph_metrics_per_node(
             train_datasets[_dataset],
             remove_first_row_col=True,
-            metrics="all"
+            metrics=gm_metrics_base  # "all"
         )
 
         last_user_id = train_datasets[_dataset].user_num - 2
@@ -911,6 +915,8 @@ if not rec_df.empty:
     unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
 else:
     unique_policies = sorted(rec_del_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
+
+policy_order = [p for p in policy_order_base if p in unique_policies]
 for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
     if df is None or del_df is None:
         continue
@@ -919,6 +925,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
     _metrics = args.utility_metrics or list(_metr_del_df_gby.groups.keys())
     for metric in _metrics:
+        if args.plot_only_graph_metrics:
+            break
+        
         metric_del_df = _metr_del_df_gby.get_group(metric)
         plot_df_data = []
         dp_df_data_per_group = []
@@ -982,7 +991,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         fairest_del_edge_df = plot_del_df_line.groupby(index_cols).mean().sort_values(y_col)
         fairest_del_edge_df = fairest_del_edge_df.reset_index().groupby(index_cols[:-1]).first()
         plot_df_box_bar = plot_del_df_line.set_index(index_cols).loc[
-            fairest_del_edge_df.reset_index().set_index(index_cols).index].reset_index()
+            fairest_del_edge_df.reset_index().set_index(index_cols).index
+        ].reset_index()
 
         dp_df_per_group = pd.DataFrame(plot_del_df_data_per_group, columns=del_data_columns_per_group)
         dp_df_per_group = dp_df_per_group.set_index(index_cols).loc[
@@ -1161,32 +1171,34 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             )
 
         plt.close("all")
+        
+    gc.collect()
 
     gm_mi_data = []
     gm_wasser_data = []
     gm_kl_data = []
-    gm_dep_order = np.array(['Degree', 'Sparsity', 'Reachability'])
-    fairest_del_gby = plot_df_box_bar.groupby(['Model', 'Dataset', 'Sens Attr', 'Policy', '# Del Edges'])
-    m_dset_attr_groups = list(fairest_del_gby.groups.keys())
-    indexed_del_df = del_df.set_index(
-        ['Dataset', 'Sens Attr', 'Model', 'Policy', '# Del Edges', 'Metric'])  # .sort_index()
-    for groups_it, (_model, _dataset, _s_attr, _policy, _n_del) in enumerate(m_dset_attr_groups):
-        gm_data = {}
+    gm_dcor_data = []
+    gm_dcor_pval = []
+    gm_del_dist_data = []
+    m_dset_attr_pol_gby = del_df.groupby(['Model', 'Dataset', 'Sens Attr', 'Policy'])
+    for (_model, _dataset, _s_attr, _policy), m_dset_attr_pol_df in m_dset_attr_pol_gby:
         # len_pol = len(unique_policies[1:])
-        if _policy != no_pert_col:  # without perturbation that are no perturbed edges
-            de = np.array(all_del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr, _n_del)])
-
+        if _policy != no_pert_col:  # without perturbation there are no perturbed edges
+            indexed_del_df = m_dset_attr_pol_df[m_dset_attr_pol_df["Metric"] == "NDCG"]  # metric not relevant here
+            best_n_del_edges = indexed_del_df.iloc[indexed_del_df["Fair Loss"].argmin()].loc["# Del Edges"]
+            s_attr_df = indexed_del_df[indexed_del_df["# Del Edges"] == best_n_del_edges].copy(deep=True)
+            
+            de = np.array(all_del_edges[(exp_data_name, _dataset, _model, _policy, _s_attr, best_n_del_edges)])
+            de_count = de.shape[1]
+            
             # remove user and item id 0 padding
             de -= 1
             de[1] -= 1
 
             graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
             # each edge is counted once for one node and once for the other (it is equal to a bincount)
-            graph_mdf['# Del Edges'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
-
-            s_attr_df = indexed_del_df.loc[
-                tuple([_dataset, _s_attr, _model, _policy, _n_del, 'NDCG'])  # metric not relevant here
-            ].copy(deep=True)
+            graph_mdf['Del Edges Count'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
+            
             s_attr_df['user_id'] -= 1  # reindexing to zero
             sens_gmdf = graph_mdf.join(
                 s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
@@ -1217,42 +1229,65 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
             # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
             # Paper that states how select number of neighbors, repetitions and usage of median
-            for (gm_sens_attr, gm_dg), gm_dgdf in sens_gmdf.groupby(["Sens Attr", "Demo Group"]):
-                mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
-                wd_res = [np.inf] * len(gm_dep_order)
-                kl_res = [0] * len(gm_dep_order)
-                kl_eps = 1e-8  # avoids NaN
-
-                degree_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                    gm_dgdf.loc[:, ['Degree']].to_numpy()
+            # we regroup again by sensitive attribute because `Item` was added as label
+            for gm_sens_attr, gm_sattr_df in sens_gmdf.groupby("Sens Attr"):
+                gm_sattr_df_norm = gm_sattr_df.copy(deep=True)
+                gm_sattr_df_norm['Degree'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                    gm_sattr_df_norm.loc[:, ['Degree']].to_numpy()
                 ).squeeze()
-                n_del_edges_scaled = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                    gm_dgdf.loc[:, ['# Del Edges']].to_numpy()
+                gm_sattr_df_norm['Del Edges Count Scaled'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
+                    gm_sattr_df_norm.loc[:, ['Del Edges Count']].to_numpy()
                 ).squeeze()
-                for gm_i, gm in enumerate(gm_dep_order):
-                    wd_data = gm_dgdf.loc[:, gm] if gm != 'Degree' else degree_scaled
-                    wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
-                    kl_res[gm_i] = scipy.stats.entropy(
-                        gm_dgdf.loc[:, '# Del Edges'] + kl_eps, gm_dgdf.loc[:, gm] + kl_eps, base=2
-                    )
+                for gm_dg, gm_dgdf in gm_sattr_df_norm.groupby("Demo Group"):
+                    mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
+                    wd_res = [np.inf] * len(gm_dep_order)
+                    kl_res = [0] * len(gm_dep_order)
+                    kl_eps = 1e-8  # avoids NaN
+                    dcor_res = [None] * len(gm_dep_order)
+                    dcor_pval = [None] * len(gm_dep_order)
+                    gm_del_dist = [None] * len(gm_dep_order)
+                    
+                    n_del_edges_scaled = gm_dgdf.loc[:, 'Del Edges Count Scaled'].to_numpy()
+                    for gm_i, gm in enumerate(gm_dep_order):
+                        wd_data = gm_dgdf.loc[:, gm].to_numpy()
+                        wd_data = wd_data.astype(n_del_edges_scaled.dtype)
+                        wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
+                        kl_res[gm_i] = scipy.stats.entropy(
+                            n_del_edges_scaled + kl_eps, wd_data + kl_eps, base=2
+                        )
+                        dcor_res[gm_i] = dcor.distance_correlation(wd_data, n_del_edges_scaled)
+                        dcor_pval[gm_i] = dcor.independence.distance_covariance_test(
+                            wd_data, n_del_edges_scaled, num_resamples=10
+                        ).pvalue
+                        
+                        quartiles = np.array_split(gm_dgdf.sort_values(gm), 4)
+                        gm_del_dist[gm_i] = [q['Del Edges Count'].sum() / de_count for q in quartiles]
 
-                for mi_i in range(args.iterations):
-                    mi_res[mi_i] = sk_feats.mutual_info_regression(
-                        np.c_[degree_scaled, gm_dgdf.loc[:, gm_dep_order[gm_dep_order != 'Degree']].values],
-                        n_del_edges_scaled,
-                        n_neighbors=3
-                    )
-                mi_res = np.median(mi_res, axis=0)
-                gm_mi_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *mi_res])
-                gm_wasser_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *wd_res])
-                gm_kl_data.append([_dataset, _model, gm_sens_attr, _policy, gm_dg, *kl_res])
+                    for mi_i in range(args.iterations):
+                        mi_res[mi_i] = sk_feats.mutual_info_regression(
+                            gm_dgdf.loc[:, gm_dep_order].values,
+                            n_del_edges_scaled,
+                            n_neighbors=3
+                        )
+                    mi_res = np.median(mi_res, axis=0)
+                    gm_rel_info = [_dataset, _model, gm_sens_attr, _policy, gm_dg]
+                    gm_mi_data.append([*gm_rel_info, *mi_res])
+                    gm_wasser_data.append([*gm_rel_info, *wd_res])
+                    gm_kl_data.append([*gm_rel_info, *kl_res])
+                    gm_dcor_data.append([*gm_rel_info, *dcor_res])
+                    gm_dcor_pval.append([*gm_rel_info, *dcor_pval])
+                    gm_del_dist_data.append([*gm_rel_info, *gm_del_dist])
 
-    for gm_dep_data, dep_type in zip([gm_mi_data, gm_wasser_data, gm_kl_data], ["mi", "wd", "kl"]):
+    for gm_dep_data, dep_type in zip(
+        [gm_mi_data, gm_wasser_data, gm_kl_data, gm_dcor_data, gm_dcor_pval, gm_del_dist_data],
+        ["mi", "wd", "kl", "dcor", "dcor_pval", "del_dist"]
+    ):
         gm_dep_df = pd.DataFrame(
             gm_dep_data,
             columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
         ).drop_duplicates(
-            subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"])  # removes duplicated gms of item nodes
+            subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"]  # removes duplicated gms of item nodes
+        )
         gm_dep_df = gm_dep_df.melt(
             ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
             var_name="Graph Metric", value_name="Value"
@@ -1272,7 +1307,13 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
             )
             gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
-            gm_dep_pivot.round(2).to_latex(
+            
+            if dep_type == "del_dist":
+                gm_dep_pivot = gm_dep_pivot.applymap(lambda x: '/'.join(map('{:.2f}'.format, x)))
+            else:
+                gm_dep_pivot = gm_dep_pivot.round(2)
+            
+            gm_dep_pivot.to_latex(
                 os.path.join(plots_path, f"{dep_type}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
                 multicolumn_format="c",
                 escape=False

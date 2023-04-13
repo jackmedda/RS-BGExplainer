@@ -13,8 +13,6 @@ import scipy
 import numba
 import numpy as np
 import pandas as pd
-import igraph as ig
-import networkx as nx
 from sklearn.decomposition import PCA
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model
@@ -44,6 +42,23 @@ _EXPS_COLUMNS = [
 ]
 
 
+_OLD_EXPS_COLUMNS = [
+    "user_id",
+    "rec_topk",
+    "test_topk",
+    "rec_cf_topk",
+    "test_cf_topk",
+    "rec_cf_dist",
+    "test_cf_dist",
+    "loss_total",
+    "loss_graph_dist",
+    "fair_loss",
+    "del_edges",
+    "epoch",
+    "first_fair_loss"
+]
+
+
 def exp_col_index(col):
     try:
         idx = _EXPS_COLUMNS.index(col)
@@ -52,14 +67,34 @@ def exp_col_index(col):
     return idx
 
 
-def wandb_init(config, **kwargs):
-    config['wandb_tags'] = [k for k in config['explainer_policies'] if config['explainer_policies'][k]]
+def old_exp_col_index(col):
+    try:
+        idx = _OLD_EXPS_COLUMNS.index(col)
+    except ValueError:
+        idx = col
+    return idx
 
-    wandb.init(
+
+def get_wandb_main_kwargs(policies):
+    tags = [k for k in policies if policies[k]]
+    
+    return dict(
         project="Mit-GNNUERS",  # "B-GEM",
         entity="fairrec",
-        tags=config['wandb_tags'],
-        **kwargs
+        tags=tags
+    )
+
+
+def wandb_init(config, policies=None, **kwargs):
+    config = config.final_config_dict if not isinstance(config, dict) else config
+    
+    main_kws = get_wandb_main_kwargs(config.get("explainer_policies", policies))
+    config['wandb_tags'] = main_kws['tags']
+
+    return wandb.init(
+        **main_kws,
+        **kwargs,
+        config=config
     )
 
 
@@ -142,6 +177,15 @@ def load_dp_exps_file(base_exps_file):
     return (exps, *model_preds)
 
 
+def load_old_dp_exps_file(base_exps_file):
+    cf_data_file = os.path.join(base_exps_file, 'all_users.pkl')
+
+    with open(cf_data_file, 'rb') as file:
+        exps = [pickle.load(file)]
+
+    return exps
+
+
 def get_dataset_with_perturbed_edges(del_edges, train_dataset):
     user_num = train_dataset.user_num
     uid_field, iid_field = train_dataset.uid_field, train_dataset.iid_field
@@ -163,6 +207,21 @@ def get_dataset_with_perturbed_edges(del_edges, train_dataset):
 
 
 def get_best_exp_early_stopping(exps, config_dict):
+    best_epoch = get_best_epoch_early_stopping(exps, config_dict)
+    epoch_idx = exp_col_index('epoch')
+    return [e for e in sorted(exps, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
+
+
+def old_get_best_epoch_early_stopping(exps, config_dict):
+    try:
+        patience = config_dict['early_stopping']['patience']
+    except TypeError:
+        patience = config_dict['earlys_patience']
+
+    return max([e[old_exp_col_index('epoch')] for e in exps]) - patience
+
+
+def get_best_epoch_early_stopping(exps, config_dict):
     try:
         patience = config_dict['early_stopping']['patience']
     except TypeError:

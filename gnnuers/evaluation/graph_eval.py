@@ -1,10 +1,57 @@
 import numba
 import numpy as np
 import pandas as pd
+import igraph as ig
 import networkx as nx
 import scipy.sparse as sp
 
 import gnnuers.utils as utils
+
+
+def get_nx_adj_matrix(dataset):
+    uid_field = dataset.uid_field
+    iid_field = dataset.iid_field
+    n_users = dataset.num(uid_field)
+    n_items = dataset.num(iid_field)
+    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
+    num_all = n_users + n_items
+    A = get_adj_from_inter_matrix(inter_matrix, num_all, n_users)
+
+    return nx.Graph(A)
+
+
+def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
+    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
+    if remove_first_row_col:
+        inter_matrix = inter_matrix[1:, 1:]
+
+    return nx.bipartite.from_biadjacency_matrix(inter_matrix)
+
+
+def get_bipartite_igraph(dataset, remove_first_row_col=False):
+    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
+    if remove_first_row_col:
+        inter_matrix = inter_matrix[1:, 1:]
+
+    incid_adj = ig.Graph.Incidence(inter_matrix.todense().tolist())
+    bip_info = np.concatenate([np.zeros(inter_matrix.shape[0], dtype=int), np.ones(inter_matrix.shape[1], dtype=int)])
+
+    return ig.Graph.Bipartite(bip_info, incid_adj.get_edgelist())
+
+
+def _igraph_distances(graph):
+    import joblib
+    vcount = graph.vcount()
+    distances = np.zeros((vcount, vcount), dtype=int)
+    
+    def _add_sp(i):
+        distances[i] = [len(sp) for sp in graph.get_shortest_paths(i)]
+    
+    joblib.Parallel(n_jobs=-1, require='sharedmem')(
+        joblib.delayed(_add_sp)(i) for i in range(vcount)
+    )
+        
+    return distances
 
 
 def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics="all", **sp_kwargs):
@@ -17,16 +64,16 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
     G_df = None
     node_col = 'Node'
 
-    igg = utils.get_bipartite_igraph(dataset, remove_first_row_col=remove_first_row_col)
+    igg = get_bipartite_igraph(dataset, remove_first_row_col=remove_first_row_col)
     for metr in metrics:
         if metr == "Degree":
             df = pd.DataFrame(dict(zip(igg.vs.indices, igg.degree())).items(), columns=[node_col, metr])
         elif metr == "Reachability":
             last_user_id = dataset.user_num - (1 + remove_first_row_col)
-            user_reach = utils.get_user_reachability(igg, last_user_id=last_user_id)
+            user_reach = get_user_reachability(igg, last_user_id=last_user_id)
 
             first_item_id = last_user_id + 1
-            item_reach = utils.get_item_reachability(igg, first_item_id=first_item_id)
+            item_reach = get_item_reachability(igg, first_item_id=first_item_id)
 
             df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[node_col, metr])
         elif metr == "Sparsity":
@@ -58,20 +105,20 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
             )
         elif metr == "Sharing Potentiality":
             n_users = user_hist[1:].shape[0]
-            user_user = utils.get_node_node_graph_data(user_hist[1:].numpy())
+            user_user = get_node_node_graph_data(user_hist[1:].numpy())
             user_user = np.asarray(sp.coo_matrix(
                 (user_user[:, -1], (user_user[:, 0], user_user[:, 1])), shape=(n_users, n_users)
             ).todense())
-            user_sp = utils.compute_sharing_potentiality(
+            user_sp = compute_sharing_potentiality(
                 user_user, user_hist_len[1:].numpy(), **sp_kwargs
             )
 
             n_items = item_hist[1:].shape[0]
-            item_item = utils.get_node_node_graph_data(item_hist[1:].numpy())
+            item_item = get_node_node_graph_data(item_hist[1:].numpy())
             item_item = np.asarray(sp.coo_matrix(
                 (item_item[:, -1], (item_item[:, 0], item_item[:, 1])), shape=(n_items, n_items)
             ).todense())
-            item_sp = utils.compute_sharing_potentiality(
+            item_sp = compute_sharing_potentiality(
                 item_item, item_hist_len[1:].numpy(), **sp_kwargs
             )
 
@@ -94,7 +141,7 @@ def get_item_reachability(graph, first_item_id):
 
 
 def get_reachability_per_node(graph, first=None, last=None, nodes=None):
-    reach = {}
+    # dist = _igraph_distances(graph)
     dist = np.array(graph.distances())
 
     if nodes is not None:
@@ -108,17 +155,31 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
 
         dist = dist[:(last + 1)][:, :(last + 1)] if last is not None else dist
         nodes = nodes[:(last + 1)] if last is not None else nodes
+        
+    reach = _get_reachability_per_node(dist) 
+        
+    return dict(zip(nodes, reach))
 
-    for n, n_dist in zip(nodes, dist):
-        n_reach = np.bincount(n_dist[(~np.isinf(n_dist)) & (n_dist > 0)].astype(int))
+
+@numba.jit(nopython=True, parallel=True)
+def _get_reachability_per_node(dist):
+    n_nodes = dist.shape[0]
+    reach = np.zeros((n_nodes,), dtype=np.float32)
+    
+    for i in numba.prange(n_nodes):
+        n_dist = dist[i]
+        mask = (~np.isinf(n_dist)) & (n_dist > 0)
+        n_reach = np.bincount(n_dist[mask].astype(np.int32))
         n_reach = n_reach[n_reach > 0]
-        reach[n] = compute_reachability(n_reach) / len(nodes)
+        reach[i] = compute_reachability(n_reach) / n_nodes
 
     return reach
 
 
+@numba.jit(nopython=True, parallel=True)
 def compute_reachability(reach):
-    return sum([reach[i] / (i + 1) for i in range(len(reach))])
+    discount = np.arange(reach.shape[0]) + 1
+    return (reach / discount).sum()
 
 
 @numba.jit(nopython=True, parallel=True)
@@ -190,7 +251,7 @@ def get_item_item_data_pop_df(dataset, item_df, pop_attr):
 
 
 def get_node_node_data_feature_df(history, node_df, id_label, feat_attr, attr_map=None):
-    graph = utils.get_node_node_graph_data(history)
+    graph = get_node_node_graph_data(history)
     graph = graph[graph[:, -1] > 0]
 
     graph_df = pd.DataFrame(graph, columns=[f'{id_label}_1', f'{id_label}_2', 'n_common_edges'])

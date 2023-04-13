@@ -19,4 +19,7 @@ tqdm==4.64.0
 numba
 wandb
 igraph
-sklearn
+scikit-learn
+optuna
+gmpy2
+dcor

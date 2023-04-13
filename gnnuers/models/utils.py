@@ -2,8 +2,6 @@ import scipy
 import torch
 import numba
 import numpy as np
-import igraph as ig
-import networkx as nx
 
 import gnnuers.utils as utils
 
@@ -30,37 +28,6 @@ def get_adj_matrix(interaction_matrix,
     edge_subset = torch.LongTensor(i)
 
     return adj, edge_subset
-
-
-def get_nx_adj_matrix(dataset):
-    uid_field = dataset.uid_field
-    iid_field = dataset.iid_field
-    n_users = dataset.num(uid_field)
-    n_items = dataset.num(iid_field)
-    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
-    num_all = n_users + n_items
-    A = get_adj_from_inter_matrix(inter_matrix, num_all, n_users)
-
-    return nx.Graph(A)
-
-
-def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
-    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
-    if remove_first_row_col:
-        inter_matrix = inter_matrix[1:, 1:]
-
-    return nx.bipartite.from_biadjacency_matrix(inter_matrix)
-
-
-def get_bipartite_igraph(dataset, remove_first_row_col=False):
-    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
-    if remove_first_row_col:
-        inter_matrix = inter_matrix[1:, 1:]
-
-    incid_adj = ig.Graph.Incidence(inter_matrix.todense().tolist())
-    bip_info = np.concatenate([np.zeros(inter_matrix.shape[0], dtype=int), np.ones(inter_matrix.shape[1], dtype=int)])
-
-    return ig.Graph.Bipartite(bip_info, incid_adj.get_edgelist())
 
 
 def perturb_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False, edge_deletions=False, mask_filter=None):

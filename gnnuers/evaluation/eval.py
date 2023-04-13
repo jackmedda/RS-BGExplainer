@@ -14,6 +14,179 @@ from recbole.evaluator import Evaluator
 import gnnuers.utils as utils
 
 
+def old_extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None):
+    result_all = {}
+    pref_data_all = {}
+    filter_cols = ['user_id', 'rec_topk', 'rec_cf_topk'] if additional_cols is None else additional_cols
+    filter_cols = list(set(filter_cols) | {'user_id', 'rec_topk', 'rec_cf_topk'})
+
+    for e_type, e_path in _exp_paths.items():
+        if e_path is None:
+            continue
+
+        model_name = e_type.replace('+FairDP', '')
+        exps_data = utils.load_old_dp_exps_file(e_path)
+
+        bec = best_exp_col[e_type] if isinstance(best_exp_col, dict) else best_exp_col
+
+        if not isinstance(bec, list):
+            bec = bec.lower() if isinstance(bec, str) else bec
+        else:
+            bec[0] = bec[0].lower()
+        top_exp_func = None
+        if isinstance(bec, int):
+            def top_exp_func(exp): return exp[bec]
+        elif bec == "first":
+            def top_exp_func(exp): return exp[0]
+        elif bec == "last":
+            def top_exp_func(exp): return exp[-1]
+        elif bec == "mid":
+            def top_exp_func(exp): return exp[len(exp) // 2]
+        elif isinstance(bec, list):
+            top_exp_col = utils.old_exp_col_index(bec) if bec is not None else None
+            if top_exp_col is not None:
+                def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
+        elif bec == "auto":
+            assert config is not None, "`auto` mode can be used only with config"
+            best_epoch = utils.old_get_best_epoch_early_stopping(exps_data[0], config)
+            epoch_idx = utils.old_exp_col_index('epoch')
+            def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
+        elif isinstance(bec, list):
+            top_exp_col = utils.old_exp_col_index(bec[0])
+            def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
+
+        pref_data = []
+        for exp_entry in exps_data:
+            if top_exp_func is not None:
+                _exp = top_exp_func(exp_entry)
+            else:
+                _exp = exp_entry[0]
+
+            idxs = [utils.old_exp_col_index(col) for col in filter_cols]
+            del_edges_idx = utils.old_exp_col_index('del_edges')
+            del_edges_data = [_exp[del_edges_idx]] * len(_exp[idxs[0]])
+
+            pref_data.extend(list(zip(*[*[_exp[idx] for idx in idxs], del_edges_data])))
+
+        pref_data = pd.DataFrame(pref_data, columns=filter_cols + ['del_edges'])
+        pref_data.rename(columns={'rec_topk': 'topk_pred', 'rec_cf_topk': 'cf_topk_pred'}, inplace=True)
+        pref_data_all[e_type] = pref_data
+
+        if not pref_data.empty:
+            result_all[e_type] = {}
+            for metric in evaluator.metrics:
+                result_all[e_type][metric] = compute_metric(evaluator, data, pref_data, 'cf_topk_pred', metric)
+
+                if model_name not in result_all:
+                    result_all[model_name] = {}
+
+                if metric not in result_all[model_name]:
+                    result_all[model_name][metric] = compute_metric(evaluator, data, pref_data, 'topk_pred', metric)
+        else:
+            print("Pref Data is empty!")
+
+    return pref_data_all, result_all
+
+
+def old_extract_all_exp_metrics_data(_exp_paths,
+                                     train_data,
+                                     rec_data,
+                                     evaluator,
+                                     sens_attr,
+                                     rec=False,
+                                     overwrite=False,
+                                     other_cols=None):
+    sensitive_map = train_data.dataset.field2id_token[sens_attr]
+
+    user_df = pd.DataFrame({
+        train_data.dataset.uid_field: train_data.dataset.user_feat[train_data.dataset.uid_field].numpy(),
+        sens_attr: train_data.dataset.user_feat[sens_attr].numpy()
+    })
+
+    other_cols = [] if other_cols is None else other_cols
+    if not rec:
+        cols = [2, 4, 6, 8, 9, 10, 11] + other_cols
+    else:
+        cols = [1, 3, 5, 8, 9, 10, 11] + other_cols
+
+    col_names = [
+        'user_id',
+        'topk_pred',
+        'cf_topk_pred',
+        'topk_dist',
+        'dist_loss',
+        'fair_loss',
+        'del_edges',
+        'epoch'
+    ] + other_cols
+
+    exp_dfs = {}
+    result_data = {}
+    n_users_data = {}
+    topk_dist = {}
+    for e_type, e_path in _exp_paths.items():
+        if e_path is None:
+            continue
+        if len(_exp_paths) == 1:
+            saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
+            if os.path.exists(saved_path) and not overwrite:
+                with open(saved_path, 'rb') as saved_file:
+                    saved_data = pickle.load(saved_file)
+                for s_data, curr_data in zip(saved_data, [exp_dfs, result_data, n_users_data, topk_dist]):
+                    curr_data.update(s_data)
+                break
+        exps_data = utils.load_old_dp_exps_file(e_path)
+
+        exp_data = []
+        for exp_entry in exps_data:
+            for _exp in exp_entry[:-1]:  # the last epoch is a stub epoch to retrieve back the best epoch
+                exp_row_data = [_exp[0]]
+                for col in cols:
+                    if col in [1, 2, 3, 4, 5, 6]:
+                        exp_row_data.append(_exp[col])
+                    elif col == "set":
+                        comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(_exp[cols[0]], _exp[cols[1]])])
+                        exp_row_data.append(len(_exp[1][0]) - comm_items)
+                    else:
+                        exp_row_data.append([_exp[col]] * len(exp_row_data[0]))
+
+                exp_data.extend(list(zip(*exp_row_data)))
+
+        data_df = pd.DataFrame(exp_data, columns=col_names)
+        if data_df.empty:
+            print(f"User explanations are empty for {e_type}")
+            continue
+
+        data_df['n_del_edges'] = data_df['del_edges'].map(lambda x: x.shape[1])
+        exp_dfs[e_type] = data_df
+
+        result_data[e_type] = {}
+        n_users_data[e_type] = {}
+        topk_dist[e_type] = []
+        for n_del, gr_df in tqdm.tqdm(data_df.groupby('n_del_edges'), desc="Extracting metrics from each explanation"):
+            result_data[e_type][n_del] = {}
+            for metric in evaluator.metrics:
+                result_data[e_type][n_del][metric] = compute_metric(evaluator, rec_data, gr_df, 'cf_topk_pred', metric)
+
+            t_dist = gr_df['topk_dist'].to_numpy()
+            topk_dist[e_type].extend(list(
+                zip([n_del] * len(t_dist), t_dist / len(t_dist), gr_df['topk_dist'].to_numpy() / len(t_dist))
+            ))
+
+            gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index(train_data.dataset.uid_field), on='user_id')
+            n_users_data[e_type][n_del] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
+            n_users_del = n_users_data[e_type][n_del][sens_attr]
+            n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
+
+        if len(_exp_paths) == 1:
+            saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')
+            if not os.path.exists(saved_path) or overwrite:
+                with open(saved_path, 'wb') as saved_file:
+                    pickle.dump((exp_dfs, result_data, n_users_data, topk_dist), saved_file)
+
+    return exp_dfs, result_data, n_users_data, topk_dist
+
+
 def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None):
     result_all = {}
     pref_data_all = {}
@@ -49,7 +222,7 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
                 def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
         elif bec == "auto":
             assert config is not None, "`auto` mode can be used only with config"
-            best_epoch = utils.get_best_exp_early_stopping(exps_data[0], config)
+            best_epoch = utils.get_best_epoch_early_stopping(exps_data[0], config)
             epoch_idx = utils.exp_col_index('epoch')
             def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
         elif isinstance(bec, list):

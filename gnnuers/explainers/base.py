@@ -6,7 +6,6 @@ import time
 import math
 from logging import getLogger
 
-import tqdm
 import wandb
 import gmpy2
 import torch
@@ -15,6 +14,7 @@ import pandas as pd
 import seaborn as sns
 import scipy.signal as sp_signal
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from recbole.evaluator import Evaluator
 from recbole.utils import set_color
 from recbole.data.interaction import Interaction
@@ -102,7 +102,6 @@ class Explainer:
         self.random_perturbation = config['explainer_policies']['random_perturbation']
         self.neighborhood_perturbation = config['explainer_policies']['neighborhood_perturbation']
 
-        wandb.config.update(config.final_config_dict)
         # wandb.watch(self.cf_model)
 
     @property
@@ -356,7 +355,7 @@ class Explainer:
         user_data = user_data.split(self.user_batch_exp)
 
         return (
-            tqdm.tqdm(
+            tqdm(
                 user_data,
                 total=len(user_data),
                 ncols=100,
@@ -659,7 +658,7 @@ class Explainer:
         self.logger.info(f"M idx: {self.m_idx}")
         self.logger.info(f"Original Fair Loss: {orig_loss}")
 
-        iter_epochs = tqdm.tqdm(
+        iter_epochs = tqdm(
             range(epochs),
             total=epochs,
             ncols=100,

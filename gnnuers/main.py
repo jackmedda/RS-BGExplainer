@@ -81,7 +81,7 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     if args.run == 'train':
         runner(model, dataset, config, saved=saved)
     elif args.run == 'explain':
-        runner(*explain_args, cmd_config_args=unk_args)
+        runner(*explain_args)
 
 
 if __name__ == "__main__":
@@ -108,6 +108,7 @@ if __name__ == "__main__":
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
     explain_group.add_argument('--wandb_online', action='store_true')
+    explain_group.add_argument('--hyper_optimize', action='store_true')
 
     args, unk_args = parser.parse_known_args()
     print(args)
@@ -115,9 +116,23 @@ if __name__ == "__main__":
     unk_args[::2] = map(lambda s: s.replace('-', ''), unk_args[::2])
     unk_args = dict(zip(unk_args[::2], unk_args[1::2]))
     print("Unknown args", unk_args)
+    
+    if args.hyper_optimize and not args.verbose:
+        from tqdm import tqdm
+        from functools import partialmethod
+
+        tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
     args.wandb_online = {False: "offline", True: "online"}[args.wandb_online]
-    explain_args = [args.model_file, args.explainer_config_file, args.explain_config_id, args.verbose, args.wandb_online]
+    explain_args = [
+        args.model_file,
+        args.explainer_config_file,
+        args.explain_config_id,
+        args.verbose,
+        args.wandb_online,
+        unk_args,
+        args.hyper_optimize
+    ]
 
     if args.run == 'train':
         runner = training

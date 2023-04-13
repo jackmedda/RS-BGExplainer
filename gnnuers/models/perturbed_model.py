@@ -15,7 +15,6 @@ class PerturbedModel(object):
         self.n_hops = config['n_hops']
         self.neighbors_hops = config['neighbors_hops']
         self.beta = config['cf_beta']
-        self.fair_beta = config['fair_beta']
         self.sub_matrix_only_last_level = config['sub_matrix_only_last_level']
         self.not_user_sub_matrix = config['not_user_sub_matrix']
         self.only_subgraph = config['only_subgraph']
@@ -148,7 +147,7 @@ class PerturbedModel(object):
         orig_loss_graph_dist = torch.sum(orig_dist.values().abs()) / 2  # Number of edges changed (symmetrical)
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
-        loss_total = fair_loss + self.fair_beta * loss_graph_dist
+        loss_total = fair_loss + self.beta * loss_graph_dist
 
         return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, orig_dist
 
