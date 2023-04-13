@@ -13,9 +13,9 @@ Instead, the provided models are independent of the Recbole library.
 
 # Requirements
 Our framework was tested on Python 3.9 with the libraries listed in the
-[requirements.txt](src/requirements.txt) that can be installed with:
+[requirements.txt](gnnuers/requirements.txt) that can be installed with:
 ```bash
-pip install -r src/requirements.txt
+pip install -r gnnuers/requirements.txt
 ```
 Some dependencies related to PyTorch, e.g. torch-scatter, could be hard to retrieve
 directly from pip depending on the PyTorch and CUDA version you are using, so you should
@@ -42,17 +42,17 @@ cp modified_recbole_dataset.py /usr/local/lib/python3.9/dist-packages/recbole/da
 The datasets used in our datasets are MovieLens 1M, Last.FM 1K, Ta Feng, Insurance and
 can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.7602406).
 They should be placed in a folder named _dataset_ in the project root folder,
-so next to the _config_ and _src_ folders, e.g.:
+so next to the _config_ and _gnnuers_ folders, e.g.:
 ```
 |-- config/*
 |-- dataset |-- ml-1m
             |-- lastfm-1k
-|-- src/*
+|-- gnnuers/*
 ```
 
 # Usage
 
-The file [main.py](src/main.py) is the entry point for every step to execute in our pipeline.
+The file [main.py](gnnuers/main.py) is the entry point for every step to execute in our pipeline.
 
 ## 1. Configuration
 
@@ -87,7 +87,7 @@ deletions follow a monotonic trend
 
 The recommender systems need first to be trained:
 ```bash
-python -m src.main --run train --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml
+python -m gnnuers.main --run train --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml
 ```
 where __MODEL__ should be one of [GCMC, LightGCN, NGCF], __DATASET__ should match the folder
 of dataset, e.g. insurance, ml-1m, __TRAINING_CONFIG__ should be a config file of the
@@ -95,7 +95,7 @@ __training__ type.
 
 ## 3. Train GNNUERS explainer
 ```bash
-python -m src.main --run explain --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml --explainer_config_file config/EXPLAINING_CONFIG.yaml --model_file saved/MODEL_FILE
+python -m gnnuers.main --run explain --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml --explainer_config_file config/EXPLAINING_CONFIG.yaml --model_file saved/MODEL_FILE
 ```
 where __MODEL__, __DATASET__, __TRAINING_CONFIG__ were already explained above.
 __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
@@ -103,7 +103,7 @@ __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
 # GNNUERS Output
 
 GNNUERS creates a folder
-_src/dp_ndcg_explanations/DATASET/MODEL/FairDP/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
+_gnnuers/experiments/dp_explanations/DATASET/MODEL/FairDP/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
 where __SENSITIVE_ATTRIBUTE__ can be one of [gender, age], __EPOCHS__ is the number of
 epochs used to train GNNUERS, __CONF_ID__ is the configuration/run ID of the just run
 experiment. The folder contains the __EXPLAINING_CONFIG__ file in yaml and pkl format used
@@ -130,11 +130,11 @@ the second the item ids, such that each one of the N columns is a deleted edge
 
 # Plotting
 
-The script [plot_full_comparison.py](src/plot_full_comparison.py) can be used to plot the
+The script [plot_full_comparison.py](gnnuers/plot_full_comparison.py) can be used to plot the
 results used in the paper, for two explaining runs, e.g. one with GNNUERS base (1) and one
 with GNNUERS+CP (2) we could run:
 ```bash
-python -m src.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL_FILE --explainer_config_files RUN_1_PATH/config.yaml RUN_2_PATH/config.yaml --utility_metrics [NDCG] --add_plot_table
+python -m gnnuers.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL_FILE --explainer_config_files RUN_1_PATH/config.yaml RUN_2_PATH/config.yaml --utility_metrics [NDCG] --add_plot_table
 ```
 
 where RUN_1_PATH and RUN_2_PATH are the paths containing the GNNUERS output explanations.
