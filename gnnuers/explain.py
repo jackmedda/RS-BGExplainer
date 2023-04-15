@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import pickle
 import logging
 import inspect
@@ -125,9 +126,10 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
-
+    
     utils.wandb_init(
         config,
+        **wandb_env_data,
         name="Explanation",
         job_type="train",
         group=f"{model.__class__.__name__}_{config['dataset']}_{config['sensitive_attribute'].title()}_epochs{config['cf_epochs']}_exp{os.path.basename(base_exps_file)}",
@@ -213,6 +215,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         
         run = utils.wandb_init(
             wandb_config,
+            **wandb_env_data,
             policies=config['explainer_policies'],
             name=f"Explanation_trial{trial.number}",
             job_type="train",
@@ -236,7 +239,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
     storage_name = "sqlite:///{}.db".format(study_name)
     study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name, load_if_exists=True)
     
-    n_trials = 400
+    n_trials = 100
     if study.trials:
         n_trials -= study.trials[-1].number  # it is not done automatically by optuna
         if n_trials <= 0:
@@ -246,6 +249,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
     
     summary = utils.wandb_init(
         config,
+        **wandb_env_data,
         name="summary",
         job_type="logging",
         group=exp_token,
@@ -265,8 +269,8 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         for k, v in trial.params.items():
             summary.log({k: v}, step=step)
     
-    with open(os.path.join(base_exps_filepath, 'best_params.json'), 'w') as param_file:
-        json.dump(trial.params, param_file, indent=4)
+    with open(os.path.join(base_exps_file, 'best_params.json'), 'w') as param_file:
+        json.dump(dict(trial.params.items()), param_file, indent=4)
 
 
 def execute_explanation(model_file,
@@ -314,6 +318,12 @@ def execute_explanation(model_file,
         
     if not os.path.exists(base_exps_filepath):
         os.makedirs(base_exps_filepath)
+    
+    global wandb_env_data
+    wandb_env_data = {}
+    if os.path.exists("wandb_init.json"):
+        with open("wandb_init.json", 'r') as wandb_file:
+            wandb_env_data = json.load(wandb_file)
 
     kwargs = dict(
         verbose=verbose,

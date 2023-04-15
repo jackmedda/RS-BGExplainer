@@ -7,7 +7,6 @@ from recbole.model.general_recommender.gcmc import GCMC, GcEncoder
 
 sys.path.append('..')
 
-import gnnuers.utils as utils
 from gnnuers.models import PerturbedModel
 
 
@@ -35,7 +34,6 @@ class GCMCPerturbed(PerturbedModel, GCMC):
             perturbate_adj_matrix_func=self.perturbate_adj_matrix,
             sparse_feature=self.sparse_feature
         ).to(self.device)
-        self.loss_function = utils.NDCGApproxLoss()
 
     def forward(self, user_X, item_X, user, item, pred=False):
         # Graph autoencoders are comprised of a graph encoder model and a pairwise decoder model.

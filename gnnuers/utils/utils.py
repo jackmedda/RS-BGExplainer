@@ -75,25 +75,18 @@ def old_exp_col_index(col):
     return idx
 
 
-def get_wandb_main_kwargs(policies):
-    tags = [k for k in policies if policies[k]]
-    
-    return dict(
-        project="Mit-GNNUERS",  # "B-GEM",
-        entity="fairrec",
-        tags=tags
-    )
-
-
 def wandb_init(config, policies=None, **kwargs):
     config = config.final_config_dict if not isinstance(config, dict) else config
     
-    main_kws = get_wandb_main_kwargs(config.get("explainer_policies", policies))
-    config['wandb_tags'] = main_kws['tags']
+    tags = None
+    policies = config.get("explainer_policies", policies)
+    if policies is not None:
+        tags = [k for k in policies if policies[k]]
+    config['wandb_tags'] = tags
 
     return wandb.init(
-        **main_kws,
         **kwargs,
+        tags=tags,
         config=config
     )
 

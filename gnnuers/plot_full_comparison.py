@@ -220,6 +220,75 @@ def update_plot_del_data(_test_df_del_data, _rec_df_del_data):
             [policy] * len(exp_rec_df)
         ].tolist()
     )
+    
+    
+def compute_graph_metrics_analysis_tables_data(_sens_gmdf,
+                                               _gm_analysis_tables_data: dict,
+                                               gm_rel_info,
+                                               _iterations=100,
+                                               kl_eps=1e-8):  # avoids NaN
+    # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
+    # Paper that states how select number of neighbors, repetitions and usage of median
+    # we regroup again by sensitive attribute because `Item` was added as label
+    for gm_sens_attr, gm_sattr_df in _sens_gmdf.groupby("Sens Attr"):
+        gm_sattr_df_norm = gm_sattr_df.copy(deep=True)
+        gm_sattr_df_norm['Degree'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
+            gm_sattr_df_norm.loc[:, ['Degree']].to_numpy()
+        ).squeeze()
+        gm_sattr_df_norm['Del Edges Count Scaled'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
+            gm_sattr_df_norm.loc[:, ['Del Edges Count']].to_numpy()
+        ).squeeze()
+        for gm_dg, gm_dgdf in gm_sattr_df_norm.groupby("Demo Group"):
+            mi_res = np.zeros((_iterations, len(gm_dep_order)), dtype=float)
+            wd_res = [np.inf] * len(gm_dep_order)
+            kl_res = [0] * len(gm_dep_order)
+            dcor_res = [None] * len(gm_dep_order)
+            dcor_pval = [None] * len(gm_dep_order)
+            gm_del_dist = [None] * len(gm_dep_order)
+
+            n_del_edges_scaled = gm_dgdf.loc[:, 'Del Edges Count Scaled'].to_numpy()
+            for gm_i, gm in enumerate(gm_dep_order):
+                gm_dg_data = gm_dgdf.loc[:, gm].to_numpy()
+                gm_dg_data = gm_dg_data.astype(n_del_edges_scaled.dtype)
+
+                if "wd" in _gm_analysis_tables_data:
+                    wd_res[gm_i] = scipy.stats.wasserstein_distance(gm_dg_data, n_del_edges_scaled)
+                if "kl" in _gm_analysis_tables_data:
+                    kl_res[gm_i] = scipy.stats.entropy(
+                        n_del_edges_scaled + kl_eps, gm_dg_data + kl_eps, base=2
+                    )
+                if "dcor" in _gm_analysis_tables_data:
+                    dcor_res[gm_i] = dcor.distance_correlation(gm_dg_data, n_del_edges_scaled)
+                    dcor_pval[gm_i] = dcor.independence.distance_covariance_test(
+                        gm_dg_data, n_del_edges_scaled, num_resamples=10
+                    ).pvalue
+
+                if "del_dist" in _gm_analysis_tables_data:
+                    quartiles = np.array_split(gm_dgdf.sort_values(gm), 4)
+                    gm_del_dist[gm_i] = [q['Del Edges Count'].sum() / de_count for q in quartiles]
+            
+            if "mi" in _gm_analysis_tables_data:
+                for mi_i in range(_iterations):
+                    mi_res[mi_i] = sk_feats.mutual_info_regression(
+                        gm_dgdf.loc[:, gm_dep_order].values,
+                        n_del_edges_scaled,
+                        n_neighbors=3
+                    )
+                mi_res = np.median(mi_res, axis=0)
+            
+            gm_info = [*gm_rel_info, gm_sens_attr, gm_dg]
+            
+            if "mi" in _gm_analysis_tables_data:
+                _gm_analysis_tables_data["mi"].append([*gm_info, *mi_res])
+            if "wd" in _gm_analysis_tables_data:
+                _gm_analysis_tables_data["wd"].append([*gm_info, *wd_res])
+            if "kl" in _gm_analysis_tables_data:
+                _gm_analysis_tables_data["kl"].append([*gm_info, *kl_res])
+            if "dcor" in _gm_analysis_tables_data:
+                _gm_analysis_tables_data["dcor"].append([*gm_info, *dcor_res])
+                _gm_analysis_tables_data["dcor_pval"].append([*gm_info, *dcor_pval])
+            if "del_dist" in _gm_analysis_tables_data:
+                _gm_analysis_tables_data["del_dist"].append([*gm_info, *gm_del_dist])
 
 
 def create_del_table_best_explanations_per_group(_metric_df):
@@ -545,11 +614,15 @@ parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
 parser.add_argument('--utility_metrics', '--um', nargs='+', default=None)
 parser.add_argument('--add_plot_table', '--apt', action="store_true")
 parser.add_argument('--plot_only_graph_metrics', '--pogm', action="store_true")
+parser.add_argument('--extract_only_graph_metrics_mm', '--eogmmm', action="store_true")
+parser.add_argument('--graph_metrics_analysis_tables', '--gmat', nargs='+', default=None)
 
 args = parser.parse_args()
 
 assert len(args.model_files) == len(args.explainer_config_files), \
     "Pass the same number of perturbed model files and configuration files to be loaded"
+
+args.graph_metrics_analysis_tables = args.graph_metrics_analysis_tables or ["mi", "wd", "kl", "dcor", "del_dist"]
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
@@ -600,6 +673,8 @@ colors = {
     "Age": {"Y": "#0173b2", "O": "#de8f05"}
 }
 
+del_dist_map = ["LOW", "MEDIUM-LOW", "MEDIUM-HIGH", "HIGH"]
+
 P_VALUE = 0.05
 
 exp_epochs, config_ids, datasets_list, models_list, sens_attrs = [], [], [], [], []
@@ -625,37 +700,38 @@ if not os.path.exists(plots_path):
 if os.path.exists(os.path.join(plots_path, 'rec_df.csv')) and \
         os.path.exists(os.path.join(plots_path, 'incdisp.pkl')) and not args.overwrite_plot_data:
     test_rows, rec_rows = 2, 3
+    
+    if not args.extract_only_graph_metrics_mm:
+        rec_df = pd.read_csv(os.path.join(plots_path, 'rec_df.csv'), skiprows=rec_rows)
+        rec_del_df = pd.read_csv(os.path.join(plots_path, 'rec_del_df.csv'), skiprows=rec_rows)
 
-    rec_df = pd.read_csv(os.path.join(plots_path, 'rec_df.csv'), skiprows=rec_rows)
-    rec_del_df = pd.read_csv(os.path.join(plots_path, 'rec_del_df.csv'), skiprows=rec_rows)
+        with open(os.path.join(plots_path, 'rec_df.csv'), 'r') as f:
+            metadata = [next(f) for _ in range(rec_rows)]
+            exp_rec_data = metadata[2].split(': ')[1].strip()
 
-    with open(os.path.join(plots_path, 'rec_df.csv'), 'r') as f:
-        metadata = [next(f) for _ in range(rec_rows)]
-        exp_rec_data = metadata[2].split(': ')[1].strip()
+        if exp_rec_data != "test":
+            test_df = pd.read_csv(os.path.join(plots_path, 'test_df.csv'), skiprows=test_rows)
+            test_del_df = pd.read_csv(os.path.join(plots_path, 'test_del_df.csv'), skiprows=test_rows)
+        else:
+            test_df, test_del_df = None, None
 
-    if exp_rec_data != "test":
-        test_df = pd.read_csv(os.path.join(plots_path, 'test_df.csv'), skiprows=test_rows)
-        test_del_df = pd.read_csv(os.path.join(plots_path, 'test_del_df.csv'), skiprows=test_rows)
-    else:
-        test_df, test_del_df = None, None
+        with open(os.path.join(plots_path, 'incdisp.pkl'), 'rb') as f:
+            incdisp = pickle.load(f)
 
-    with open(os.path.join(plots_path, 'incdisp.pkl'), 'rb') as f:
-        incdisp = pickle.load(f)
+        with open(os.path.join(plots_path, 'del_edges.pkl'), 'rb') as f:
+            del_edges = pickle.load(f)
 
-    with open(os.path.join(plots_path, 'del_edges.pkl'), 'rb') as f:
-        del_edges = pickle.load(f)
+        with open(os.path.join(plots_path, 'all_del_edges.pkl'), 'rb') as f:
+            all_del_edges = pickle.load(f)
 
-    with open(os.path.join(plots_path, 'all_del_edges.pkl'), 'rb') as f:
-        all_del_edges = pickle.load(f)
+        with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'rb') as f:
+            all_batch_exps = pickle.load(f)
 
-    with open(os.path.join(plots_path, 'all_batch_exps.pkl'), 'rb') as f:
-        all_batch_exps = pickle.load(f)
-
+        with open(os.path.join(plots_path, 'datasets_train_inter_sizes.pkl'), 'rb') as f:
+            datasets_train_inter_sizes = pickle.load(f)
+        
     with open(os.path.join(plots_path, 'train_datasets.pkl'), 'rb') as f:
         train_datasets = pickle.load(f)
-
-    with open(os.path.join(plots_path, 'datasets_train_inter_sizes.pkl'), 'rb') as f:
-        datasets_train_inter_sizes = pickle.load(f)
 
 else:
     # %%
@@ -889,6 +965,10 @@ for _dataset in unique_datasets:
 
 with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f:
     pickle.dump(graph_metrics_dfs, f)
+    
+if args.extract_only_graph_metrics_mm:
+    print("Graph metrics extracted and saved")
+    exit()
 
 rec_df["Policy"] = rec_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
 rec_del_df["Policy"] = rec_del_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
@@ -902,6 +982,7 @@ old_new_policy_map = {
     'MonDel+Random': random_pol,
     'NoPerturbation': no_pert_col
 }
+
 rec_df["Policy"] = rec_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
 rec_del_df["Policy"] = rec_del_df["Policy"].map(lambda p: old_new_policy_map.get(p, p))
 if exp_rec_data != "test":
@@ -911,12 +992,14 @@ if exp_rec_data != "test":
 qnt_size = 100
 ch_quantile = 95
 hue_order = {'Gender': ['Males', 'Females'], 'Age': ['Younger', 'Older'], 'User Wide Zone': ['America', 'Other']}
+
 if not rec_df.empty:
     unique_policies = sorted(rec_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
 else:
     unique_policies = sorted(rec_del_df['Policy'].unique(), key=lambda x: 0 if x == no_pert_col else len(x))
 
 policy_order = [p for p in policy_order_base if p in unique_policies]
+
 for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df], ["test", exp_rec_data]):
     if df is None or del_df is None:
         continue
@@ -1173,15 +1256,36 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plt.close("all")
         
     gc.collect()
+    
+    gm_analysis_tables_data = {}
+    if "mi" in args.graph_metrics_analysis_tables:
+        gm_analysis_tables_data["mi"] = []
+    if "wd" in args.graph_metrics_analysis_tables:
+        gm_analysis_tables_data["wd"] = []
+    if "kl" in args.graph_metrics_analysis_tables:
+        gm_analysis_tables_data["kl"] = []
+    if "dcor" in args.graph_metrics_analysis_tables:
+        gm_analysis_tables_data["dcor"] = []
+        gm_analysis_tables_data["dcor_pval"] = []
+    if "del_dist" in args.graph_metrics_analysis_tables:
+        gm_analysis_tables_data["del_dist"] = []
+        
+    def get_adv_group_for_graph_metric(adv_gr_df_gby, adv_gr_meta):
+        adv_gr_df = adv_gr_df_gby.get_group((*adv_gr_meta, "NP"))
+        adv_gr_df = adv_gr_df[adv_gr_df.Metric == 'NDCG']
+        adv_gr_df = next(adv_gr_df.groupby('Epoch').__iter__())[1]
+        adv_gr = adv_gr_df.groupby("Demo Group").mean()["Value"].sort_values().index[-1]
 
-    gm_mi_data = []
-    gm_wasser_data = []
-    gm_kl_data = []
-    gm_dcor_data = []
-    gm_dcor_pval = []
-    gm_del_dist_data = []
+        return adv_gr
+        
+    adv_groups_map = {}
     m_dset_attr_pol_gby = del_df.groupby(['Model', 'Dataset', 'Sens Attr', 'Policy'])
     for (_model, _dataset, _s_attr, _policy), m_dset_attr_pol_df in m_dset_attr_pol_gby:
+        df_metadata = (_model, _dataset, _s_attr)
+        if df_metadata not in adv_groups_map:
+            gm_adv_group = get_adv_group_for_graph_metric(m_dset_attr_pol_gby,  df_metadata)
+            adv_groups_map[df_metadata] = group_name_map[gm_adv_group]
+            
         # len_pol = len(unique_policies[1:])
         if _policy != no_pert_col:  # without perturbation there are no perturbed edges
             indexed_del_df = m_dset_attr_pol_df[m_dset_attr_pol_df["Metric"] == "NDCG"]  # metric not relevant here
@@ -1227,94 +1331,68 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
                         dsets_df.to_csv(dset_stats)
 
-            # https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0087357&type=printable
-            # Paper that states how select number of neighbors, repetitions and usage of median
-            # we regroup again by sensitive attribute because `Item` was added as label
-            for gm_sens_attr, gm_sattr_df in sens_gmdf.groupby("Sens Attr"):
-                gm_sattr_df_norm = gm_sattr_df.copy(deep=True)
-                gm_sattr_df_norm['Degree'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                    gm_sattr_df_norm.loc[:, ['Degree']].to_numpy()
-                ).squeeze()
-                gm_sattr_df_norm['Del Edges Count Scaled'] = sklearn.preprocessing.MinMaxScaler().fit_transform(
-                    gm_sattr_df_norm.loc[:, ['Del Edges Count']].to_numpy()
-                ).squeeze()
-                for gm_dg, gm_dgdf in gm_sattr_df_norm.groupby("Demo Group"):
-                    mi_res = np.zeros((args.iterations, len(gm_dep_order)), dtype=float)
-                    wd_res = [np.inf] * len(gm_dep_order)
-                    kl_res = [0] * len(gm_dep_order)
-                    kl_eps = 1e-8  # avoids NaN
-                    dcor_res = [None] * len(gm_dep_order)
-                    dcor_pval = [None] * len(gm_dep_order)
-                    gm_del_dist = [None] * len(gm_dep_order)
-                    
-                    n_del_edges_scaled = gm_dgdf.loc[:, 'Del Edges Count Scaled'].to_numpy()
-                    for gm_i, gm in enumerate(gm_dep_order):
-                        wd_data = gm_dgdf.loc[:, gm].to_numpy()
-                        wd_data = wd_data.astype(n_del_edges_scaled.dtype)
-                        wd_res[gm_i] = scipy.stats.wasserstein_distance(wd_data, n_del_edges_scaled)
-                        kl_res[gm_i] = scipy.stats.entropy(
-                            n_del_edges_scaled + kl_eps, wd_data + kl_eps, base=2
-                        )
-                        dcor_res[gm_i] = dcor.distance_correlation(wd_data, n_del_edges_scaled)
-                        dcor_pval[gm_i] = dcor.independence.distance_covariance_test(
-                            wd_data, n_del_edges_scaled, num_resamples=10
-                        ).pvalue
-                        
-                        quartiles = np.array_split(gm_dgdf.sort_values(gm), 4)
-                        gm_del_dist[gm_i] = [q['Del Edges Count'].sum() / de_count for q in quartiles]
+            compute_graph_metrics_analysis_tables_data(
+                sens_gmdf,
+                gm_analysis_tables_data,
+                [_dataset, _model, _policy],
+                _iterations=args.iterations
+            )
+            
+    def del_dist_applymap(quartiles):
+        highest_idx = np.argmax(quartiles)
+        return f"{del_dist_map[highest_idx]} ({quartiles[highest_idx] * 100:.1f}\%)"
+    
+    def del_dist_hl(del_dist_row, row_sattr):
+        new_row = del_dist_row.copy(deep=True)
+        row_model = del_dist_row.name
+        for row_cols, row_col_val in del_dist_row.items():
+            if adv_groups_map[(row_model, row_cols[0], row_sattr)] == row_cols[2]:
+                new_row.loc[row_cols] = ("\hl{" + str(row_col_val) + "}")
+            else:
+                new_row.loc[row_cols] = (str(row_col_val))
+        return new_row
 
-                    for mi_i in range(args.iterations):
-                        mi_res[mi_i] = sk_feats.mutual_info_regression(
-                            gm_dgdf.loc[:, gm_dep_order].values,
-                            n_del_edges_scaled,
-                            n_neighbors=3
-                        )
-                    mi_res = np.median(mi_res, axis=0)
-                    gm_rel_info = [_dataset, _model, gm_sens_attr, _policy, gm_dg]
-                    gm_mi_data.append([*gm_rel_info, *mi_res])
-                    gm_wasser_data.append([*gm_rel_info, *wd_res])
-                    gm_kl_data.append([*gm_rel_info, *kl_res])
-                    gm_dcor_data.append([*gm_rel_info, *dcor_res])
-                    gm_dcor_pval.append([*gm_rel_info, *dcor_pval])
-                    gm_del_dist_data.append([*gm_rel_info, *gm_del_dist])
-
-    for gm_dep_data, dep_type in zip(
-        [gm_mi_data, gm_wasser_data, gm_kl_data, gm_dcor_data, gm_dcor_pval, gm_del_dist_data],
-        ["mi", "wd", "kl", "dcor", "dcor_pval", "del_dist"]
-    ):
+    for dep_type, gm_dep_data in gm_analysis_tables_data.items():
         gm_dep_df = pd.DataFrame(
             gm_dep_data,
-            columns=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group", *gm_dep_order]
+            columns=["Dataset", "Model", "Policy", "Sens Attr", "Demo Group", *gm_dep_order]
         ).drop_duplicates(
-            subset=["Dataset", "Model", "Sens Attr", "Policy", "Demo Group"]  # removes duplicated gms of item nodes
+            subset=["Dataset", "Model", "Policy", "Sens Attr", "Demo Group"]  # removes duplicated gms of item nodes
         )
         gm_dep_df = gm_dep_df.melt(
-            ['Dataset', 'Model', 'Sens Attr', 'Policy', 'Demo Group'],
+            ['Dataset', 'Model', 'Policy', 'Sens Attr', 'Demo Group'],
             var_name="Graph Metric", value_name="Value"
         )
 
         for gm_sa, gmd_sa_df in gm_dep_df.groupby('Sens Attr'):
             # for RQ3
             # gmd_df = gmd_sa_df[(gmd_sa_df["Model"] != 'NGCF') & (gmd_sa_df["Policy"] == mondel_pol)]
-            gmd_df = gmd_sa_df[(gmd_sa_df["Policy"] == mondel_pol)]
+            # gmd_df = gmd_sa_df[(gmd_sa_df["Policy"] == mondel_pol)]
             #####
-            gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
-                index=['Model'],
-                columns=['Dataset', 'Graph Metric', 'Demo Group']
-            ).droplevel(0, axis=1).reindex(
-                gm_dep_order, axis=1, level=1
-            ).reindex(
-                ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
-            )
-            gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
-            
-            if dep_type == "del_dist":
-                gm_dep_pivot = gm_dep_pivot.applymap(lambda x: '/'.join(map('{:.2f}'.format, x)))
-            else:
-                gm_dep_pivot = gm_dep_pivot.round(2)
-            
-            gm_dep_pivot.to_latex(
-                os.path.join(plots_path, f"{dep_type}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
-                multicolumn_format="c",
-                escape=False
-            )
+            for _pol, gmd_df in gmd_sa_df.groupby("Policy"):
+                if _pol == no_pert_col:
+                    continue
+
+                gm_dep_pivot = gmd_df[["Dataset", "Model", "Demo Group", "Graph Metric", "Value"]].pivot(
+                    index=['Model'],
+                    columns=['Dataset', 'Graph Metric', 'Demo Group']
+                ).droplevel(0, axis=1).reindex(
+                    gm_dep_order, axis=1, level=1
+                ).reindex(
+                    ["Item", "M", "F", "Y", "O", "America", "Other"], axis=1, level=2
+                )
+                gm_dep_pivot.columns = gm_dep_pivot.columns.map(lambda x: (*x[:2], group_name_map.get(x[2], x[2])))
+
+                if dep_type == "del_dist":
+                    gm_dep_pivot = gm_dep_pivot.applymap(del_dist_applymap)
+                    if gm_sa != "Item":
+                        gm_dep_pivot = gm_dep_pivot.apply(lambda r: del_dist_hl(r, gm_sa), axis=1)
+                else:
+                    gm_dep_pivot = gm_dep_pivot.round(2)
+
+                gm_dep_pivot.to_latex(
+                    os.path.join(plots_path, f"{dep_type}_{_pol}_table_graph_metrics_{gm_sa}_{exp_data_name}.tex"),
+                    column_format="c" * (gm_dep_pivot.shape[1] + 1),
+                    multicolumn_format="c",
+                    escape=False
+                )

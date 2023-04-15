@@ -78,7 +78,7 @@ eval_args:
 
 # Early stopping parameters
 early_stopping:
-    patience: 40  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
+    patience: 15  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
     ignore: 0
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')

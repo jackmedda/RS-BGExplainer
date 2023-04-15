@@ -142,19 +142,24 @@ def get_item_reachability(graph, first_item_id):
 
 def get_reachability_per_node(graph, first=None, last=None, nodes=None):
     # dist = _igraph_distances(graph)
-    dist = np.array(graph.distances())
+    import pdb; pdb.set_trace()
 
     if nodes is not None:
         nodes = sorted(nodes)
-        dist = dist[nodes][:, nodes]
     else:
-        nodes = np.arange(dist.shape[0])
+        nodes = np.arange(graph.vcount())
 
-        dist = dist[first:][:, first:] if first is not None else dist
-        nodes = nodes[first:] if first is not None else nodes
+#         dist = dist[first:][:, first:] if first is not None else dist
+#         nodes = nodes[first:] if first is not None else nodes
 
-        dist = dist[:(last + 1)][:, :(last + 1)] if last is not None else dist
-        nodes = nodes[:(last + 1)] if last is not None else nodes
+#         dist = dist[:(last + 1)][:, :(last + 1)] if last is not None else dist
+#         nodes = nodes[:(last + 1)] if last is not None else nodes
+        if first is not None:
+            nodes = nodes[first:]
+        if last is not None:
+            nodes = nodes[:(last + 1)]
+
+    dist = np.array(graph.distances(source=nodes, target=nodes))
         
     reach = _get_reachability_per_node(dist) 
         
