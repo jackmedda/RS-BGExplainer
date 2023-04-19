@@ -1,5 +1,7 @@
 import numpy as np
 
+import gnnuers.utils as utils
+
 
 class LRScaler(object):
 
@@ -16,3 +18,8 @@ class LRScaler(object):
     def restore(self):
         for pg_idx, pg in enumerate(self.optimizer.param_groups):
             pg['lr'] = self.orig_lr[pg_idx]
+            
+            
+def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
+    kws = {"pred": pred} if pred is not None else {}
+    return utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kws)

@@ -116,17 +116,24 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
 
     if cmd_config_args is not None:
         for arg, val in cmd_config_args.items():
-            if config[arg] is None:
+            conf = config
+            if '.' in arg:
+                subargs = arg.split('.')
+                for subarg in subargs[:-1]:
+                    conf = conf[subarg]
+                arg = subargs[-1]
+            
+            if conf[arg] is None:
                 try:
                     new_val = float(val)
                     new_val = int(new_val) if new_val.is_integer() else new_val
                 except ValueError:
                     new_val = int(val) if val.isdigit() else val
-                config[arg] = new_val
+                conf[arg] = new_val
             else:
                 try:
-                    new_val = type(config[arg])(val)  # cast to same type in config
-                    config[arg] = new_val
+                    new_val = type(conf[arg])(val)  # cast to same type in config
+                    conf[arg] = new_val
                 except (ValueError, TypeError):
                     new_val = None
 
@@ -221,6 +228,66 @@ def get_best_epoch_early_stopping(exps, config_dict):
         patience = config_dict['earlys_patience']
 
     return max([e[exp_col_index('epoch')] for e in exps]) - patience
+
+
+def prepare_batched_data(input_data, data, item_data=None):
+    """
+    Prepare the batched data according to the "recbole" pipeline
+    :param batched_data:
+    :param data:
+    :param item_data:
+    :return:
+    """
+    data_df = Interaction({k: v[input_data] for k, v in data.dataset.user_feat.interaction.items()})
+
+    if item_data is not None:
+        data_df.update(Interaction({data.dataset.iid_field: item_data}))
+
+    if hasattr(data, "uid2history_item"):
+        history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
+    else:
+        history_item = []
+
+    if len(input_data) > 1:
+        history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
+        history_i = torch.cat(list(history_item))
+    else:
+        history_u = torch.full_like(history_item, 0)
+        history_i = history_item
+
+    return data_df, (history_u, history_i), None, None
+
+
+def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kwargs):
+    interaction, history_index, _, _ = batched_data
+    inter_data = interaction.to(model.device)
+    try:
+        scores = model.full_sort_predict(inter_data, **kwargs)
+
+    except NotImplementedError:
+        inter_len = len(interaction)
+        new_inter = interaction.to(model.device, **scores_kws).repeat_interleave(tot_item_num)
+        batch_size = len(new_inter)
+        new_inter.update(item_tensor.repeat(inter_len))
+        if batch_size <= test_batch_size:
+            scores = model.predict(new_inter)
+        else:
+            scores = Explainer._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
+
+    scores = scores.view(-1, tot_item_num)
+    scores[:, 0] = -np.inf
+    if model.ITEM_ID in interaction:
+        scores = scores[:, inter_data[model.ITEM_ID]]
+    if history_index is not None:
+        scores[history_index] = -np.inf
+
+    return scores
+
+
+def get_top_k(scores_tensor, topk=10):
+    scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
+
+    return scores_top_k, topk_idx
 
 
 def get_decomposed_adj_matrix(del_edges, train_dataset, method='PCA'):

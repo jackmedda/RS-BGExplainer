@@ -199,12 +199,12 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         config['user_batch_exp'] = trial.suggest_int(
             'user_batch_exp',
             min(int(_test_data.dataset.user_num * 0.1), 32),
-            min(int(_test_data.dataset.user_num * 0.33), 256)
+            min(int(_test_data.dataset.user_num * 0.33), 220)
         )
         
-        config['cf_beta'] = trial.suggest_float('cf_beta', 0.1, 2.0)
+        config['cf_beta'] = trial.suggest_float('cf_beta', 0.01, 10.0)
         
-        config['dropout_prob'] = trial.suggest_float('dropout_prob', 0, 0.3)
+        # config['dropout_prob'] = trial.suggest_float('dropout_prob', 0, 0.3)
         
         if config["explainer"].lower() == "bab":
             config['bab_min_del_edges'] = trial.suggest_int('bab_min_del_edges', 10, 200)

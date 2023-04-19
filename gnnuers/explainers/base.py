@@ -325,31 +325,7 @@ class Explainer:
 
     @staticmethod
     def prepare_batched_data(batched_data, data, item_data=None):
-        """
-        Prepare the batched data according to the "recbole" pipeline
-        :param batched_data:
-        :param data:
-        :param item_data:
-        :return:
-        """
-        data_df = Interaction({k: v[batched_data] for k, v in data.dataset.user_feat.interaction.items()})
-
-        if item_data is not None:
-            data_df.update(Interaction({data.dataset.iid_field: item_data}))
-
-        if hasattr(data, "uid2history_item"):
-            history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
-        else:
-            history_item = []
-
-        if len(batched_data) > 1:
-            history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
-            history_i = torch.cat(list(history_item))
-        else:
-            history_u = torch.full_like(history_item, 0)
-            history_i = history_item
-
-        return data_df, (history_u, history_i), None, None
+        return utils.prepare_batched_data(batched_data, data, item_data=item_data)
 
     def get_iter_data(self, user_data):
         user_data = user_data.split(self.user_batch_exp)
@@ -827,33 +803,8 @@ class Explainer:
 
     @staticmethod
     def get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
-        interaction, history_index, _, _ = batched_data
-        inter_data = interaction.to(_model.device)
-        try:
-            scores_kws = {'pred': pred} if pred is not None else {}
-            scores = _model.full_sort_predict(inter_data, **scores_kws)
-
-        except NotImplementedError:
-            inter_len = len(interaction)
-            new_inter = interaction.to(_model.device, **scores_kws).repeat_interleave(tot_item_num)
-            batch_size = len(new_inter)
-            new_inter.update(item_tensor.repeat(inter_len))
-            if batch_size <= test_batch_size:
-                scores = _model.predict(new_inter)
-            else:
-                scores = Explainer._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
-
-        scores = scores.view(-1, tot_item_num)
-        scores[:, 0] = -np.inf
-        if _model.ITEM_ID in interaction:
-            scores = scores[:, inter_data[_model.ITEM_ID]]
-        if history_index is not None:
-            scores[history_index] = -np.inf
-
-        return scores
+        return exp_utils.get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=pred)
 
     @staticmethod
     def get_top_k(scores_tensor, topk=10):
-        scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
-
-        return scores_top_k, topk_idx
+        return utils.get_top_k(scores_tensor, topk=topk)

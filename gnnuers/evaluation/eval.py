@@ -1,4 +1,5 @@
 import os
+import yaml
 import pickle
 import itertools
 
@@ -9,7 +10,9 @@ import numba
 import numpy as np
 import pandas as pd
 import recbole.evaluator.collector as recb_collector
+from recbole.utils import get_model
 from recbole.evaluator import Evaluator
+from recbole.data import create_dataset, data_preparation
 
 import gnnuers.utils as utils
 
@@ -372,6 +375,89 @@ def extract_all_exp_metrics_data(_exp_paths,
                     pickle.dump((exp_dfs, result_data, n_users_data, topk_dist), saved_file)
 
     return exp_dfs, result_data, n_users_data, topk_dist
+
+
+def extract_casper_metrics(exp_paths: dict, models=None, metrics=None, models_path='saved', policy_name='CASPER'):
+    models = ["NGCF", "LightGCN", "GCMC"] if models is None else models
+    metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
+    cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric',
+            'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
+    
+    df_data = []
+    model_files = list(os.scandir(models_path))
+    for mod in models:
+        for dset, exp_path in exp_paths.items():
+            try:
+                model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
+            except IndexError:
+                raise ValueError(
+                    f"in path `{models_path}` there is no file for model `{mod.upper()}` and dataset `{dset.upper()}`"
+                )
+            checkpoint = torch.load(model_file)
+            config = checkpoint['config']
+            
+            explainer_config_file = os.path.join(os.path.dirname(models_path), 'config', f'{dset}_explainer.yaml')
+            with open(explainer_config_file, 'r', encoding='utf-8') as f:
+                exp_file_content = f.read()
+                explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
+            config.final_config_dict.update(explain_config_dict)
+            
+            config['data_path'] = config['data_path'].replace('\\', os.sep)
+
+            dataset = create_dataset(config)
+            uid_field = dataset.uid_field
+            iid_field = dataset.iid_field
+            
+            train_data, valid_data, test_data = data_preparation(config, dataset)
+
+            sens_attrs = [col for col in dataset.user_feat.columns if col != uid_field]
+            
+            del_edges = np.load(exp_path).T
+            
+            for i, field in enumerate([uid_field, iid_field]):
+                del_edges[i] = [dataset.field2token_id[field][str(n)] for n in del_edges[i]]
+            del_edges[1] += dataset.user_num  # remap according to adjacency matrix
+            
+            train_dataset = utils.get_dataset_with_perturbed_edges(del_edges, train_data.dataset)
+
+            model = get_model(config['model'])(config, train_dataset).to(config['device'])
+            model.load_state_dict(checkpoint['state_dict'])
+            model.load_other_parameter(checkpoint.get('other_parameter'))
+            
+            user_data = torch.arange(dataset.user_num)[1:]  # id 0 is a padding in recbole
+            batched_data = utils.prepare_batched_data(user_data, test_data)
+            
+            tot_item_num = dataset.item_num
+            item_tensor = dataset.get_item_feature().to(model.device)
+            test_batch_size = tot_item_num
+            model_scores = utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor)
+            _, model_topk_idx = utils.get_top_k(model_scores, topk=10)
+            model_topk_idx = model_topk_idx.detach().cpu().numpy()
+            
+            pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
+            
+            config["metrics"] = metrics
+            evaluator = Evaluator(config)
+            for metric in metrics:
+                metric_data = compute_metric(evaluator, test_data.dataset, pref_data, 'cf_topk_pred', metric.lower())[:, -1]
+                for s_attr in sens_attrs:
+                    demo_group_map = dataset.field2id_token[s_attr]
+                    
+                    df_data.extend(list(zip(*[
+                        user_data.numpy(),
+                        [-1] * len(user_data),
+                        [del_edges.shape[1]] * len(user_data),
+                        [-1] * len(user_data),
+                        [metric] * len(user_data),
+                        [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
+                        [s_attr.title()] * len(user_data),
+                        [mod] * len(user_data),
+                        [dset] * len(user_data),
+                        metric_data,
+                        [policy_name] * len(user_data),
+                    ])))
+    
+    return pd.DataFrame(df_data, columns=cols)
 
 
 def compute_exp_stats_data(_result_all_data,
