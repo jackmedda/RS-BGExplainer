@@ -132,13 +132,17 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
                 conf[arg] = new_val
             else:
                 try:
-                    new_val = type(conf[arg])(val)  # cast to same type in config
+                    arg_type = type(conf[arg])
+                    if arg_type == bool:
+                        new_val = val.title() == 'True'
+                    else:
+                        new_val = arg_type(val)  # cast to same type in config
                     conf[arg] = new_val
                 except (ValueError, TypeError):
                     new_val = None
 
             if new_val is not None:
-                exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}", exp_file_content)
+                exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}\n", exp_file_content)
 
     config['data_path'] = config['data_path'].replace('\\', os.sep)
     config['device'] = 'cuda'

@@ -336,9 +336,9 @@ def extract_all_exp_metrics_data(_exp_paths,
                     else:
                         idx = utils.exp_col_index(col)
                         if isinstance(idx, int):
-                            exp_row_data.append([_exp[col]] * len(exp_row_data[0]))
+                            exp_row_data.append([_exp[idx]] * len(exp_row_data[0]))
                         else:
-                            exp_row_data.append(np.tile(model_pred_map[col], len(exp_row_data[0])))
+                            exp_row_data.append(model_pred_map[idx])
 
                 exp_data.extend(list(zip(*exp_row_data)))
 
@@ -353,10 +353,11 @@ def extract_all_exp_metrics_data(_exp_paths,
         result_data[e_type] = {}
         n_users_data[e_type] = {}
         topk_dist[e_type] = []
-        for n_del, gr_df in tqdm.tqdm(data_df.groupby('n_del_edges'), desc="Extracting metrics from each explanation"):
-            result_data[e_type][n_del] = {}
+        for (_epoch, n_del), gr_df in tqdm.tqdm(data_df.groupby(['epoch', 'n_del_edges']), desc="Extracting metrics from each explanation"):
+            res_key = f"{_epoch}_{n_del}"
+            result_data[e_type][res_key] = {}
             for metric in evaluator.metrics:
-                result_data[e_type][n_del][metric] = compute_metric(evaluator, rec_data, gr_df, 'cf_topk_pred', metric)
+                result_data[e_type][res_key][metric] = compute_metric(evaluator, rec_data, gr_df, 'cf_topk_pred', metric)
 
             t_dist = gr_df['topk_dist'].to_numpy()
             topk_dist[e_type].extend(list(
@@ -364,9 +365,9 @@ def extract_all_exp_metrics_data(_exp_paths,
             ))
 
             gr_df_attr = gr_df['user_id'].drop_duplicates().to_frame().join(user_df.set_index(train_data.dataset.uid_field), on='user_id')
-            n_users_data[e_type][n_del] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
-            n_users_del = n_users_data[e_type][n_del][sens_attr]
-            n_users_data[e_type][n_del][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
+            n_users_data[e_type][res_key] = {sens_attr: gr_df_attr[sens_attr].value_counts().to_dict()}
+            n_users_del = n_users_data[e_type][res_key][sens_attr]
+            n_users_data[e_type][res_key][sens_attr] = {sensitive_map[dg]: n_users_del[dg] for dg in n_users_del}
 
         if len(_exp_paths) == 1:
             saved_path = os.path.join(e_path, 'extracted_exp_data.pkl')

@@ -499,6 +499,7 @@ class Explainer:
 
     def determine_adv_group(self, batched_data, rec_model_topk):
         pref_users = batched_data.numpy()
+
         pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
 
         orig_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'topk_pred')
@@ -508,7 +509,7 @@ class Explainer:
         f_result = orig_res[pref_users_sens_attr == self.f_idx, -1].mean()
         m_result = orig_res[pref_users_sens_attr == self.m_idx, -1].mean()
 
-        check_func = "__ge__" if self.config['delete_adv_group'] else "__lt__"
+        check_func = "__ge__" if self.config['perturb_adv_group'] else "__lt__"
 
         self.adv_group = self.m_idx if getattr(m_result, check_func)(f_result) else self.f_idx
         self.disadv_group = self.f_idx if self.adv_group == self.m_idx else self.m_idx
