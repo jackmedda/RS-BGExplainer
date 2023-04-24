@@ -87,7 +87,7 @@ early_stopping:
 previous_loss_value: False
 previous_batch_LR_scaling: False
 
-random_perturbation_p: 0.0053
+random_perturbation_p: 0.076
 
 # use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
 perturbation_initialization: 'static'

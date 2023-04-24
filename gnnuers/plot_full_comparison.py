@@ -41,6 +41,13 @@ def get_plots_path(datasets_names, model_names, old=False):
     return plots_path
 
 
+def gini(data):
+    data = np.sort(data)
+    n = len(data)
+    idxs = np.arange(1, n + 1)
+    return (n + 1 - 2 * ((n + 1 - idxs) * data).sum() / data.sum()) / n
+
+
 def update_plot_data(_test_df_data, _rec_df_data, additional_best_cols=None):
     test_orig_total_metric = best_test_exp_result[model_name][metric] if best_test_exp_result is not None else None
     rec_orig_total_metric = best_rec_exp_result[model_name][metric]
@@ -1476,27 +1483,33 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 on='Node'
             ).fillna('Item')
 
-            dset_stats = os.path.join(script_path, os.pardir, f'dp_plots', 'datasets_stats.csv')
+            dset_stats = os.path.join(base_all_plots_path, 'datasets_stats.csv')
             if os.path.exists(dset_stats):
                 dsets_df = pd.read_csv(dset_stats, index_col=0)
                 if _dataset in dsets_df.columns:
-                    graph_stats_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
+                    from pandas.api.types import is_numeric_dtype
+                    graph_mean_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).mean().loc[_s_attr, gm_dep_order]
+                    graph_gini_dg = sens_gmdf.groupby(['Sens Attr', 'Demo Group']).agg(
+                        {col: gini for col in sens_gmdf.columns if is_numeric_dtype(sens_gmdf[col])}
+                    ).loc[_s_attr, gm_dep_order]
                     for gm in gm_dep_order:
-                        gm_str = f"Avg. {gm} per user"
-                        if gm_str not in dsets_df.index:
-                            gm_stat_dg = ""
-                        else:
-                            gm_stat_dg = dsets_df.loc[gm_str, _dataset]
-                            gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
-                            if _s_attr in gm_stat_dg:
-                                continue
+                        for gm_str, graph_stats_dg in zip(
+                            ["bar" + "{" + f"{gm}" + "}", f"Gini {gm}"], [graph_mean_dg, graph_gini_dg]
+                        ):
+                            if gm_str not in dsets_df.index:
+                                gm_stat_dg = ""
+                            else:
+                                gm_stat_dg = dsets_df.loc[gm_str, _dataset]
+                                gm_stat_dg = "" if isinstance(gm_stat_dg, float) else gm_stat_dg  # avoids NaN
+                                if _s_attr in gm_stat_dg:
+                                    continue
 
-                        gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
-                            lambda x: f"{x['Demo Group']} : {x[gm] * (100 if gm != 'Degree' else 1):.1f}\%", axis=1
-                        ).values)
-                        dsets_df.loc[gm_str, _dataset] = gm_stat_dg
+                            gm_stat_dg += f" {_s_attr} " + '; '.join(graph_stats_dg[gm].to_frame().reset_index().apply(
+                                lambda x: f"{x['Demo Group']} : {x[gm]:{'.1f' if gm == 'Degree' and 'bar' in gm_str else '.2f'}}", axis=1
+                            ).values)
+                            dsets_df.loc[gm_str, _dataset] = gm_stat_dg
 
-                        dsets_df.to_csv(dset_stats)
+                            dsets_df.to_csv(dset_stats)
 
             compute_graph_metrics_analysis_tables_data(
                 sens_gmdf,
@@ -1522,9 +1535,10 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         return new_row
     
     del_dist_giant_cols = [
-        "Dataset", "Model", "Policy", "Graph Metric", "Demo Group", "Del Edges Distribution", "Quartile"
+        "Dataset", "Model", "Policy", "Sens Attr", "Graph Metric",
+        "Demo Group", "Del Edges Distribution", "Quartile"
     ]
-    del_dist_giant_path = os.path.join(base_all_plots_path, 'del_dist_giant_path.csv')
+    del_dist_giant_path = os.path.join(base_all_plots_path, 'del_dist_giant.csv')
     if os.path.exists(del_dist_giant_path):
         del_dist_giant = pd.read_csv(del_dist_giant_path)
     else:
@@ -1606,6 +1620,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                             [dset] * del_dist_plot_df_vals.shape[0],
                             [gm_dep_model] * del_dist_plot_df_vals.shape[0],
                             [_pol]  * del_dist_plot_df_vals.shape[0],
+                            [gm_sa]  * del_dist_plot_df_vals.shape[0],
                             del_dist_plot_df_vals
                         ]
                         pol_del_dist_giant.extend(del_dist_giant_data.tolist())
@@ -1681,11 +1696,24 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     os.path.join(plots_path, f"{gm_mod}_del_dist_{_pol}_plot_{dset}.png"),
                     bbox_inches="tight", pad_inches=0, dpi=250
                 )
-    rq3_dsets = ["ml-1m", "tafeng", "lastfm-1k", "insurance"]
+    
+    if "Sens Attr" not in del_dist_giant:
+        dg_to_sa = {
+            "Younger": "Age", "Older": "Age", "Males": "Gender", "Females": "Gender", "Item": "Item"
+        }
+        del_dist_giant["Sens Attr"] = del_dist_giant["Demo Group"].map(dg_to_sa)
+        
+    short_gm = {"Degree": "DEG", "Density": "DY", "Sparsity": "SP", "Reachability": "SP"}
+    
+    rq3_confs = {
+        "Gender": ["ml-1m", "lastfm-1k"],
+        "Age": ["ml-1m", "tafeng", "lastfm-1k"],
+        "Item": ["ml-1m", "tafeng", "lastfm-1k"]
+    }
+    rq3_dsets = list(np.unique([d for conf in rq3_confs.values() for d in conf]))
     rq3_groups = [(0, group_name_map[gr]) for gr in ["Y", "O", "M", "F"]] + [(1, "Item")]
     if (set(del_dist_giant["Dataset"].unique()) & set(rq3_dsets)) == set(rq3_dsets):
         spine_color = "red"
-        markers_map = dict(zip(gm_metrics_base, ["d", "X", "*"]))
         
         del_dist_giant["Dataset"] = del_dist_giant["Dataset"].map(plot_dataset_map)
         unique_quantiles = del_dist_giant["Quartile"].unique()
@@ -1693,103 +1721,231 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         del_dist_giant["Quartile"] = del_dist_giant["Quartile"].map(
             lambda x: [f"Q{i + 1}" for i in range(parts)][int((x * parts - 1) // 2)]
         )
-        for giant_mod, giant_mod_df in del_dist_giant.groupby("Model"):
-            adv_dsets_color_map = {
-                "ML-1M": {"Males": spine_color, "Younger": spine_color},
-                "FENG": {"Older": spine_color},
-                "LFM-1K": {"Females": spine_color, "Older": spine_color},
-                "INS": {"Males": spine_color, "Younger": spine_color},
-            }
-            if giant_mod == "NGCF":
-                del adv_dsets_color_map["INS"]["Younger"]
-                adv_dsets_color_map["INS"]["Older"] = spine_color
-            
-            giant_fig = plt.figure(figsize=(30, 12), layout="constrained")
-            giant_fig.supylabel('Del Edges Distribution')
-            giant_fig.supxlabel('Quartiles')
-            giant_subfigs = giant_fig.subfigures(
-                1, 2, wspace=0.011, width_ratios=[0.8, 0.2]
-            )
-            giant_left_axs = giant_subfigs[0].subplots(len(rq3_dsets), len(rq3_groups) - 1, sharex=True, sharey=True)
-            giant_right_axs = giant_subfigs[1].subplots(len(rq3_dsets), 1, sharey=True)
-            giant_subaxs = {0: giant_left_axs, 1: giant_right_axs}
-            
-            idx_giant_df = giant_mod_df.set_index(["Dataset", "Demo Group"])
-            for d_i, giant_dset in enumerate([plot_dataset_map[rq3_d] for rq3_d in rq3_dsets]):
-                for g_i, (g_subf, giant_g) in enumerate(rq3_groups):
-                    giant_axs = giant_subaxs[g_subf]
-                    giant_ax = giant_axs[d_i, g_i] if g_subf == 0 else giant_axs[d_i]
-                    
-                    if g_subf == 0:
-                        for item_ax_idx in range(len(rq3_dsets)):
-                            giant_ax.get_shared_x_axes().remove(giant_axs[item_ax_idx, -1])
-                    
-                    if d_i == 0:
-                        giant_ax.set_title(giant_g)
-                    if g_i > 0 and g_subf == 0:
-                        giant_ax.tick_params(length=0, labelleft=False)
-                    if d_i < len(rq3_dsets) - 1:
-                        giant_ax.tick_params(length=0, labelbottom=False)
-                    
-                    if (giant_dset, giant_g) in idx_giant_df.index:
-                        dset_g_plot_df = idx_giant_df.loc[(giant_dset, giant_g)].reset_index(drop=True)
-                        dset_g_plot_df = dset_g_plot_df[["Quartile", "Del Edges Distribution", "Graph Metric"]]
-                        sns.lineplot(
-                            x="Quartile",
-                            y="Del Edges Distribution",
-                            data=dset_g_plot_df,
-                            hue="Graph Metric",
-                            hue_order=gm_metrics_base,
-                            style="Graph Metric",
-                            style_order=gm_metrics_base,
-                            markers=markers_map,
-                            markersize=25,
-                            lw=2,
-                            dashes=False,
-                            legend="full",
-                            alpha=0.8,
-                            ax=giant_ax
-                        )
-                        
-                        if d_i == 0 and g_i == 0:
-                            _handles, _labels = giant_ax.get_legend_handles_labels()
-                            giant_ax.get_legend().remove()
-                            giant_legend = giant_fig.legend(
-                                _handles, _labels, loc="lower center", ncol=3,
-                                bbox_to_anchor=(0.5, 1.01, 0.05, 0.05),
-                                bbox_transform=giant_fig.transFigure,
-                                markerscale=3
+        giant_hue_col = "Demo Group"
+        giant_y_col = "Del Edges Distribution"
+        giant_x_col = "Quartile"
+        giant_hue_col_order = {
+            "Age": ["Younger", "Older"],
+            "Gender": ["Males", "Females"],
+            "Item": ["Item"],
+        }
+        
+        fs_titles_labels = 32
+        fs_ticks = 22
+        
+        for (giant_sa, giant_mod), giant_samod_df in del_dist_giant.groupby(["Sens Attr", "Model"]):
+            if giant_sa in rq3_confs:
+                giant_dsets = rq3_confs[giant_sa]
+                mapped_giant_dsets = [plot_dataset_map[d] for d in giant_dsets]
+                giant_samod_df = giant_samod_df[giant_samod_df["Dataset"].isin(mapped_giant_dsets)]
+                giant_gms = giant_samod_df["Graph Metric"].unique()
+                
+                markers_map = dict(zip(giant_hue_col_order[giant_sa], ["d", "X", "*"]))
+                
+                adv_dsets_color_map = {
+                    "ML-1M": {"Males": spine_color, "Younger": spine_color},
+                    "FENG": {"Older": spine_color},
+                    "LFM-1K": {"Females": spine_color, "Older": spine_color},
+                    "INS": {"Males": spine_color, "Younger": spine_color},
+                }
+                if giant_mod == "NGCF":
+                    del adv_dsets_color_map["INS"]["Younger"]
+                    adv_dsets_color_map["INS"]["Older"] = spine_color
+
+                giant_fig, giant_axs = plt.subplots(
+                    len(giant_dsets), len(giant_gms), sharey='row', sharex=True,
+                    figsize=(30, 3 * len(giant_dsets)), layout="constrained"
+                )
+                giant_fig.supylabel('Del Edges Distribution', fontsize=fs_titles_labels)
+                giant_fig.supxlabel('Quartiles', ha='left', fontsize=fs_titles_labels)
+
+                giant_df_gby = giant_samod_df.groupby(["Dataset", "Graph Metric"])
+                for d_i, giant_dset in enumerate(mapped_giant_dsets):
+                    for gm_i, giant_gm in enumerate(giant_gms):
+                        giant_ax = giant_axs[d_i, gm_i]
+
+                        if (giant_dset, giant_gm) in giant_df_gby.groups:
+                            dset_g_plot_df = giant_df_gby.get_group((giant_dset, giant_gm))
+                            dset_g_plot_df = dset_g_plot_df[[giant_x_col, giant_y_col, giant_hue_col]]
+                            sns.lineplot(
+                                x=giant_x_col,
+                                y=giant_y_col,
+                                data=dset_g_plot_df,
+                                hue=giant_hue_col,
+                                hue_order=giant_hue_col_order[giant_sa],
+                                style=giant_hue_col,
+                                style_order=giant_hue_col_order[giant_sa],
+                                markers=markers_map,
+                                markersize=25,
+                                lw=2,
+                                dashes=False,
+                                legend="full",
+                                alpha=0.8,
+                                ax=giant_ax
                             )
-                            giant_legend.set_zorder(10)
+
+                            if d_i == 0 and gm_i == 0:
+                                _handles, _labels = giant_ax.get_legend_handles_labels()
+                                giant_ax.get_legend().remove()
+                                giant_legend = giant_fig.legend(
+                                    _handles, _labels, loc="lower center", ncol=3,
+                                    bbox_to_anchor=(0.5, 1.01, 0.05, 0.05),
+                                    bbox_transform=giant_fig.transFigure,
+                                    markerscale=3, prop={'size': fs_titles_labels}
+                                )
+                                giant_legend.set_zorder(10)
+                            else:
+                                giant_ax.get_legend().remove()
+
+                            if gm_i == 0:
+                                giant_ax.yaxis.set_major_formatter(mpl_tick.StrMethodFormatter("{x:.2f}"))
+                                giant_ax.set_ylabel(giant_dset, fontsize=fs_titles_labels)
+                            else:
+                                giant_ax.set_ylabel('')
+                                
+                            if d_i == len(giant_dsets) - 1:
+                                giant_ax.set_xlabel(giant_ax.get_xlabel(), fontsize=fs_titles_labels)
+
+                            giant_ax.grid(True, axis='both', ls=':')
+                            giant_ax.set_xlabel('')
                         else:
-                            giant_ax.get_legend().remove()
-                        
-                        if g_subf == 1:
-                            giant_ax.set_ylim((-0.05, 1.05))
+                            giant_ax.set_axis_off()
+                            giant_ax.text(
+                                0.5, 0.5, 'Node Group NA', ha='center', va='center',
+                                fontdict=dict(fontsize=20), transform=giant_ax.transAxes
+                            )
+
+                        if d_i == 0:
+                            giant_ax.set_title(
+                                f"{giant_gm} ({short_gm[giant_gm]})" if giant_gm != 'Reachability' \
+                                                                     else 'Intra-Group Distance (IDG)',
+                                fontsize=fs_titles_labels
+                            )
                             
-                        if g_i == 0:
-                            giant_ax.yaxis.set_major_formatter(mpl_tick.StrMethodFormatter("{x:.2f}"))
-                            giant_ax.set_ylabel(giant_dset)
-                        else:
-                            giant_ax.set_ylabel('')
-                        
-                        giant_ax.grid(True, axis='both', ls=':')
-                        giant_ax.set_xlabel('')
-                    else:
-                        giant_ax.set_axis_off()
-                        giant_ax.text(
-                            0.5, 0.5, 'Node Group NA', ha='center', va='center',
-                            fontdict=dict(fontsize=BIGGER_SIZE), transform=giant_ax.transAxes
-                        )
-                    
-                    for spine in giant_ax.spines.values():
-                        spine.set_edgecolor(adv_dsets_color_map[giant_dset].get(giant_g, 'black'))
+                        giant_ax.tick_params(which='major', labelsize=fs_ticks)
+                        if gm_i > 0:
+                            giant_ax.tick_params(length=0, labelleft=False)
+                        if d_i < len(giant_dsets) - 1:
+                            giant_ax.tick_params(length=0, labelbottom=False)
+
+                        # for spine in giant_ax.spines.values():
+                        #     spine.set_edgecolor(adv_dsets_color_map[giant_dset].get(giant_g, 'black'))
+
+                # giant_fig.subfigs[0].subplots_adjust(
+                #     left=0.08, bottom=0.08, right=0.98, top=0.98, wspace=0.1, hspace=0.08
+                # )
+                # giant_fig.tight_layout(pad=0.4, w_pad=0.5, h_pad=0.4)
+                giant_fig.savefig(
+                    os.path.join(base_all_plots_path, f"{giant_sa}_{giant_mod}_{'_'.join(rq3_dsets)}_del_dist_plot_per_gm.png"),
+                    bbox_inches="tight", pad_inches=0, dpi=250
+                )
+#     if (set(del_dist_giant["Dataset"].unique()) & set(rq3_dsets)) == set(rq3_dsets):
+#         spine_color = "red"
+#         markers_map = dict(zip(gm_metrics_base, ["d", "X", "*"]))
+        
+#         del_dist_giant["Dataset"] = del_dist_giant["Dataset"].map(plot_dataset_map)
+#         unique_quantiles = del_dist_giant["Quartile"].unique()
+#         parts = len(unique_quantiles) * 2
+#         del_dist_giant["Quartile"] = del_dist_giant["Quartile"].map(
+#             lambda x: [f"Q{i + 1}" for i in range(parts)][int((x * parts - 1) // 2)]
+#         )
+#         for giant_mod, giant_mod_df in del_dist_giant.groupby("Model"):
+#             adv_dsets_color_map = {
+#                 "ML-1M": {"Males": spine_color, "Younger": spine_color},
+#                 "FENG": {"Older": spine_color},
+#                 "LFM-1K": {"Females": spine_color, "Older": spine_color},
+#                 "INS": {"Males": spine_color, "Younger": spine_color},
+#             }
+#             if giant_mod == "NGCF":
+#                 del adv_dsets_color_map["INS"]["Younger"]
+#                 adv_dsets_color_map["INS"]["Older"] = spine_color
             
-            # giant_fig.subfigs[0].subplots_adjust(
-            #     left=0.08, bottom=0.08, right=0.98, top=0.98, wspace=0.1, hspace=0.08
-            # )
-            # giant_fig.tight_layout(pad=0.4, w_pad=0.5, h_pad=0.4)
-            giant_fig.savefig(
-                os.path.join(base_all_plots_path, f"{giant_mod}_{'_'.join(rq3_dsets)}_del_dist_plot.png"),
-                bbox_inches="tight", pad_inches=0, dpi=250
-            )
+#             giant_fig = plt.figure(figsize=(30, 12), layout="constrained")
+#             giant_fig.supylabel('Del Edges Distribution')
+#             giant_fig.supxlabel('Quartiles')
+#             giant_subfigs = giant_fig.subfigures(
+#                 1, 2, wspace=0.011, width_ratios=[0.8, 0.2]
+#             )
+#             giant_left_axs = giant_subfigs[0].subplots(len(rq3_dsets), len(rq3_groups) - 1, sharex=True, sharey=True)
+#             giant_right_axs = giant_subfigs[1].subplots(len(rq3_dsets), 1, sharey=True)
+#             giant_subaxs = {0: giant_left_axs, 1: giant_right_axs}
+            
+#             idx_giant_df = giant_mod_df.set_index(["Dataset", "Demo Group"])
+#             for d_i, giant_dset in enumerate([plot_dataset_map[rq3_d] for rq3_d in rq3_dsets]):
+#                 for g_i, (g_subf, giant_g) in enumerate(rq3_groups):
+#                     giant_axs = giant_subaxs[g_subf]
+#                     giant_ax = giant_axs[d_i, g_i] if g_subf == 0 else giant_axs[d_i]
+                    
+#                     if g_subf == 0:
+#                         for item_ax_idx in range(len(rq3_dsets)):
+#                             giant_ax.get_shared_x_axes().remove(giant_axs[item_ax_idx, -1])
+                    
+#                     if d_i == 0:
+#                         giant_ax.set_title(giant_g)
+#                     if g_i > 0 and g_subf == 0:
+#                         giant_ax.tick_params(length=0, labelleft=False)
+#                     if d_i < len(rq3_dsets) - 1:
+#                         giant_ax.tick_params(length=0, labelbottom=False)
+                    
+#                     if (giant_dset, giant_g) in idx_giant_df.index:
+#                         dset_g_plot_df = idx_giant_df.loc[(giant_dset, giant_g)].reset_index(drop=True)
+#                         dset_g_plot_df = dset_g_plot_df[["Quartile", "Del Edges Distribution", "Graph Metric"]]
+#                         sns.lineplot(
+#                             x="Quartile",
+#                             y="Del Edges Distribution",
+#                             data=dset_g_plot_df,
+#                             hue="Graph Metric",
+#                             hue_order=gm_metrics_base,
+#                             style="Graph Metric",
+#                             style_order=gm_metrics_base,
+#                             markers=markers_map,
+#                             markersize=25,
+#                             lw=2,
+#                             dashes=False,
+#                             legend="full",
+#                             alpha=0.8,
+#                             ax=giant_ax
+#                         )
+                        
+#                         if d_i == 0 and g_i == 0:
+#                             _handles, _labels = giant_ax.get_legend_handles_labels()
+#                             giant_ax.get_legend().remove()
+#                             giant_legend = giant_fig.legend(
+#                                 _handles, _labels, loc="lower center", ncol=3,
+#                                 bbox_to_anchor=(0.5, 1.01, 0.05, 0.05),
+#                                 bbox_transform=giant_fig.transFigure,
+#                                 markerscale=3
+#                             )
+#                             giant_legend.set_zorder(10)
+#                         else:
+#                             giant_ax.get_legend().remove()
+                        
+#                         if g_subf == 1:
+#                             giant_ax.set_ylim((-0.05, 1.05))
+                            
+#                         if g_i == 0:
+#                             giant_ax.yaxis.set_major_formatter(mpl_tick.StrMethodFormatter("{x:.2f}"))
+#                             giant_ax.set_ylabel(giant_dset)
+#                         else:
+#                             giant_ax.set_ylabel('')
+                        
+#                         giant_ax.grid(True, axis='both', ls=':')
+#                         giant_ax.set_xlabel('')
+#                     else:
+#                         giant_ax.set_axis_off()
+#                         giant_ax.text(
+#                             0.5, 0.5, 'Node Group NA', ha='center', va='center',
+#                             fontdict=dict(fontsize=BIGGER_SIZE), transform=giant_ax.transAxes
+#                         )
+                    
+#                     for spine in giant_ax.spines.values():
+#                         spine.set_edgecolor(adv_dsets_color_map[giant_dset].get(giant_g, 'black'))
+            
+#             # giant_fig.subfigs[0].subplots_adjust(
+#             #     left=0.08, bottom=0.08, right=0.98, top=0.98, wspace=0.1, hspace=0.08
+#             # )
+#             # giant_fig.tight_layout(pad=0.4, w_pad=0.5, h_pad=0.4)
+#             giant_fig.savefig(
+#                 os.path.join(base_all_plots_path, f"{giant_mod}_{'_'.join(rq3_dsets)}_del_dist_plot.png"),
+#                 bbox_inches="tight", pad_inches=0, dpi=250
+#             )

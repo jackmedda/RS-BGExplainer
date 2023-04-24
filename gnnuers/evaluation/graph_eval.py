@@ -76,7 +76,7 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
             item_reach = get_item_reachability(igg, first_item_id=first_item_id)
 
             df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[node_col, metr])
-        elif metr == "Sparsity":
+        elif metr == "Sparsity" or metr == "Density":
             if remove_first_row_col:
                 item_hist = item_hist[1:].where(item_hist[1:] == 0, item_hist[1:] - 1)
                 item_pop = item_hist_len
@@ -87,7 +87,7 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
                 ((item_hist_len[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
                 nan=0
             )
-            user_sparsity = 1 - user_density
+            user_metric = 1 - user_density if metr == "Sparsity" else user_density
 
             # item density represents the activity of the users that interact with an item.
             # If only a user interact with item X and this user interacted with all the items in the catalog, then
@@ -97,10 +97,10 @@ def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics=
                 ((user_hist_len[item_hist] / item_hist.shape[0]).sum(dim=1) / item_pop[1:]).numpy(),
                 nan=0
             )
-            item_sparsity = 1 - item_density
+            item_metric = 1 - item_density if metr == "Sparsity" else item_density
 
             df = pd.DataFrame(
-                zip(igg.vs.indices, np.concatenate([user_sparsity, item_sparsity])),
+                zip(igg.vs.indices, np.concatenate([user_metric, item_metric])),
                 columns=[node_col, metr]
             )
         elif metr == "Sharing Potentiality":
@@ -141,9 +141,6 @@ def get_item_reachability(graph, first_item_id):
 
 
 def get_reachability_per_node(graph, first=None, last=None, nodes=None):
-    # dist = _igraph_distances(graph)
-    import pdb; pdb.set_trace()
-
     if nodes is not None:
         nodes = sorted(nodes)
     else:

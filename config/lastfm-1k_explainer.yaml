@@ -3,7 +3,7 @@ explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 3544 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 7023 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -11,13 +11,13 @@ momentum: 0.0
 # epochs to generate explanations
 cf_epochs: 800
 # how many users should be considered to explain?
-user_batch_exp: 53
+user_batch_exp: 47
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
 pred_same: False
 # loss weight for the graph dist loss
-cf_beta: 1.7  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
+cf_beta: 0.2265  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and fairness loss
@@ -88,7 +88,7 @@ early_stopping:
 previous_loss_value: False
 previous_batch_LR_scaling: False
 
-random_perturbation_p: 0.0005
+random_perturbation_p: 0.00071
 
 # use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
 perturbation_initialization: 'static'

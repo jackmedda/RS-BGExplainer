@@ -23,6 +23,7 @@ class PerturbedModel(object):
 
         self.edge_additions = config['edge_additions']
         self.random_perturb_p = config['random_perturbation_p'] or 0.05
+        self.random_perturb_rs = np.random.RandomState(config['seed'] or 0)
         self.initialization = config['perturbation_initialization']
         self.P_symm = None
         self.mask_sub_adj = None
@@ -179,7 +180,7 @@ class PerturbedModel(object):
                     if not pred:
                         p = self.random_perturb_p
                         random_perb = torch.FloatTensor(
-                            np.random.choice([0, 1], size=self.force_removed_edges.size(0), p=[p, 1 - p])
+                            (self.random_perturb_rs.rand(self.force_removed_edges.size(0)) > p).astype(int)
                         ).to(self.force_removed_edges.device)
                         self.force_removed_edges = self.force_removed_edges * random_perb
                     # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
