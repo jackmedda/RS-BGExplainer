@@ -4,6 +4,7 @@ import decimal
 
 import tqdm
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 
 
 # def split_data_temporally(interactions,
@@ -164,10 +165,7 @@ def _compute_set_sizes(n_data, splits):
 
 
 def filter_min_interactions(interactions, by='user_id', min_interactions=20):
-    n_inters = interactions.groupby(by).apply(len)
-    mask = n_inters >= min_interactions
-
-    return interactions[interactions[by].isin(n_inters[mask].index)]
+    return interactions.groupby(by).filter(lambda x: len(x) >= min_interactions)
 
 
 def copy_dataset(datasets_path, orig_dset_name, dset_new_name):
@@ -181,3 +179,18 @@ def copy_dataset(datasets_path, orig_dset_name, dset_new_name):
                     os.path.join(dirname, filename),
                     os.path.join(dirname, f"{dset_new_name}.{data_type}")
                 )
+                
+                
+def add_token(df, user_df, args):
+    for _df in [df, user_df]:
+        new_cols = []
+        for col in _df.columns:
+            suffix = ':token'
+            if is_numeric_dtype(_df[col]) and col not in [args.user_field, args.item_field]:
+                suffix = ':float'
+            new_cols.append(col + suffix)
+        _df.columns = new_cols
+    
+    args.user_field += ':token'
+    args.item_field += ':token'
+    args.time_field += ':float'

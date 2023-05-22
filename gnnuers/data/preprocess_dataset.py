@@ -27,7 +27,7 @@ if __name__ == "__main__":
     parser.add_argument('--split_type', choices=['random', 'per_user'], default='per_user')
     parser.add_argument('--train_split', default=0.7, type=float)
     parser.add_argument('--train_to_test', default=0, type=int,
-                        help="it represents the last N train interactions to be moved to test")
+                        help="it moves the last N train interactions to test")
     parser.add_argument('--test_split', default=0.2, type=float)
     parser.add_argument('--validation_split', default=0.1, type=float)
     parser.add_argument('--user_field', default='user_id')
@@ -35,6 +35,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_field', default='timestamp')
     parser.add_argument('--random_state', type=int, default=120)
     parser.add_argument('--min_interactions', type=int, default=0)
+    parser.add_argument('--add_token', action='store_true', help='add `token` or `float` to header')
     
     args = parser.parse_args()
     if args.train_to_test > 0:
@@ -52,8 +53,15 @@ if __name__ == "__main__":
         user_df = user_df[user_df[args.user_field].isin(df[args.user_field])]
         print(df.describe())
         print(df.apply(pd.unique, axis=0).apply(len))
-        df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.inter"), index=None, sep='\t')
-        user_df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.user"), index=None, sep='\t')
+    
+    if args.add_token:
+        if not 'token' in args.user_field:
+            data_utils.add_token(df, user_df, args)
+        else:
+            print("`token` already present in headers")
+        
+    df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.inter"), index=None, sep='\t')
+    user_df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.user"), index=None, sep='\t')
 
     if args.split_type == "per_user":
         print("> Splitting per user")

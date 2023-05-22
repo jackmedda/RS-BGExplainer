@@ -27,4 +27,5 @@ class LightGCNPerturbed(PerturbedModel, LightGCN):
         lightgcn_all_embeddings = torch.mean(lightgcn_all_embeddings, dim=1)
 
         user_all_embeddings, item_all_embeddings = torch.split(lightgcn_all_embeddings, [self.n_users, self.n_items])
+
         return user_all_embeddings, item_all_embeddings

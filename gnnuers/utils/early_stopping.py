@@ -24,8 +24,13 @@ class EarlyStopping:
         }
 
         self._min_epochs = kwargs.get('min_epochs', 10)
-        self._window_length = kwargs.get('window_length', lambda x: len(x) // 2)
+        self._window_length = kwargs.get('window_length', None)
+        if self._window_length is None:
+            self._window_length = self._deafult_window_length
         self._polyorder = kwargs.get('polyorder', 2)
+        
+    def _deafult_window_length(x):
+        return len(x) // 2
     
     def check(self, loss):
         '''

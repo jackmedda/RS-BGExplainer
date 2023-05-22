@@ -3,7 +3,7 @@ explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 3000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 300000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -11,7 +11,7 @@ momentum: 0.0
 # epochs to generate explanations
 cf_epochs: 800
 # how many users should be considered to explain?
-user_batch_exp: 256
+user_batch_exp: 128
 # not consider the prediction loss
 not_pred: True
 # if the fair or pred loss should be deactivated if the top-k list is already perturbed
@@ -29,20 +29,23 @@ metric_loss: ndcg
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
 eval_metric: ndcg
 
+# metric to evaluate the fairness of the model. choices ["DP_across_random_samples", "DP"]
+fair_metric: DP
+
 dropout_prob: 0.3
 
-edge_additions: False
+edge_additions: True
 
 # select which set need to be used to optimize the DP explainer. Choices ["rec", "train", "valid", "test"]
-exp_rec_data: "test"
+exp_rec_data: "valid"
 
 # device: cpu
 
 # "local": the optimization uses the NDCG of the disadvantaged group computed locally for the current batch
 # "global": the optimization uses the NDCG of the disadvantaged group computed globally on the original model
-only_adv_group: "local"
+only_adv_group: "global"
 # Choose if the edges of the advantaged group should be perturbed or the opposite
-perturb_adv_group: True
+perturb_adv_group: False
 
 # Last.FM 1K
 # data_path: 'src/dataset/lastfm-1k' # for Last.FM 1K
@@ -79,16 +82,15 @@ eval_args:
 
 # Early stopping parameters
 early_stopping:
-    patience: 15  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
+    patience: 5  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
     ignore: 0
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
     delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
+    check_value: 'fair_metric'  # ['fair_loss', 'fair_metric']
 
 previous_loss_value: False
 previous_batch_LR_scaling: False
-
-random_perturbation_p: 0.0002
 
 # use 'random' to initialize it randomly around a fixed value, otherwise the fixed value will be used
 perturbation_initialization: 'static'
@@ -96,7 +98,11 @@ perturbation_initialization: 'static'
 # Policies
 explainer_policies:
     increase_disparity: False
-    force_removed_edges: True
-    group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
+    force_removed_edges: False
+    group_deletion_constraint: True   # this and `random_perturbation` cannot be both True
     random_perturbation: False
     neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors
+    users_zero_constraint: True  # only perturbs users with `eval_metric` <= `users_zero_constraint_value`
+
+random_perturbation_p: 0.0002
+users_zero_constraint_value: 0

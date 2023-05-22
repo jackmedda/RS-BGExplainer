@@ -3,8 +3,6 @@ import torch
 import numba
 import numpy as np
 
-import gnnuers.utils as utils
-
 
 def get_adj_from_inter_matrix(inter_matrix, num_all, n_users):
     A = scipy.sparse.dok_matrix((num_all, num_all), dtype=np.float32)
@@ -28,25 +26,6 @@ def get_adj_matrix(interaction_matrix,
     edge_subset = torch.LongTensor(i)
 
     return adj, edge_subset
-
-
-def perturb_adj_matrix(graph_A, P_symm, mask_sub_adj, num_all, D_indices, pred=False, edge_deletions=False, mask_filter=None):
-    if pred:
-        P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
-        P = utils.create_sparse_symm_matrix_from_vec(P_hat_symm, mask_sub_adj, graph_A, edge_deletions=edge_deletions, mask_filter=mask_filter)
-        P_loss = P
-    else:
-        P = utils.create_sparse_symm_matrix_from_vec(torch.sigmoid(P_symm), mask_sub_adj, graph_A, edge_deletions=edge_deletions, mask_filter=mask_filter)
-        P_loss = None
-
-    # Don't need gradient of this if pred is False
-    D_tilde = torch.sparse.sum(P, dim=1) if pred else torch.sparse.sum(P, dim=1).detach()
-    D_tilde_exp = (D_tilde.to_dense() + 1e-7).pow(-0.5)
-
-    D_tilde_exp = torch.sparse.FloatTensor(D_indices, D_tilde_exp, torch.Size((num_all, num_all)))
-
-    # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
-    return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp), P_loss
 
 
 def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor, edge_additions=False):

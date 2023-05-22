@@ -14,7 +14,7 @@ import numba
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
-from recbole.data import create_dataset, data_preparation
+from recbole.data import create_dataset, data_preparation, create_samplers, get_dataloader
 from recbole.utils import init_logger, get_model
 from recbole.data.interaction import Interaction
 
@@ -25,20 +25,20 @@ except ModuleNotFoundError:
 
 
 _EXPS_COLUMNS = [
-    "user_id",
+    # "user_id",
     # "rec_topk",
     # "test_topk",
-    "rec_cf_topk",
-    "test_cf_topk",
-    "rec_cf_dist",
-    "test_cf_dist",
+    # "rec_cf_topk",
+    # "test_cf_topk",
+    # "rec_cf_dist",
+    # "test_cf_dist",
     "loss_total",
     "loss_graph_dist",
     "fair_loss",
     "fair_metric",
     "del_edges",
     "epoch",
-    "first_fair_loss"
+    # "first_fair_loss"
 ]
 
 
@@ -145,7 +145,7 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
                 exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}\n", exp_file_content)
 
     config['data_path'] = config['data_path'].replace('\\', os.sep)
-    config['device'] = 'cuda'
+    # config['device'] = 'cuda'
 
     logger = getLogger()
     logger.info(config)
@@ -190,25 +190,39 @@ def load_old_dp_exps_file(base_exps_file):
     return exps
 
 
-def get_dataset_with_perturbed_edges(del_edges, train_dataset):
-    user_num = train_dataset.user_num
-    uid_field, iid_field = train_dataset.uid_field, train_dataset.iid_field
+def get_dataset_with_perturbed_edges(pert_edges, data_set):
+    user_num = data_set.user_num
+    uid_field, iid_field = data_set.uid_field, data_set.iid_field
 
-    del_edges = torch.tensor(del_edges)
-    del_edges[1] -= user_num  # remap items in range [0, user_num)
+    pert_edges = torch.tensor(pert_edges)
+    pert_edges[1] -= user_num  # remap items in range [0, item_num)
 
-    orig_inter_feat = train_dataset.inter_feat
+    orig_inter_feat = data_set.inter_feat
     pert_inter_feat = {}
     for i, col in enumerate([uid_field, iid_field]):
-        pert_inter_feat[col] = torch.cat((orig_inter_feat[col], del_edges[i]))
+        pert_inter_feat[col] = torch.cat((orig_inter_feat[col], pert_edges[i]))
 
     unique, counts = torch.stack(
         (pert_inter_feat[uid_field], pert_inter_feat[iid_field]),
     ).unique(dim=1, return_counts=True)
     pert_inter_feat[uid_field], pert_inter_feat[iid_field] = unique[:, counts == 1]
 
-    return train_dataset.copy(Interaction(pert_inter_feat))
+    return data_set.copy(Interaction(pert_inter_feat))
 
+
+def get_dataloader_with_perturbed_edges(pert_edges, config, dataset, train_data, valid_data, test_data):
+    train_dataset = get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
+    valid_dataset = get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
+    test_dataset = get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
+    
+    built_datasets = [train_dataset, valid_dataset, test_dataset]
+    train_sampler, valid_sampler, test_sampler = create_samplers(config, dataset, built_datasets)
+    
+    train_data = get_dataloader(config, 'train')(config, train_dataset, train_sampler, shuffle=False)
+    valid_data = get_dataloader(config, 'evaluation')(config, valid_dataset, valid_sampler, shuffle=False)
+    test_data = get_dataloader(config, 'evaluation')(config, test_dataset, test_sampler, shuffle=False)
+    
+    return train_data, valid_data, test_data
 
 def get_best_exp_early_stopping(exps, config_dict):
     best_epoch = get_best_epoch_early_stopping(exps, config_dict)
@@ -249,17 +263,19 @@ def prepare_batched_data(input_data, data, item_data=None):
 
     if hasattr(data, "uid2history_item"):
         history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
+        
+        if len(input_data) > 1:
+            history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
+            history_i = torch.cat(list(history_item))
+        else:
+            history_u = torch.full_like(history_item, 0)
+            history_i = history_item
+            
+        history_index = (history_u, history_i)
     else:
-        history_item = []
+        history_index = None
 
-    if len(input_data) > 1:
-        history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
-        history_i = torch.cat(list(history_item))
-    else:
-        history_u = torch.full_like(history_item, 0)
-        history_i = history_item
-
-    return data_df, (history_u, history_i), None, None
+    return data_df, history_index, None, None
 
 
 def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kwargs):

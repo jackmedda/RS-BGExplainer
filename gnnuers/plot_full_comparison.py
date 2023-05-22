@@ -2,8 +2,9 @@
 import os
 import gc
 import pickle
-import argparse
 import inspect
+import argparse
+import tempfile
 import itertools
 
 import tqdm
@@ -624,12 +625,16 @@ parser.add_argument('--overwrite_extracted_data', '--oed', action="store_true")
 parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
 parser.add_argument('--overwrite_del_dp_plot_data', '--odppd', action="store_true")
 parser.add_argument('--overwrite_casper_explanations', '--oce', action="store_true")
+parser.add_argument('--overwrite_overlay_explanations', '--ooe', action="store_true")
 parser.add_argument('--utility_metrics', '--um', nargs='+', default=None)
 parser.add_argument('--add_plot_table', '--apt', action="store_true")
 parser.add_argument('--plot_only_graph_metrics', '--pogm', action="store_true")
 parser.add_argument('--extract_only_graph_metrics_mm', '--eogmmm', action="store_true")  # mm => memory management
 parser.add_argument('--graph_metrics_analysis_tables', '--gmat', nargs='+', default=None)
 parser.add_argument('--casper_explanations', '--ce', default=None, nargs='+', type=str)
+parser.add_argument('--overlay_explanations', '--laye', default=None, action="store_true")
+parser.add_argument('--overlay_threshold', '--layth', default=0.8)
+parser.add_argument('--overlay_min_length', '--layml', default=None)
 
 args = parser.parse_args()
 
@@ -1047,33 +1052,56 @@ with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'wb') as f
 if args.extract_only_graph_metrics_mm:
     print("Graph metrics extracted and saved")
     exit()
+    
 
-casper_del_df = None
-casper_df_path = os.path.join(plots_path, 'casper_exp_df.csv')
-if os.path.exists(casper_df_path) and not args.overwrite_casper_explanations:
-    casper_del_df = pd.read_csv(casper_df_path)
-elif args.casper_explanations:
-    casper_exp_paths = args.casper_explanations
-    casper_exp_paths = dict(zip(casper_exp_paths[::2], casper_exp_paths[1::2]))
-    casper_del_df = eval_utils.extract_casper_metrics(
-        casper_exp_paths,
-        models=["NGCF", "GCMC", "LightGCN"],
-        metrics=rec_del_df['Metric'].unique(),
-        models_path='saved',
-        policy_name=casper_pol
-    )
-    mapped_dg_dfs = []
-    for casp_s_attr, casp_s_attr_df in casper_del_df.groupby('Sens Attr'):
-        if casp_s_attr.lower() in real_group_map:
-            _casp_sadf = casp_s_attr_df.copy(deep=True)
-            _casp_sadf["Demo Group"] = _casp_sadf["Demo Group"].map(real_group_map[casp_s_attr.lower()]).to_numpy()
-            mapped_dg_dfs.append(_casp_sadf)
+if args.overlay_explanations:
+    args.overlay_explanations = []
+    for dset in unique_datasets:
+        for s_attr in unique_sens_attrs:
+            ol_path = os.path.join(plots_path, f"{dset}_{sens_attr}.npy")
+            if not os.path.exists(os.path.join(plots_path, f"{dset}_{s_attr}.npy")):
+                overlay_edges = eval_utils.overlay_del_edges(
+                    train_datasets[dset],
+                    s_attr,
+                    th=args.overlay_threshold,
+                    min_length=args.overlay_min_length
+                )
+                np.save(ol_path, overlay_edges)
 
-    casper_del_df = pd.concat(mapped_dg_dfs, ignore_index=True)
-    casper_del_df.to_csv(casper_df_path, index=False)
+            args.overlay_explanations.extend([(dset, sens_attr), ol_path])
 
-if casper_del_df is not None:
-    rec_del_df = pd.concat([rec_del_df, casper_del_df], ignore_index=True)
+for extra_arg, extra_ow_arg, extra_df_path, extra_pol in zip(
+    [args.casper_explanations, args.overlay_explanations],
+    [args.overwrite_casper_explanations, args.overwrite_overlay_explanations],
+    ['casper_exp_df.csv', 'overlay_exp_df.csv'],
+    [casper_pol, overlay_pol]
+):
+    extra_pert_df = None
+    extra_df_path = os.path.join(plots_path, extra_df_path)
+    if os.path.exists(extra_df_path) and not extra_ow_arg:
+        extra_pert_df = pd.read_csv(extra_df_path)
+    elif extra_arg:
+        extra_exp_paths = dict(zip(extra_arg[::2], extra_arg[1::2]))
+        extra_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
+            extra_exp_paths,
+            models=["NGCF", "GCMC", "LightGCN"],
+            metrics=rec_del_df['Metric'].unique(),
+            models_path='saved',
+            policy_name=extra_pol
+        )
+        mapped_dg_dfs = []
+        for extra_s_attr, extra_s_attr_df in extra_pert_df.groupby('Sens Attr'):
+            if extra_s_attr.lower() in real_group_map:
+                _extra_sadf = extra_s_attr_df.copy(deep=True)
+                _extra_sadf["Demo Group"] = _extra_sadf["Demo Group"].map(real_group_map[extra_s_attr.lower()]).to_numpy()
+                mapped_dg_dfs.append(_extra_sadf)
+
+        extra_pert_df = pd.concat(mapped_dg_dfs, ignore_index=True)
+        extra_pert_df.to_csv(extra_df_path, index=False)
+
+    if extra_pert_df is not None:
+        rec_del_df = pd.concat([rec_del_df, extra_pert_df], ignore_index=True)
+
 
 rec_df["Policy"] = rec_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))
 rec_del_df["Policy"] = rec_del_df["Policy"].map(lambda p: {'NoPolicy': no_pert_col}.get(p, p))

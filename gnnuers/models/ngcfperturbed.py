@@ -18,10 +18,9 @@ class NGCFPerturbed(PerturbedModel, NGCF):
         PerturbedModel.__init__(self, config, **kwargs)
 
     def forward(self, pred=False):
+        A_hat = self.perturbate_adj_matrix(self.Graph, pred=pred)
         if self.node_dropout != 0:
-            A_hat = self.sparse_dropout(self.perturbate_adj_matrix(self.Graph, pred=pred))
-        else:
-            A_hat = self.perturbate_adj_matrix(self.Graph, pred=pred)
+            A_hat = self.sparse_dropout(A_hat)
 
         all_embeddings = self.get_ego_embeddings()
         embeddings_list = [all_embeddings]

@@ -378,26 +378,44 @@ def extract_all_exp_metrics_data(_exp_paths,
     return exp_dfs, result_data, n_users_data, topk_dist
 
 
-def extract_casper_metrics(exp_paths: dict, models=None, metrics=None, models_path='saved', policy_name='CASPER'):
+def extract_metrics_from_perturbed_edges(exp_info: dict,
+                                         models=None,
+                                         metrics=None,
+                                         models_path='saved',
+                                         policy_name=None,
+                                         on_bad_models="error",
+                                         remap=True):
     models = ["NGCF", "LightGCN", "GCMC"] if models is None else models
     metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
     cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric',
             'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
     
-    df_data = []
+    test_df_data = []
+    valid_df_data = []
     model_files = list(os.scandir(models_path))
     for mod in models:
-        for dset, exp_path in exp_paths.items():
+        for meta, path_or_pert_edges in exp_info.items():
+            if isinstance(meta, tuple):  # perturbed edges could also dependent on sensitive attributes
+                dset, s_attr = meta
+            else:
+                dset = meta
+                s_attr = None
+            
             try:
                 model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
             except IndexError:
-                raise ValueError(
-                    f"in path `{models_path}` there is no file for model `{mod.upper()}` and dataset `{dset.upper()}`"
-                )
+                if on_bad_model == "ignore":
+                    continue
+                else:
+                    raise ValueError(
+                        f"in path `{models_path}` there is no file for model `{mod.upper()}` and dataset `{dset.upper()}`"
+                    )
+                    
             checkpoint = torch.load(model_file)
             config = checkpoint['config']
             
-            explainer_config_file = os.path.join(os.path.dirname(models_path), 'config', f'{dset}_explainer.yaml')
+            exp_dset = dset.replace('-1000', '') if '-1000' in dset else dset
+            explainer_config_file = os.path.join(os.path.dirname(models_path), 'config', f'{exp_dset}_explainer.yaml')
             with open(explainer_config_file, 'r', encoding='utf-8') as f:
                 exp_file_content = f.read()
                 explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
@@ -410,55 +428,193 @@ def extract_casper_metrics(exp_paths: dict, models=None, metrics=None, models_pa
             iid_field = dataset.iid_field
             
             train_data, valid_data, test_data = data_preparation(config, dataset)
-
-            sens_attrs = [col for col in dataset.user_feat.columns if col != uid_field]
             
-            del_edges = np.load(exp_path).T
+            if isinstance(path_or_pert_edges, np.ndarray):
+                pert_edges = path_or_pert_edges
+            else:
+                pert_edges = np.load(exp_path).T
             
-            for i, field in enumerate([uid_field, iid_field]):
-                del_edges[i] = [dataset.field2token_id[field][str(n)] for n in del_edges[i]]
-            del_edges[1] += dataset.user_num  # remap according to adjacency matrix
+            if remap:
+                if callable(remap):
+                    pert_edges = remap(pert_edges, dataset)
+                else:
+                    for i, field in enumerate([uid_field, iid_field]):
+                        pert_edges[i] = [dataset.field2token_id[field][str(n)] for n in pert_edges[i]]
+                    pert_edges[1] += dataset.user_num  # remap according to adjacency matrix
             
-            train_dataset = utils.get_dataset_with_perturbed_edges(del_edges, train_data.dataset)
-
-            model = get_model(config['model'])(config, train_dataset).to(config['device'])
-            model.load_state_dict(checkpoint['state_dict'])
-            model.load_other_parameter(checkpoint.get('other_parameter'))
+            user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
             
-            user_data = torch.arange(dataset.user_num)[1:]  # id 0 is a padding in recbole
-            batched_data = utils.prepare_batched_data(user_data, test_data)
+            pref_test_data = pref_data_from_checkpoint_and_perturbed_edges(
+                config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=False
+            )
+            test_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
             
-            tot_item_num = dataset.item_num
-            item_tensor = dataset.get_item_feature().to(model.device)
-            test_batch_size = tot_item_num
-            model_scores = utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor)
-            _, model_topk_idx = utils.get_top_k(model_scores, topk=10)
-            model_topk_idx = model_topk_idx.detach().cpu().numpy()
-            
-            pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
+            pref_valid_data = pref_data_from_checkpoint_and_perturbed_edges(
+                config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=True
+            )
+            valid_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
             
             config["metrics"] = metrics
             evaluator = Evaluator(config)
             for metric in metrics:
-                metric_data = compute_metric(evaluator, test_data.dataset, pref_data, 'cf_topk_pred', metric.lower())[:, -1]
+                test_metric_data = compute_metric(
+                    evaluator, test_pert_data, pref_test_data, 'cf_topk_pred', metric.lower()
+                )[:, -1]
+                valid_metric_data = compute_metric(
+                    evaluator, valid_pert_data, pref_valid_data, 'cf_topk_pred', metric.lower()
+                )[:, -1]
+                if s_attr is None:
+                    sens_attrs = [col for col in dataset.user_feat.columns if col != uid_field]
+                else:
+                    sens_attrs = [s_attr]
+
                 for s_attr in sens_attrs:
                     demo_group_map = dataset.field2id_token[s_attr]
-                    
-                    df_data.extend(list(zip(*[
+
+                    test_df_data.extend(list(zip(*[
                         user_data.numpy(),
                         [-1] * len(user_data),
-                        [del_edges.shape[1]] * len(user_data),
+                        [pert_edges.shape[1]] * len(user_data),
                         [-1] * len(user_data),
                         [metric] * len(user_data),
                         [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
                         [s_attr.title()] * len(user_data),
                         [mod] * len(user_data),
                         [dset] * len(user_data),
-                        metric_data,
+                        test_metric_data,
+                        [policy_name] * len(user_data),
+                    ])))
+                    
+                    valid_df_data.extend(list(zip(*[
+                        user_data.numpy(),
+                        [-1] * len(user_data),
+                        [pert_edges.shape[1]] * len(user_data),
+                        [-1] * len(user_data),
+                        [metric] * len(user_data),
+                        [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
+                        [s_attr.title()] * len(user_data),
+                        [mod] * len(user_data),
+                        [dset] * len(user_data),
+                        valid_metric_data,
                         [policy_name] * len(user_data),
                     ])))
     
-    return pd.DataFrame(df_data, columns=cols)
+    return pd.DataFrame(test_df_data, columns=cols), pd.DataFrame(valid_df_data, columns=cols)
+
+
+def pref_data_from_checkpoint_and_perturbed_edges(config,
+                                                  checkpoint, 
+                                                  pert_edges,
+                                                  dataset,
+                                                  train_data,
+                                                  valid_data,
+                                                  test_data,
+                                                  on_valid_data=False):
+    train_dataset = utils.get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
+    
+    train_data, valid_data, test_data = utils.get_dataloader_with_perturbed_edges(
+        pert_edges, config, dataset, train_data, valid_data, test_data
+    )
+    eval_data = valid_data if on_valid_data else test_data
+
+    model = get_model(config['model'])(config, train_dataset).to(config['device'])
+    model.load_state_dict(checkpoint['state_dict'])
+    model.load_other_parameter(checkpoint.get('other_parameter'))
+    model.eval()
+    if hasattr(model, "restore_user_e"):
+        model.restore_user_e = None
+        model.restore_item_e = None
+
+    user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
+    batched_data = utils.prepare_batched_data(user_data, eval_data)
+
+    tot_item_num = train_data.dataset.item_num
+    item_tensor = train_data.dataset.get_item_feature().to(model.device)
+    test_batch_size = tot_item_num
+
+    model_scores = utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor)
+    _, model_topk_idx = utils.get_top_k(model_scores, topk=10)
+    model_topk_idx = model_topk_idx.detach().cpu().numpy()
+
+    pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
+    
+    return pref_data
+
+
+def pref_data_from_checkpoint(config,
+                              checkpoint,
+                              train_data,
+                              eval_data):
+    model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
+    model.load_state_dict(checkpoint['state_dict'])
+    model.load_other_parameter(checkpoint.get('other_parameter'))
+    if hasattr(model, "restore_user_e"):
+        model.restore_user_e = None
+        model.restore_item_e = None
+
+    user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
+    batched_data = utils.prepare_batched_data(user_data, eval_data)
+
+    tot_item_num = train_data.dataset.item_num
+    item_tensor = train_data.dataset.get_item_feature().to(model.device)
+    test_batch_size = tot_item_num
+    model_scores = utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor)
+    _, model_topk_idx = utils.get_top_k(model_scores, topk=10)
+    model_topk_idx = model_topk_idx.detach().cpu().numpy()
+
+    pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
+    
+    return pref_data
+
+
+def overlay_perturbed_edges(dataset, sens_attr, th=0.5, min_length=None):
+    uid_field = dataset.uid_field
+    user_feat = pd.DataFrame(dataset.user_feat.numpy())[[uid_field, sens_attr]]
+    user_feat = user_feat[1:].reset_index(drop=True)  # removes padding user
+    
+    hist_m, _, hist_len = map(torch.Tensor.numpy, dataset.history_item_matrix())
+    min_length = np.median(hist_len) if min_length is None else min_length
+    
+    vc = user_feat[sens_attr].value_counts()
+    adv_g = vc.index[vc.argmax()]
+    disadv_g = 1 if adv_g == 2 else 2
+
+    groups_ids = user_feat.groupby(sens_attr).apply(lambda gdf: gdf[uid_field].to_numpy())
+    adv_ids = groups_ids.loc[adv_g]
+    disadv_ids = groups_ids.loc[disadv_g]
+
+    sim_pairs = overlay_sim_pairs(hist_m, hist_len, adv_ids, disadv_ids, sens_attr, th=th)
+    mask = np.array([
+        i for i in range(sim_pairs.shape[0]) 
+        if hist_len[sim_pairs[i, 0]] > hist_len[sim_pairs[i, 1]] and hist_len[sim_pairs[i, 1]] >= min_length
+    ])
+
+    aug_edges = []
+    for (adv_u, dis_u) in sim_pairs[mask]:
+        uncommon_mask = ~np.isin(hist_m[adv_u], hist_m[dis_u])
+        uncommon_items = hist_m[adv_u, uncommon_mask]
+        aug_edges.append(np.c_[uncommon_items, [dis_u] * uncommon_items.shape[0]])
+
+    return np.concatenate(aug_edges, axis=0)
+
+
+def overlay_sim_pairs(hist, hist_len, adv, disadv, s_attr, th=0.5):
+    sim_pairs = np.full((adv.shape[0] * disadv.shape[0], 2), -1, dtype=np.int32)
+    for i in tqdm.tqdm(range(adv.shape[0]), desc=f"Generating overlay del edges for `{s_attr}`"):
+        _overlay_sim_pairs(sim_pairs, hist, hist_len, adv, disadv, i, th=th)
+    return sim_pairs[sim_pairs[:, 0] > -1]
+    
+
+@numba.jit(nopython=True, parallel=True)
+def _overlay_sim_pairs(sim_pairs, hist, hist_len, adv, disadv, i, th=0.5):
+    for j in numba.prange(disadv.shape[0]):
+        adv_h, disadv_h = hist[adv[i]], hist[disadv[j]]
+        adv_hl, disadv_hl = hist_len[adv[i]], hist_len[disadv[j]]
+
+        sim = np.intersect1d(adv_h, disadv_h).shape[0] - 1  # does not count padding item
+
+        if sim / adv_hl >= th or sim / disadv_hl >= th:
+            sim_pairs[i * disadv.shape[0] + j] = [adv[i], disadv[j]]
 
 
 def compute_exp_stats_data(_result_all_data,
@@ -656,17 +812,22 @@ def _compute_DP_random_samples(group_data, groups, size_perc, out_samples, batch
         gr1_mean = group_data[out_samples[i, 0]].mean()
         gr2_mean = group_data[out_samples[i, 1]].mean()
 
-        dp = compute_dp_with_masks(group_data, out_samples[i, 0], out_samples[i, 1])
+        dp = compute_DP_with_masks(group_data, out_samples[i, 0], out_samples[i, 1])
         out[i] = [gr1_mean, gr2_mean, dp]
 
     return out
 
 
 @numba.jit(nopython=True)
-def compute_dp_with_masks(eval_data, gr1_mask, gr2_mask):
+def compute_DP_with_masks(eval_data, gr1_mask, gr2_mask):
     gr1_mean = eval_data[gr1_mask].mean()
     gr2_mean = eval_data[gr2_mask].mean()
-    return np.abs(gr1_mean - gr2_mean)
+    return compute_DP(gr1_mean, gr2_mean)
+
+
+@numba.jit(nopython=True)
+def compute_DP(gr1_result, gr2_result):
+    return np.abs(gr1_result - gr2_result)
 
 
 def best_epoch_DP_across_samples(exp_path,

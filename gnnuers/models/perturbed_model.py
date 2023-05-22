@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 
+import gnnuers.utils as utils
 from . import utils as model_utils
 
 
@@ -59,10 +60,9 @@ class PerturbedModel(object):
 
             if self.filtered_users is not None:
                 user_filter = model_utils.edges_filter_nodes(
-                    self.mask_sub_adj[0], self.filtered_users, edge_additions=True
+                    self.mask_sub_adj[[0]], self.filtered_users, edge_additions=True
                 )
                 self.mask_sub_adj = self.mask_sub_adj[:, user_filter]
-
         else:
             self.mask_sub_adj = self.sub_Graph.to('cpu')
             self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool)
@@ -70,19 +70,20 @@ class PerturbedModel(object):
             if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
                 user_filter = model_utils.edges_filter_nodes(self.mask_sub_adj, self.filtered_users)
                 self.mask_filter &= user_filter
-
-        self.mask_sub_adj = self.mask_sub_adj.to(self.device)
+            self.mask_filter = self.mask_filter.to('cpu')
+            
+        self.mask_sub_adj = self.mask_sub_adj.to('cpu')
 
         self._initialize_P_symm()
 
         if not self.edge_additions:
             if config['explainer_policies']['force_removed_edges']:
-                self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to(self.device)
+                self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to('cpu')
             if config['explainer_policies']['neighborhood_perturbation']:
                 self.mask_neighborhood = self.mask_filter.clone().detach()
 
         self._P_loss = None
-        self.D_indices = torch.arange(self.num_all).tile((2, 1)).to(self.device)
+        self.D_indices = torch.arange(self.num_all).tile((2, 1)).to('cpu')
 
     def _initialize_P_symm(self):
         if self.edge_additions:
@@ -112,7 +113,7 @@ class PerturbedModel(object):
                 torch.FloatTensor(getattr(torch, self.P_symm_func)(self.P_symm_size)) + self.P_symm_init
             )
         if self.force_removed_edges is not None:
-            self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to(self.device)
+            self.force_removed_edges = torch.FloatTensor(torch.ones(self.P_symm_size)).to('cpu')
         if self.mask_neighborhood is not None:
             self.mask_neighborhood = self.mask_filter.clone().detach()
 
@@ -123,6 +124,24 @@ class PerturbedModel(object):
     @P_loss.setter
     def P_loss(self, value):
         self._P_loss = value
+        
+    def cf_state_dict(self):
+        return {
+            'P_symm': self.state_dict()['P_symm'],
+            'mask_sub_adj': self.mask_sub_adj.detach(),
+            'mask_filter': self.mask_filter.detach() if self.mask_filter is not None else None,
+            'force_removed_edges': self.force_removed_edges.detach() if self.force_removed_edges is not None else None,
+            'mask_neighborhood': self.mask_neighborhood.detach() if self.mask_neighborhood is not None else None
+        }
+    
+    def load_cf_state_dict(self, ckpt):
+        state_dict = self.state_dict()
+        state_dict.update({'P_symm': ckpt['P_symm']})
+        self.load_state_dict(state_dict)
+        self.mask_sub_adj = ckpt['mask_sub_adj']
+        self.mask_filter = ckpt['mask_filter']
+        self.force_removed_edges = ckpt['force_removed_edges']
+        self.mask_neighborhood = ckpt['mask_neighborhood']
 
     def loss(self, output, fair_loss_f, fair_loss_target):
         """
@@ -167,13 +186,15 @@ class PerturbedModel(object):
         self.mask_neighborhood &= nhood
 
     def _update_P_symm_on_neighborhood(self, P_symm):
+        dev = P_symm.device
         if (self.mask_filter != self.mask_neighborhood).any():
             filtered_idxs_asymm = self.mask_filter.nonzero().T.squeeze()[:P_symm.shape[0]]
             P_symm_nhood_mask = self.mask_neighborhood[filtered_idxs_asymm]
-            return torch.where(P_symm_nhood_mask, P_symm, torch.ones_like(P_symm, device=P_symm.device))
+            return torch.where(P_symm_nhood_mask.to(dev), P_symm, torch.ones_like(P_symm, device=dev))
 
     def perturbate_adj_matrix(self, Graph, pred=False):
         P_symm = self.P_symm
+        dev = P_symm.device
         if not self.edge_additions:
             if self.force_removed_edges is not None:
                 if self.filtered_users == self.RANDOM_POLICY:
@@ -184,31 +205,44 @@ class PerturbedModel(object):
                         ).to(self.force_removed_edges.device)
                         self.force_removed_edges = self.force_removed_edges * random_perb
                     # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
-                    P_symm = self.force_removed_edges - 1
+                    P_symm = self.force_removed_edges.to(dev) - 1
                 else:
                     if self.mask_neighborhood is not None:
                         P_symm = self._update_P_symm_on_neighborhood(P_symm)
-
-                    self.force_removed_edges = (torch.sigmoid(P_symm.detach()) >= 0.5).float() * self.force_removed_edges
+                    
+                    force_removed_edges = self.force_removed_edges.to(dev)
+                    force_removed_edges = (torch.sigmoid(P_symm.detach()) >= 0.5).float() * force_removed_edges
                     # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
-                    P_symm = torch.where(self.force_removed_edges == 0, self.force_removed_edges - 1, P_symm)
+                    P_symm = torch.where(force_removed_edges == 0, force_removed_edges - 1, P_symm)
+                    self.force_removed_edges = force_removed_edges.to('cpu')
+                    del force_removed_edges
+                    
             elif self.mask_neighborhood is not None:
                 P_symm = self._update_P_symm_on_neighborhood(P_symm)
-
-        perturb_matrix, P_loss = model_utils.perturb_adj_matrix(
-            Graph,
-            P_symm,
-            self.mask_sub_adj,
-            self.num_all,
-            self.D_indices,
-            pred=pred,
+        
+        if pred:
+            P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
+        else:
+            P_hat_symm = torch.sigmoid(P_symm)
+        
+        kws = dict(
             edge_deletions=not self.edge_additions,
-            mask_filter=self.mask_filter
+            mask_filter = self.mask_filter.to(dev) if self.mask_filter is not None else None
         )
-        if P_loss is not None:
-            self.P_loss = P_loss
+        P = utils.create_sparse_symm_matrix_from_vec(P_hat_symm, self.mask_sub_adj.to(dev), Graph, **kws)
+        if pred:
+            self.P_loss = P
 
-        return perturb_matrix
+        # Don't need gradient of this if pred is False
+        D_tilde = torch.sparse.sum(P, dim=1) if pred else torch.sparse.sum(P, dim=1).detach()
+        D_tilde_exp = (D_tilde.to_dense() + 1e-7).pow(-0.5)
+
+        D_tilde_exp = torch.sparse.FloatTensor(
+            self.D_indices.to(dev), D_tilde_exp, torch.Size((self.num_all, self.num_all))
+        )
+
+        # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
+        return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp)
 
     def predict(self, interaction, pred=False):
         user = interaction[self.USER_ID]

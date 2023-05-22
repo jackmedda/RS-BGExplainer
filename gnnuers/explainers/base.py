@@ -43,7 +43,7 @@ class Explainer:
         self.rec_data = rec_data
         self._pred_as_rec = config['exp_rec_data'] == 'rec'
         self._test_history_matrix = None
-
+            
         self.cf_optimizer = None
         self.mini_batch_descent = config['mini_batch_descent']
 
@@ -77,6 +77,7 @@ class Explainer:
 
         self.eval_metric = config['eval_metric'] or 'ndcg'
         self.evaluator = Evaluator(config)
+        self.fair_metric = config['fair_metric'] or 'DP_across_random_samples'
 
         attr_map = dataset.field2id_token[self.sensitive_attribute]
         self.f_idx, self.m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
@@ -92,7 +93,8 @@ class Explainer:
             fn=config['early_stopping']['mode'],
             delta=config['early_stopping']['delta']
         )
-
+        self.earlys_check_value = config['early_stopping']['check_value']
+        
         self.previous_loss_value = config['previous_loss_value']
         self.previous_batch_LR_scaling = config['previous_batch_LR_scaling']
         self.lr_scaler = None
@@ -101,6 +103,10 @@ class Explainer:
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
         self.random_perturbation = config['explainer_policies']['random_perturbation']
         self.neighborhood_perturbation = config['explainer_policies']['neighborhood_perturbation']
+        self.users_zero_constraint = config['explainer_policies']['users_zero_constraint']
+        self.users_zero_constraint_value = config['users_zero_constraint_value'] or 0
+        
+        self.ckpt_loading_path = None
 
         # wandb.watch(self.cf_model)
 
@@ -140,6 +146,30 @@ class Explainer:
             self.cf_optimizer = torch.optim.AdamW(self.cf_model.parameters(), lr=lr)
         else:
             raise NotImplementedError("CF Optimizer not implemented")
+    
+    def set_checkpoint_path(self, path):
+        self.ckpt_loading_path = path
+        
+    def _resume_checkpoint(self):
+        ckpt = torch.load(self.ckpt_loading_path)
+        epoch = ckpt['starting_epoch']
+        fair_losses = ckpt['fair_losses']
+        self.earlys = ckpt['early_stopping']
+        best_cf_example = ckpt['best_cf_example']
+        self.cf_model.load_cf_state_dict(ckpt)
+        
+        return fair_losses, epoch, best_cf_example
+        
+    def _save_checkpoint(self, epoch, fair_losses, best_cf_example):
+        cf_state_dict = self.cf_model.cf_state_dict()
+        ckpt = {
+            'starting_epoch': epoch,
+            'fair_losses': fair_losses,
+            'early_stopping': self.earlys,
+            'best_cf_example': best_cf_example,
+            **cf_state_dict
+        }
+        torch.save(ckpt, self.ckpt_loading_path)
 
     def compute_model_predictions(self, scores_args, topk):
         """
@@ -154,10 +184,13 @@ class Explainer:
 
         # topk_idx contains the ids of the topk items
         self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
+        
+    def _get_scores_args(self, batched_data, dataset):
+        dset_batch_data = Explainer.prepare_batched_data(batched_data, dataset)
+        return [dset_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
 
     def _get_model_score_data(self, batched_data, dataset, topk):
-        dset_batch_data = Explainer.prepare_batched_data(batched_data, dataset)
-        dset_scores_args = [dset_batch_data, self.tot_item_num, self.test_batch_size, self.item_tensor]
+        dset_scores_args = self._get_scores_args(batched_data, dataset)
         self.compute_model_predictions(dset_scores_args, topk)
         dset_model_topk = self.model_topk_idx.detach().cpu().numpy()
 
@@ -172,7 +205,7 @@ class Explainer:
         cf_topk_pred_idx = cf_topk_pred_idx.detach().cpu().numpy()
 
         cf_dist = None
-        if compute_dist:
+        if compute_dist and model_topk is not None:
             cf_dist = [
                 self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, model_topk)
             ]
@@ -205,7 +238,7 @@ class Explainer:
                          'loss: {:.4f}, '.format(loss_total.item()) +
                          'fair loss: {:.4f}, '.format(fair_loss) +
                          'graph loss: {:.4f}, '.format(loss_graph_dist.item()) +
-                         'del edges: {:.4f}, '.format(int(orig_loss_graph_dist.item())))
+                         'perturbed edges: {:.4f}, '.format(int(orig_loss_graph_dist.item())))
         if self.verbose:
             self.logger.info('Orig output: {}\n'.format(self.model_scores) +
                              # 'Output: {}\n'.format(verbose_kws.get('cf_scores', None)) +
@@ -217,40 +250,11 @@ class Explainer:
                              )
         self.logger.info(" ")
 
-    def compute_eval_metric(self, dataset, pref_data, col):
-        return eval_utils.compute_metric(self.evaluator, dataset, pref_data, col, self.eval_metric)
-
-    def compute_fair_metric(self, user_id, topk_pred, dataset, iterations=100):
-        sens_attr = self.sensitive_attribute
-        dset_name = dataset.dataset_name
-
-        # minus 1 encodes the demographic groups to {0, 1} instead of {1, 2}
-        pref_data = pd.DataFrame(
-            zip(user_id, topk_pred, dataset.user_feat[sens_attr][user_id].numpy() - 1),
-            columns=['user_id', 'cf_topk_pred', 'Demo Group']
-        )
-
-        result = eval_utils.compute_metric(self.evaluator, dataset, pref_data, 'cf_topk_pred', self.eval_metric)
-        pref_data[self.eval_metric] = result[:, -1]
-
-        # it prevents from using memoization
-        if hasattr(eval_utils.compute_DP_across_random_samples, "generated_groups"):
-            if (dset_name, sens_attr) in eval_utils.compute_DP_across_random_samples.generated_groups:
-                del eval_utils.compute_DP_across_random_samples.generated_groups[(dset_name, sens_attr)]
-
-        fair_metric, _ = eval_utils.compute_DP_across_random_samples(
-            pref_data, sens_attr, 'Demo Group', dset_name, self.eval_metric,
-            iterations=iterations, batch_size=self.user_batch_exp
-        )
-
-        return fair_metric[:, -1].mean()
-
     def update_best_cf_example(self,
                                best_cf_example,
                                new_example,
                                loss_total,
                                best_loss,
-                               first_fair_loss,
                                model_topk=None,
                                force_update=False):
         """
@@ -259,18 +263,17 @@ class Explainer:
         :param new_example:
         :param loss_total:
         :param best_loss:
-        :param first_fair_loss:
         :return:
         """
         if force_update or (new_example is not None and (abs(loss_total) < best_loss or self.unique_graph_dist_loss)):
             if self.unique_graph_dist_loss and len(best_cf_example) > 0:
-                self.old_graph_dist = best_cf_example[-1][-5]
-                new_graph_dist = new_example[-4]
+                self.old_graph_dist = best_cf_example[-1][1]
+                new_graph_dist = new_example[1]
                 if not force_update and not (self.old_graph_dist != new_graph_dist):
                     return best_loss
 
-            best_cf_example.append(new_example + [first_fair_loss])
-            self.old_graph_dist = new_example[-4]
+            best_cf_example.append(new_example)
+            self.old_graph_dist = new_example[1]
 
             if self.verbose and model_topk is not None:
                 self.logging_exp_per_group(new_example, model_topk)
@@ -282,11 +285,27 @@ class Explainer:
     def update_new_example(self,
                            new_example,
                            detached_batched_data,
-                           test_scores_args,
+                           full_dataset,
+                           train_data,
+                           valid_data,
+                           test_data,
                            test_model_topk,
-                           rec_scores_args,
                            rec_model_topk,
                            epoch_fair_loss):
+        perturbed_edges = new_example[-2]
+        
+        if self.config['exp_rec_data'] == 'rec':
+            raise NotImplementedErorr(
+                'fair metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
+            )
+        
+        pert_sets = utils.get_dataloader_with_perturbed_edges(perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data)
+        pert_sets_dict = dict(zip(['train', 'valid', 'test'], pert_sets))
+            
+        test_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict['test'])
+        rec_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict[self.config['exp_rec_data']])
+        
+        # TODO: it uses the model once the step method on the optimizer had already been called, then there could be new edges added
         test_cf_topk_pred_idx, test_cf_dist = self._get_no_grad_pred_model_score_data(
             test_scores_args, model_topk=test_model_topk, compute_dist=True
         )
@@ -294,34 +313,52 @@ class Explainer:
             rec_scores_args, model_topk=rec_model_topk, compute_dist=True
         )
 
-        # TODO: detached_batched_data could be saved once and not repeated for each explanation
-        new_example = [
-            detached_batched_data,
-            # rec_model_topk,
-            # test_model_topk,
-            rec_cf_topk_pred_idx,
-            test_cf_topk_pred_idx,
-            rec_cf_dist,
-            test_cf_dist,
-            *new_example[4:]
-        ]
+        # new_example = [
+        #     detached_batched_data,
+        #     # rec_model_topk,
+        #     # test_model_topk,
+        #     rec_cf_topk_pred_idx,
+        #     test_cf_topk_pred_idx,
+        #     rec_cf_dist,
+        #     test_cf_dist,
+        #     *new_example[4:]
+        # ]
 
-        epoch_fair_metric = self.compute_fair_metric(
+        epoch_rec_fair_metric = self.compute_fair_metric(
             detached_batched_data,
             rec_cf_topk_pred_idx,
-            self.rec_data.dataset
+            pert_sets_dict[self.config['exp_rec_data']].dataset
+        )
+        
+        epoch_test_fair_metric = self.compute_fair_metric(
+            detached_batched_data,
+            test_cf_topk_pred_idx,
+            pert_sets_dict['test'].dataset
+        )
+        
+        def pert_edges_mapper(pe, rec_dset):
+            return pe
+
+        test_pert_df, valid_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
+            {(self.dataset.dataset_name, self.sensitive_attribute): perturbed_edges},
+            models=[self.model.__class__.__name__],
+            metrics=[self.eval_metric],
+            models_path=os.path.join(os.getcwd(), 'saved'),
+            remap=pert_edges_mapper
         )
 
         new_example[utils.exp_col_index('fair_loss')] = epoch_fair_loss
-        new_example[utils.exp_col_index('fair_metric')] = epoch_fair_metric
+        new_example[utils.exp_col_index('fair_metric')] = epoch_rec_fair_metric
 
         wandb.log({
             'loss': epoch_fair_loss,
-            'fair_metric': epoch_fair_metric,
-            '# Del Edges': new_example[-2].shape[1]
+            'rec_fair_metric': epoch_rec_fair_metric,
+            'test_fair_metric': epoch_test_fair_metric,
+            '# Del Edges': perturbed_edges,
+            'epoch': new_example[-1]
         })
 
-        return new_example, epoch_fair_metric
+        return new_example, epoch_rec_fair_metric
 
     @staticmethod
     def prepare_batched_data(batched_data, data, item_data=None):
@@ -457,7 +494,7 @@ class Explainer:
 
             filtered_users = batched_data
 
-        self.determine_adv_group(batched_data, rec_model_topk)
+        self.determine_adv_group(batched_data.detach().numpy(), rec_model_topk)
 
         if self.group_deletion_constraint and self.random_perturbation:
             raise NotImplementedError(
@@ -473,6 +510,18 @@ class Explainer:
         elif self.random_perturbation:
             # overwrites `increase_disparity` policy
             filtered_users = exp_models.PerturbedModel.RANDOM_POLICY
+        
+        if self.group_deletion_constraint and self.random_perturbation:
+            raise NotImplementedError(
+                'The policies `users_zero_constraint` and `random_perturbation` cannot be both True'
+            )
+        elif self.users_zero_constraint:
+            if filtered_users is None:
+                filtered_users = batched_data
+            
+            pref_data = self._pref_data_sens_and_metric(batched_data.detach().numpy(), rec_model_topk)
+            disadv_zero_users = pref_data.loc[(pref_data[self.eval_metric] <= self.users_zero_constraint_value), 'user_id']
+            filtered_users = torch.from_numpy(np.intersect1d(disadv_zero_users.to_numpy(), filtered_users.numpy()))
 
         return batched_data, filtered_users, (test_model_topk, test_scores_args, rec_model_topk, rec_scores_args)
 
@@ -496,18 +545,45 @@ class Explainer:
 
             return True
         return False
+    
+    def _pref_data_sens_and_metric(self, pref_users, model_topk, eval_data=None):
+        pref_data = pd.DataFrame(
+            zip(pref_users, model_topk, self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()),
+            columns=['user_id', 'topk_pred', 'Demo Group']
+        )
+        pref_data[self.eval_metric] = self.compute_eval_metric(eval_data or self.rec_data.dataset, pref_data, 'topk_pred')[:, -1]
+        
+        return pref_data
+    
+    def compute_eval_metric(self, dataset, pref_data, col):
+        return eval_utils.compute_metric(self.evaluator, dataset, pref_data, col, self.eval_metric)
+    
+    def compute_eval_result(self, pref_users: np.ndarray, model_topk: np.ndarray, eval_data=None):
+        return self._pref_data_sens_and_metric(pref_users, model_topk, eval_data=eval_data)[self.eval_metric].to_numpy()
+    
+    def compute_f_m_result(self, batched_data: np.ndarray, model_topk, eval_data=None):
+        pref_data = self._pref_data_sens_and_metric(batched_data, model_topk, eval_data=eval_data)
 
-    def determine_adv_group(self, batched_data, rec_model_topk):
-        pref_users = batched_data.numpy()
+        f_result = pref_data.loc[pref_data['Demo Group'] == self.f_idx, self.eval_metric].mean()
+        m_result = pref_data.loc[pref_data['Demo Group'] == self.m_idx, self.eval_metric].mean()
+        
+        return f_result, m_result
+    
+    def compute_fair_metric(self, pref_users, model_topk, dataset, iterations=100):
+        pref_data = self._pref_data_sens_and_metric(pref_users, model_topk, eval_data=dataset)
 
-        pref_data = pd.DataFrame(zip(pref_users, rec_model_topk.tolist()), columns=['user_id', 'topk_pred'])
+        return exp_utils.get_fair_metric_value(
+            self.fair_metric,
+            pref_data,
+            self.eval_metric,
+            dataset.dataset_name,
+            self.sensitive_attribute,
+            self.user_batch_exp,
+            iterations=iterations
+        )
 
-        orig_res = self.compute_eval_metric(self.rec_data.dataset, pref_data, 'topk_pred')
-
-        pref_users_sens_attr = self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()
-
-        f_result = orig_res[pref_users_sens_attr == self.f_idx, -1].mean()
-        m_result = orig_res[pref_users_sens_attr == self.m_idx, -1].mean()
+    def determine_adv_group(self, batched_data: np.ndarray, rec_model_topk):
+        f_result, m_result = self.compute_f_m_result(batched_data, rec_model_topk)
 
         check_func = "__ge__" if self.config['perturb_adv_group'] else "__lt__"
 
@@ -577,17 +653,19 @@ class Explainer:
         for batch_idx, batch_user in enumerate(iter_data):
             if self.previous_batch_LR_scaling:
                 self.lr_scaler.update(batch_idx)
-
-            batch_scores_args, _ = self._get_model_score_data(batch_user, self.rec_data, topk)
+            
+            batch_scores_args = self._get_scores_args(batch_user, self.rec_data)
 
             torch.cuda.empty_cache()
             new_example, loss_total, fair_loss = self.train(
                 epoch, batch_scores_args, batch_user, topk=topk, previous_loss_value=previous_loss_value
             )
             epoch_fair_loss.append(fair_loss)
-
-        if not self.mini_batch_descent:
-            self.cf_optimizer.step()
+            
+            if batch_idx != len(iter_data) - 1:
+                torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
+                if self.mini_batch_descent:
+                    self.cf_optimizer.step()
 
         if self.previous_batch_LR_scaling:
             self.lr_scaler.restore()
@@ -597,7 +675,7 @@ class Explainer:
 
         return new_example, loss_total, epoch_fair_loss
 
-    def explain(self, batched_data, test_data, epochs, topk=10):
+    def explain(self, batched_data, full_dataset, train_data, valid_data, test_data, epochs, topk=10):
         """
         The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
         :param batched_data:
@@ -606,7 +684,6 @@ class Explainer:
         :param topk:
         :return:
         """
-        best_cf_example = []
         best_loss = np.inf
 
         self._check_loss_trend_epoch_images()
@@ -618,7 +695,7 @@ class Explainer:
             rec_scores_args, rec_model_topk = self._prepare_test_history_matrix(test_data, topk=topk)
         else:
             rec_scores_args, rec_model_topk = self._get_model_score_data(batched_data, self.rec_data, topk)
-
+        
         batched_data, filtered_users, inc_disp_model_data = self._check_policies(batched_data, rec_model_topk)
         if self.increase_disparity:
             test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = inc_disp_model_data
@@ -629,16 +706,32 @@ class Explainer:
 
         detached_batched_data = batched_data.detach().numpy()
         self.initialize_cf_model(filtered_users=filtered_users)
-
-        orig_loss = np.abs(self.results[self.adv_group] - self.results[self.disadv_group])
+        
+        if self.ckpt_loading_path is not None and os.path.exists(self.ckpt_loading_path):
+            fair_losses, starting_epoch, best_cf_example = self._resume_checkpoint()
+        else:
+            starting_epoch = 0
+            fair_losses = []
+            best_cf_example = []
+        
+        orig_rec_dp = eval_utils.compute_DP(
+            self.results[self.adv_group], self.results[self.disadv_group]
+        )
+        orig_test_dp = eval_utils.compute_DP(
+            *self.compute_f_m_result(detached_batched_data, test_model_topk, eval_data=test_data.dataset)
+        )
+        self.logger.info("*********** Rec Data ***********")
         self.logger.info(self.results)
         self.logger.info(f"M idx: {self.m_idx}")
-        self.logger.info(f"Original Fair Loss: {orig_loss}")
+        self.logger.info(f"Original Rec Fairness: {orig_rec_dp}")
+        self.logger.info("*********** Test Data ***********")
+        self.logger.info(f"Original Test Fairness: {orig_test_dp}")
 
         iter_epochs = tqdm(
-            range(epochs),
+            range(starting_epoch, epochs),
             total=epochs,
             ncols=100,
+            initial=starting_epoch,
             desc=set_color(f"Epochs   ", 'blue'),
         )
 
@@ -646,7 +739,6 @@ class Explainer:
             iter_data = self.prepare_iter_batched_data(batched_data)
             self.lr_scaler = exp_utils.LRScaler(self.cf_optimizer, len(iter_data))
 
-        fair_losses = []
         for epoch in iter_epochs:
             new_example, loss_total, epoch_fair_loss = self.run_epoch(epoch, batched_data, fair_losses, topk=topk)
 
@@ -657,27 +749,47 @@ class Explainer:
                 new_example, epoch_fair_metric = self.update_new_example(
                     new_example,
                     detached_batched_data,
-                    test_scores_args,
+                    full_dataset,
+                    train_data,
+                    valid_data,
+                    test_data,
                     test_model_topk,
-                    rec_scores_args,
                     rec_model_topk,
                     epoch_fair_loss
                 )
 
-                earlys_check_value = epoch_fair_loss
+                earlys_check_value = {
+                    'fair_loss': epoch_fair_loss,
+                    'fair_metric': epoch_fair_metric
+                }[self.earlys_check_value]
                 if self._pred_as_rec and earlys_check_value == epoch_fair_metric:
                     raise ValueError(f"`exp_rec_data` = `rec` stores test data to log fairness metric. "
                                      f"Cannot be used as value for early stopping check")
 
-                update_best_example_args = [best_cf_example, new_example, loss_total, best_loss, orig_loss]
-                if self._check_early_stopping(earlys_check_value, epoch, *update_best_example_args):
+                update_best_example_args = [best_cf_example, new_example, loss_total, best_loss]
+                earlys_check = self._check_early_stopping(earlys_check_value, epoch, *update_best_example_args)
+                print("*" * 7 + " Early Stopping History " + "*" * 7)
+                print(self.earlys.history)
+                print("*" * 7 + "************************" + "*" * 7)
+                if self.ckpt_loading_path is not None:
+                    if not earlys_check:
+                        # epoch + 1 because the current one is already finished
+                        self._save_checkpoint(epoch + 1, fair_losses, best_cf_example)
+                
+                if earlys_check:
                     break
 
                 best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
+            
+            # the optimizer step of the last epoch is done here to prevent computations
+            # done to update new example to be related to the new state of the model
+            torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
+            if self.mini_batch_descent:
+                self.cf_optimizer.step()
 
             self.logger.info("{} CF examples".format(len(best_cf_example)))
 
-        return best_cf_example, (rec_model_topk, test_model_topk)
+        return best_cf_example, detached_batched_data, (rec_model_topk, test_model_topk)
 
     def train(self, epoch, scores_args, users_ids, topk=10, previous_loss_value=None):
         """
@@ -728,10 +840,6 @@ class Explainer:
         #         print(param.grad)
         # import pdb; pdb.set_trace()
 
-        torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
-        if self.mini_batch_descent:
-            self.cf_optimizer.step()
-
         fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
         self.log_epoch(
             t, epoch, loss_total, fair_loss, loss_graph_dist, orig_loss_graph_dist,
@@ -741,7 +849,7 @@ class Explainer:
         cf_stats = None
         if orig_loss_graph_dist.item() > 0:
             cf_stats = self.get_batch_cf_stats(
-                users_ids, adj_sub_cf_adj, cf_topk_pred_idx, loss_total, loss_graph_dist, fair_loss, epoch
+                adj_sub_cf_adj, loss_total, loss_graph_dist, fair_loss, epoch
             )
 
         return cf_stats, loss_total.item(), fair_loss
@@ -764,24 +872,21 @@ class Explainer:
 
         return target
 
-    def get_batch_cf_stats(self, u_ids, adj_sub_cf_adj, cf_topk, loss_total, loss_graph_dist, fair_loss, epoch):
+    def get_batch_cf_stats(self, adj_sub_cf_adj, loss_total, loss_graph_dist, fair_loss, epoch):
         # Compute distance between original and perturbed list. Explanation maintained only if dist > 0
         # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
         cf_dist = None
 
-        adj_del_edges = adj_sub_cf_adj.detach().cpu()
-        del_edges = adj_del_edges.indices()[:, adj_del_edges.values().nonzero().squeeze()]
+        adj_pert_edges = adj_sub_cf_adj.detach().cpu()
+        pert_edges = adj_pert_edges.indices()[:, adj_pert_edges.values().nonzero().squeeze()]
 
         # remove duplicated edges
-        del_edges = del_edges[:, (del_edges[0, :] < self.dataset.user_num) & (del_edges[0, :] > 0)].numpy()
+        pert_edges = pert_edges[:, (pert_edges[0, :] < self.dataset.user_num) & (pert_edges[0, :] > 0)].numpy()
 
-        cf_stats = [
-            u_ids.detach().numpy(), self.model_topk_idx.detach().cpu().numpy(), cf_topk,
-            cf_dist, loss_total.item(), loss_graph_dist.item(), fair_loss, None, del_edges, epoch + 1
-        ]
+        cf_stats = [loss_total.item(), loss_graph_dist.item(), fair_loss, None, pert_edges, epoch + 1]
 
         if self.neighborhood_perturbation:
-            self.cf_model.update_neighborhood(torch.Tensor(del_edges))
+            self.cf_model.update_neighborhood(torch.Tensor(pert_edges))
 
         return cf_stats
 

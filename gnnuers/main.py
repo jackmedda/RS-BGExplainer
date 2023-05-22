@@ -16,27 +16,35 @@ from gnnuers.explain import execute_explanation
 import gnnuers.utils as utils
 
 
-def training(_model, _dataset, _config, saved=True):
+def training(_model, _config, saved=True, model_file=None):
     logger = logging.getLogger()
-    logger.info(_config)
-    logger.info(_dataset)
+    
+    if model_file is not None:
+        _config, _model, _dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file)
+    else:
+        # dataset filtering
+        _dataset = create_dataset(_config)
+        
+        # dataset splitting
+        train_data, valid_data, test_data = data_preparation(_config, _dataset)
 
-    # dataset splitting
-    train_data, valid_data, test_data = data_preparation(_config, _dataset)
-
-    # model loading and initialization
-    init_seed(_config['seed'], _config['reproducibility'])
-    _model = get_model(_model)(_config, train_data.dataset).to(_config['device'])
-    logger.info(_model)
+        # model loading and initialization
+        _model = get_model(_model)(_config, train_data.dataset).to(_config['device'])
+    
+        logger.info(_config)
+        logger.info(_dataset)
+        logger.info(_model)
 
     # trainer loading and initialization
     trainer = get_trainer(_config['MODEL_TYPE'], _config['model'])(_config, _model)
-
-    split_saved_file = os.path.basename(trainer.saved_model_file).split('-')
-    trainer.saved_model_file = os.path.join(
-        os.path.dirname(trainer.saved_model_file),
-        '-'.join(split_saved_file[:1] + [_dataset.dataset_name.upper()] + split_saved_file[1:])
-    )
+    if model_file is not None:
+        trainer.resume_checkpoint(model_file)
+    else:
+        split_saved_file = os.path.basename(trainer.saved_model_file).split('-')
+        trainer.saved_model_file = os.path.join(
+            os.path.dirname(trainer.saved_model_file),
+            '-'.join(split_saved_file[:1] + [_dataset.dataset_name.upper()] + split_saved_file[1:])
+        )
 
     # model training
     best_valid_score, best_valid_result = trainer.fit(
@@ -75,13 +83,10 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     # logger initialization
     init_logger(config)
 
-    # dataset filtering
-    dataset = create_dataset(config)
-
     if args.run == 'train':
-        runner(model, dataset, config, saved=saved)
+        runner(model, config, saved=saved, model_file=args.model_file)
     elif args.run == 'explain':
-        runner(*explain_args)
+        runner(args.model_file, *explain_args)
 
 
 if __name__ == "__main__":
@@ -102,13 +107,14 @@ if __name__ == "__main__":
     train_group.add_argument('--dataset', default='ml-100k')
     train_group.add_argument('--config_file_list', nargs='+', default=None)
     train_group.add_argument('--config_dict', default=None)
-    explain_group.add_argument('--model_file')
+    parser.add_argument('--model_file', default=None)
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
     # explain_group.add_argument('--load', action='store_true')
     explain_group.add_argument('--explain_config_id', default=-1)
     explain_group.add_argument('--verbose', action='store_true')
     explain_group.add_argument('--wandb_online', action='store_true')
     explain_group.add_argument('--hyper_optimize', action='store_true')
+    explain_group.add_argument('--overwrite', action='store_true')
 
     args, unk_args = parser.parse_known_args()
     print(args)
@@ -125,13 +131,13 @@ if __name__ == "__main__":
 
     args.wandb_online = {False: "offline", True: "online"}[args.wandb_online]
     explain_args = [
-        args.model_file,
         args.explainer_config_file,
         args.explain_config_id,
         args.verbose,
         args.wandb_online,
         unk_args,
-        args.hyper_optimize
+        args.hyper_optimize,
+        args.overwrite
     ]
 
     if args.run == 'train':

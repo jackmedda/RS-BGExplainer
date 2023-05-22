@@ -105,7 +105,7 @@ def save_exps_df(base_exps_file, exps):
     )
 
 
-def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file, **kwargs):
+def explain(config, model, _rec_data, _full_dataset, _train_data, _valid_data, _test_data, base_exps_file, **kwargs):
     """
     Function that explains, that is generates perturbed graphs.
     :param config:
@@ -120,6 +120,15 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
     epochs = config['cf_epochs']
     topk = config['cf_topk']
     wandb_mode = kwargs.get("wandb_mode", "disabled")
+    overwrite = kwargs.get("overwrite", False)
+    
+    exps_filename = os.path.join(base_exps_file, f"cf_data.pkl")
+    users_order_file = os.path.join(base_exps_file, f"users_order.pkl")
+    model_preds_file = os.path.join(base_exps_file, f"model_rec_test_preds.pkl")
+    checkpoint_path = os.path.join(base_exps_file, "checkpoint.pth")
+    
+    if overwrite and os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
 
     user_source = _rec_data if _rec_data is not None else _test_data
     user_data = user_source.user_df[user_source.uid_field][torch.randperm(user_source.user_df.length)]
@@ -142,14 +151,14 @@ def explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file
         "bab": BaB
     }.get(config["explainer"].lower(), DPBG)
 
-    explainer = explainer_model(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
-    exp, model_preds = explainer.explain(user_data, _test_data, epochs, topk=topk)
-
-    exps_filename = os.path.join(base_exps_file, f"cf_data.pkl")
-    model_preds_file = os.path.join(base_exps_file, f"model_rec_test_preds.pkl")
+    explainer = explainer_model(config, _train_data.dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
+    explainer.set_checkpoint_path(checkpoint_path)
+    exp, users_order, model_preds = explainer.explain(user_data, _full_dataset, _train_data, _valid_data, _test_data, epochs, topk=topk)    
 
     with open(exps_filename, 'wb') as f:
         pickle.dump(exp, f)
+    with open(users_order_file, 'wb') as f:
+        pickle.dump(users_order, f)
     with open(model_preds_file, 'wb') as f:
         pickle.dump(model_preds, f)
 
@@ -279,7 +288,8 @@ def execute_explanation(model_file,
                         verbose=False,
                         wandb_mode="disabled",
                         cmd_config_args=None,
-                        hyperoptimization=False):
+                        hyperoptimization=False,
+                        overwrite=False):
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data, exp_content = utils.load_data_and_model(
         model_file,
@@ -327,15 +337,18 @@ def execute_explanation(model_file,
 
     kwargs = dict(
         verbose=verbose,
-        wandb_mode=wandb_mode
+        wandb_mode=wandb_mode,
+        overwrite=overwrite
     )
     
     if not hyperoptimization:
         explain(
             config,
             model,
-            train_data.dataset,
             rec_data,
+            dataset,
+            train_data,
+            valid_data,
             test_data,
             base_exps_filepath,
             **kwargs

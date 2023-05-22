@@ -181,13 +181,15 @@ class DPLoss(FairLoss):
                 masked_loss.append(loss_values[mask].mean(dim=0))
         masked_loss = torch.stack(masked_loss)
 
-        loss = None
+        total_loss = None
         for gr_i_idx in range(len(groups)):
-            gr_i = groups[gr_i_idx]
             if self.adv_group_data[0] == "global":
-                # the loss works to optimize loss towards -1, the global loss is however positive
-                loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs()
+                if groups[gr_i_idx] != self.adv_group_data[1]:
+                    # the loss works to optimize loss towards -1, the global loss is however positive
+                    loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs()
+                    total_loss = loss if total_loss is None else total_loss + loss
             else:
+                gr_i = groups[gr_i_idx]
                 for gr_j_idx in range(gr_i_idx + 1, len(groups)):
                     l_val = masked_loss[gr_i_idx]
                     r_val = masked_loss[gr_j_idx]
@@ -197,11 +199,9 @@ class DPLoss(FairLoss):
                             l_val = l_val.detach()
                         else:
                             r_val = r_val.detach()
-
-                    if loss is None:
-                        loss = (l_val - r_val).abs()
-                    else:
-                        loss += (l_val - r_val).abs()
+                    
+                    loss = (l_val - r_val).abs()
+                    total_loss = loss if total_loss is None else total_loss + loss
 
         return loss / max(int(gmpy2.comb(len(groups), 2)), 1)
 
