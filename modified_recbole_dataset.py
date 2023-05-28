@@ -670,12 +670,12 @@ class Dataset:
     def _filter_by_inter_num(self):
         """Filter by number of interaction.
 
-        The interval of the number of interactions can be set, and only users/items whose number 
+        The interval of the number of interactions can be set, and only users/items whose number
         of interactions is in the specified interval can be retained.
         See :doc:`../user_guide/data/data_args` for detail arg setting.
 
         Note:
-            Lower bound of the interval is also called k-core filtering, which means this method 
+            Lower bound of the interval is also called k-core filtering, which means this method
             will filter loops until all the users and items has at least k interactions.
         """
         if self.uid_field is None or self.iid_field is None:
@@ -735,7 +735,7 @@ class Dataset:
             field (str): field name of user_id or item_id.
             feat (pandas.DataFrame): interaction feature.
             inter_num (Counter): interaction number counter.
-            inter_interval (list, optional): the allowed interval(s) of the number of interactions. 
+            inter_interval (list, optional): the allowed interval(s) of the number of interactions.
                                               Defaults to ``None``.
 
         Returns:

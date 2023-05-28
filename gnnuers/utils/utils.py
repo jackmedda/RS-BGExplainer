@@ -77,7 +77,7 @@ def old_exp_col_index(col):
 
 def wandb_init(config, policies=None, **kwargs):
     config = config.final_config_dict if not isinstance(config, dict) else config
-    
+
     tags = None
     policies = config.get("explainer_policies", policies)
     if policies is not None:
@@ -122,7 +122,7 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
                 for subarg in subargs[:-1]:
                     conf = conf[subarg]
                 arg = subargs[-1]
-            
+
             if conf[arg] is None:
                 try:
                     new_val = float(val)
@@ -214,14 +214,14 @@ def get_dataloader_with_perturbed_edges(pert_edges, config, dataset, train_data,
     train_dataset = get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
     valid_dataset = get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
     test_dataset = get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
-    
+
     built_datasets = [train_dataset, valid_dataset, test_dataset]
     train_sampler, valid_sampler, test_sampler = create_samplers(config, dataset, built_datasets)
-    
+
     train_data = get_dataloader(config, 'train')(config, train_dataset, train_sampler, shuffle=False)
     valid_data = get_dataloader(config, 'evaluation')(config, valid_dataset, valid_sampler, shuffle=False)
     test_data = get_dataloader(config, 'evaluation')(config, test_dataset, test_sampler, shuffle=False)
-    
+
     return train_data, valid_data, test_data
 
 def get_best_exp_early_stopping(exps, config_dict):
@@ -263,14 +263,14 @@ def prepare_batched_data(input_data, data, item_data=None):
 
     if hasattr(data, "uid2history_item"):
         history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
-        
+
         if len(input_data) > 1:
             history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
             history_i = torch.cat(list(history_item))
         else:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
-            
+
         history_index = (history_u, history_i)
     else:
         history_index = None

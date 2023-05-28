@@ -111,11 +111,11 @@ for the experiment and a file _all_users.pkl_.
 
 _all_users.pkl_ file contains a list of lists where each inner list has 13 values, relative
 to the explanations generated at a certain epoch:
-1) the user IDS 
+1) the user IDS
 2) the __rec__ topk recommendation lists of the non-perturbed model, where __rec__
 identifies the set on which these lists are generated, e.g. validation, test
 3) the __test__ topk recommendation lists of the non-perturbed model
-4) the __rec__ topk recommendation lists of the perturbed model 
+4) the __rec__ topk recommendation lists of the perturbed model
 5) the __test__ topk recommendation lists of the perturbed model
 6) the distance between __rec__ topk lists of the non-perturbed and perturbed model,
 with the distance measured as damerau levenshtain distance as default

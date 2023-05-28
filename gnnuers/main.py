@@ -18,19 +18,19 @@ import gnnuers.utils as utils
 
 def training(_model, _config, saved=True, model_file=None):
     logger = logging.getLogger()
-    
+
     if model_file is not None:
         _config, _model, _dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file)
     else:
         # dataset filtering
         _dataset = create_dataset(_config)
-        
+
         # dataset splitting
         train_data, valid_data, test_data = data_preparation(_config, _dataset)
 
         # model loading and initialization
         _model = get_model(_model)(_config, train_data.dataset).to(_config['device'])
-    
+
         logger.info(_config)
         logger.info(_dataset)
         logger.info(_model)
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     unk_args[::2] = map(lambda s: s.replace('-', ''), unk_args[::2])
     unk_args = dict(zip(unk_args[::2], unk_args[1::2]))
     print("Unknown args", unk_args)
-    
+
     if args.hyper_optimize and not args.verbose:
         from tqdm import tqdm
         from functools import partialmethod

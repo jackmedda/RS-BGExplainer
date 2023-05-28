@@ -28,11 +28,11 @@ def get_adj_matrix(interaction_matrix,
     return adj, edge_subset
 
 
-def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor, edge_additions=False):
+def edges_filter_nodes(edges: torch.LongTensor, nodes: torch.LongTensor):
     try:
         adj_filter = torch.isin(edges, nodes).any(dim=0)
     except AttributeError:
-        if edge_additions:
+        if edges.shape[0] == 1:
             adj_filter = torch.from_numpy(isin_backcomp(edges, nodes))
         else:
             adj_filter = torch.from_numpy(isin_backcomp(edges[0], nodes) | isin_backcomp(edges[1], nodes))

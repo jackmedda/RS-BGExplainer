@@ -19,8 +19,8 @@ class LRScaler(object):
     def restore(self):
         for pg_idx, pg in enumerate(self.optimizer.param_groups):
             pg['lr'] = self.orig_lr[pg_idx]
-            
-            
+
+
 def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):
     kws = {"pred": pred} if pred is not None else {}
     return utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kws)
@@ -35,7 +35,7 @@ def get_fair_metric_value(fair_metric,
     }
     if fair_metric not in func_map:
         raise NotImplementedError(f'fair_metric `{fair_metric}` is not implemented.')
-    
+
     return func_map[fair_metric](*args, **kwargs)
 
 
@@ -56,7 +56,7 @@ def _compute_explainer_DP_across_random_samples(pref_data,
     fair_metric_value, _ = eval_utils.compute_DP_across_random_samples(
         pref_data, sens_attr, 'Demo Group', dset_name, eval_metric, iterations=iterations, batch_size=batch_size
     )
-    
+
     return fair_metric_value[:, -1].mean()
 
 
@@ -67,5 +67,5 @@ def _compute_explainer_DP(pref_data,
     gr_results = []
     for gr_mask in pref_data.groupby('Demo Group').groups.values():
         gr_results.append(pref_data.loc[gr_mask, eval_metric].mean())
-    
+
     return eval_utils.compute_DP(*gr_results)

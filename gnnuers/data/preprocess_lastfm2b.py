@@ -14,12 +14,12 @@ if __name__ == "__main__":
     parser.add_argument('--chunksize', default=50_000_000)
     parser.add_argument('--min_interactions', default=1_000)
     parser.add_argument('--overwrite', action="store_true")
-    
+
     args = parser.parse_args()
-    
+
     le_size = 2_014_164_872
     lc_size = 519_293_333
-    
+
     pp_users_filepath = os.path.join(args.folderpath, 'preprocessed_lastfm2b_users.tsv')
     if args.overwrite or not os.path.exists(pp_users_filepath):
         users_df = pd.read_csv(os.path.join(args.folderpath, 'users.tsv'), sep='\t', on_bad_lines='warn')
@@ -31,7 +31,7 @@ if __name__ == "__main__":
         users_df.to_csv(pp_users_filepath, sep='\t', index=None)
     else:
         users_df = pd.read_csv(pp_users_filepath, sep='\t')
-    
+
     tracks_albums_filepath = os.path.join(args.folderpath, 'tracks_albums_df.tsv')
     if args.overwrite or not os.path.exists(tracks_albums_filepath):
         tracks_df = pd.read_csv(
@@ -99,14 +99,14 @@ if __name__ == "__main__":
         del tr_alb_df['artist_id']
 
         tr_alb_df = tr_alb_df[~tr_alb_df.track_id.isin(bad_tracks)]
-        
+
         tr_alb_df.to_csv(tracks_albums_filepath, sep='\t', index=None)
     else:
         tr_alb_df = pd.read_csv(tracks_albums_filepath, sep='\t')
-    
+
     track_artist_map = dict(tr_alb_df[['track_id', 'artist_name']].values)
     del tr_alb_df
-    
+
     ua_df_filepath = os.path.join(args.folderpath, 'user_artist_df.tsv')
     if args.overwrite or not os.path.exists(ua_df_filepath):
         user_artist_count = []
@@ -130,15 +130,15 @@ if __name__ == "__main__":
         # import pdb; pdb.set_trace()
         ua_df = pd.concat(user_artist_count, ignore_index=True)
         ua_df = ua_df.groupby(['user_id', 'artist_name']).sum().reset_index()
-        
+
         ua_df.to_csv(ua_df_filepath, sep='\t', index=None)
     else:
         ua_df = pd.read_csv(ua_df_filepath, sep='\t')
-    
+
     # only users with gender and age
     ua_df = ua_df[ua_df.user_id.isin(users_df.user_id)]
     ua_df_idx = ua_df.set_index(['user_id', 'artist_name'])
-    
+
     ua_last_timestamp_path = os.path.join(args.folderpath, 'user_artist_last_timestamp.npy')
     if args.overwrite or not os.path.exists(ua_last_timestamp_df_path):
         unique_ua_pos = dict(zip(ua_df_idx.index.tolist(), np.arange(len(ua_df_idx))))
@@ -167,13 +167,13 @@ if __name__ == "__main__":
         np.save(ua_last_timestamp_path, ua_last_timestamp)
     else:
         ua_last_timestamp = np.load(ua_last_timestamp_path)
-        
+
     ua_df_idx['timestamp'] = ua_last_timestamp
     ua_df_idx.to_csv(os.path.join(args.folderpath, 'preprocessed_lastfm2b_inter.tsv'), sep='\t')
-    
+
     ua_df_1000 = ua_df_idx.reset_index().groupby('user_id').filter(lambda x: len(x) >= args.min_interactions)
     ua_df_idx.to_csv(os.path.join(args.folderpath, 'preprocessed_lastfm2b_inter_1000.tsv'), sep='\t', index=None)
-    
+
     ua_df_idx.to_csv(os.path.join(args.folderpath, 'preprocessed_lastfm2b_users_1000.tsv'), sep='\t', index=None)
     users_df = users_df[users_df.user_id.isin(ua_df_idx.user_id.unique())]
     users_df.to_csv(os.path.join(args.folderpath, 'preprocessed_lastfm2b_users_1000.tsv'), sep='\t', index=None)

@@ -114,7 +114,6 @@ class FairLoss(torch.nn.modules.loss._Loss):
 
     def __init__(self,
                  sensitive_attribute: str,
-                 user_feat,
                  loss: Type[RankingLoss] = NDCGApproxLoss,
                  size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
         super(FairLoss, self).__init__(size_average, reduce, reduction)
@@ -127,6 +126,9 @@ class FairLoss(torch.nn.modules.loss._Loss):
             **kwargs
         )
         self.sensitive_attribute = sensitive_attribute
+        self.user_feat = None
+
+    def update_user_feat(self, user_feat):
         self.user_feat = user_feat
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -136,14 +138,11 @@ class FairLoss(torch.nn.modules.loss._Loss):
 class DPLoss(FairLoss):
     def __init__(self,
                  sensitive_attribute: str,
-                 user_feat,
                  loss: Type[RankingLoss] = NDCGApproxLoss,
                  adv_group_data: Tuple[str, int, float] = None,
-                 previous_loss_value: Dict[str, np.ndarray] = None,
                  size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
         super(DPLoss, self).__init__(
             sensitive_attribute,
-            user_feat,
             loss=loss,
             size_average=size_average,
             reduce=reduce,
@@ -153,9 +152,15 @@ class DPLoss(FairLoss):
         )
 
         self.adv_group_data = adv_group_data
-        self.previous_loss_value = previous_loss_value
+        self.previous_loss_value = None
+
+    def update_previous_loss_value(self, prev_loss_value):
+        self.previous_loss_value = prev_loss_value
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if self.user_feat is None:
+            raise AttributeError('each forward call should be preceded by a call of `update_user_feat`')
+
         groups = self.user_feat[self.sensitive_attribute].unique().numpy()
         masks = []
         for gr in groups:
@@ -199,9 +204,11 @@ class DPLoss(FairLoss):
                             l_val = l_val.detach()
                         else:
                             r_val = r_val.detach()
-                    
+
                     loss = (l_val - r_val).abs()
                     total_loss = loss if total_loss is None else total_loss + loss
+
+        self.update_user_feat(None)
 
         return loss / max(int(gmpy2.comb(len(groups), 2)), 1)
 

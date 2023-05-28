@@ -100,7 +100,7 @@ if not os.path.exists(stats_path):
 else:
     df = pd.read_csv(stats_path, index_col=0)
 
-    
+
 def dict_mapper(x):
     if isinstance(x, str):
         if 'Gender' in x or 'Age' in x:

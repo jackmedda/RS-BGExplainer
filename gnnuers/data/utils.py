@@ -179,8 +179,8 @@ def copy_dataset(datasets_path, orig_dset_name, dset_new_name):
                     os.path.join(dirname, filename),
                     os.path.join(dirname, f"{dset_new_name}.{data_type}")
                 )
-                
-                
+
+
 def add_token(df, user_df, args):
     for _df in [df, user_df]:
         new_cols = []
@@ -190,7 +190,7 @@ def add_token(df, user_df, args):
                 suffix = ':float'
             new_cols.append(col + suffix)
         _df.columns = new_cols
-    
+
     args.user_field += ':token'
     args.item_field += ':token'
     args.time_field += ':float'

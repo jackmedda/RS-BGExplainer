@@ -389,7 +389,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
     metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
     cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric',
             'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
-    
+
     test_df_data = []
     valid_df_data = []
     model_files = list(os.scandir(models_path))
@@ -400,7 +400,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
             else:
                 dset = meta
                 s_attr = None
-            
+
             try:
                 model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
             except IndexError:
@@ -410,30 +410,30 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                     raise ValueError(
                         f"in path `{models_path}` there is no file for model `{mod.upper()}` and dataset `{dset.upper()}`"
                     )
-                    
+
             checkpoint = torch.load(model_file)
             config = checkpoint['config']
-            
+
             exp_dset = dset.replace('-1000', '') if '-1000' in dset else dset
             explainer_config_file = os.path.join(os.path.dirname(models_path), 'config', f'{exp_dset}_explainer.yaml')
             with open(explainer_config_file, 'r', encoding='utf-8') as f:
                 exp_file_content = f.read()
                 explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
             config.final_config_dict.update(explain_config_dict)
-            
+
             config['data_path'] = config['data_path'].replace('\\', os.sep)
 
             dataset = create_dataset(config)
             uid_field = dataset.uid_field
             iid_field = dataset.iid_field
-            
+
             train_data, valid_data, test_data = data_preparation(config, dataset)
-            
+
             if isinstance(path_or_pert_edges, np.ndarray):
                 pert_edges = path_or_pert_edges
             else:
                 pert_edges = np.load(exp_path).T
-            
+
             if remap:
                 if callable(remap):
                     pert_edges = remap(pert_edges, dataset)
@@ -441,19 +441,19 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                     for i, field in enumerate([uid_field, iid_field]):
                         pert_edges[i] = [dataset.field2token_id[field][str(n)] for n in pert_edges[i]]
                     pert_edges[1] += dataset.user_num  # remap according to adjacency matrix
-            
+
             user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
-            
+
             pref_test_data = pref_data_from_checkpoint_and_perturbed_edges(
                 config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=False
             )
             test_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
-            
+
             pref_valid_data = pref_data_from_checkpoint_and_perturbed_edges(
                 config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=True
             )
             valid_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
-            
+
             config["metrics"] = metrics
             evaluator = Evaluator(config)
             for metric in metrics:
@@ -484,7 +484,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                         test_metric_data,
                         [policy_name] * len(user_data),
                     ])))
-                    
+
                     valid_df_data.extend(list(zip(*[
                         user_data.numpy(),
                         [-1] * len(user_data),
@@ -498,12 +498,12 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                         valid_metric_data,
                         [policy_name] * len(user_data),
                     ])))
-    
+
     return pd.DataFrame(test_df_data, columns=cols), pd.DataFrame(valid_df_data, columns=cols)
 
 
 def pref_data_from_checkpoint_and_perturbed_edges(config,
-                                                  checkpoint, 
+                                                  checkpoint,
                                                   pert_edges,
                                                   dataset,
                                                   train_data,
@@ -511,7 +511,7 @@ def pref_data_from_checkpoint_and_perturbed_edges(config,
                                                   test_data,
                                                   on_valid_data=False):
     train_dataset = utils.get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
-    
+
     train_data, valid_data, test_data = utils.get_dataloader_with_perturbed_edges(
         pert_edges, config, dataset, train_data, valid_data, test_data
     )
@@ -521,9 +521,6 @@ def pref_data_from_checkpoint_and_perturbed_edges(config,
     model.load_state_dict(checkpoint['state_dict'])
     model.load_other_parameter(checkpoint.get('other_parameter'))
     model.eval()
-    if hasattr(model, "restore_user_e"):
-        model.restore_user_e = None
-        model.restore_item_e = None
 
     user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
     batched_data = utils.prepare_batched_data(user_data, eval_data)
@@ -537,7 +534,7 @@ def pref_data_from_checkpoint_and_perturbed_edges(config,
     model_topk_idx = model_topk_idx.detach().cpu().numpy()
 
     pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
-    
+
     return pref_data
 
 
@@ -548,9 +545,7 @@ def pref_data_from_checkpoint(config,
     model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
     model.load_state_dict(checkpoint['state_dict'])
     model.load_other_parameter(checkpoint.get('other_parameter'))
-    if hasattr(model, "restore_user_e"):
-        model.restore_user_e = None
-        model.restore_item_e = None
+    model.eval()
 
     user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
     batched_data = utils.prepare_batched_data(user_data, eval_data)
@@ -563,7 +558,7 @@ def pref_data_from_checkpoint(config,
     model_topk_idx = model_topk_idx.detach().cpu().numpy()
 
     pref_data = pd.DataFrame(zip(user_data.numpy(), model_topk_idx), columns=['user_id', 'cf_topk_pred'])
-    
+
     return pref_data
 
 
@@ -571,10 +566,10 @@ def overlay_perturbed_edges(dataset, sens_attr, th=0.5, min_length=None):
     uid_field = dataset.uid_field
     user_feat = pd.DataFrame(dataset.user_feat.numpy())[[uid_field, sens_attr]]
     user_feat = user_feat[1:].reset_index(drop=True)  # removes padding user
-    
+
     hist_m, _, hist_len = map(torch.Tensor.numpy, dataset.history_item_matrix())
     min_length = np.median(hist_len) if min_length is None else min_length
-    
+
     vc = user_feat[sens_attr].value_counts()
     adv_g = vc.index[vc.argmax()]
     disadv_g = 1 if adv_g == 2 else 2
@@ -585,7 +580,7 @@ def overlay_perturbed_edges(dataset, sens_attr, th=0.5, min_length=None):
 
     sim_pairs = overlay_sim_pairs(hist_m, hist_len, adv_ids, disadv_ids, sens_attr, th=th)
     mask = np.array([
-        i for i in range(sim_pairs.shape[0]) 
+        i for i in range(sim_pairs.shape[0])
         if hist_len[sim_pairs[i, 0]] > hist_len[sim_pairs[i, 1]] and hist_len[sim_pairs[i, 1]] >= min_length
     ])
 
@@ -603,7 +598,7 @@ def overlay_sim_pairs(hist, hist_len, adv, disadv, s_attr, th=0.5):
     for i in tqdm.tqdm(range(adv.shape[0]), desc=f"Generating overlay del edges for `{s_attr}`"):
         _overlay_sim_pairs(sim_pairs, hist, hist_len, adv, disadv, i, th=th)
     return sim_pairs[sim_pairs[:, 0] > -1]
-    
+
 
 @numba.jit(nopython=True, parallel=True)
 def _overlay_sim_pairs(sim_pairs, hist, hist_len, adv, disadv, i, th=0.5):

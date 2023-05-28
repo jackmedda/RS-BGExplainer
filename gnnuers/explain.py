@@ -68,7 +68,7 @@ def get_base_exps_filepath(config,
                 elif hyper:
                     config_id = os.path.join(base_exps_file, str(path_c))
                     break
-                    
+
 
         base_exps_file = os.path.join(base_exps_file, str(config_id))
     else:
@@ -121,12 +121,12 @@ def explain(config, model, _rec_data, _full_dataset, _train_data, _valid_data, _
     topk = config['cf_topk']
     wandb_mode = kwargs.get("wandb_mode", "disabled")
     overwrite = kwargs.get("overwrite", False)
-    
+
     exps_filename = os.path.join(base_exps_file, f"cf_data.pkl")
     users_order_file = os.path.join(base_exps_file, f"users_order.pkl")
     model_preds_file = os.path.join(base_exps_file, f"model_rec_test_preds.pkl")
     checkpoint_path = os.path.join(base_exps_file, "checkpoint.pth")
-    
+
     if overwrite and os.path.exists(checkpoint_path):
         os.remove(checkpoint_path)
 
@@ -135,7 +135,7 @@ def explain(config, model, _rec_data, _full_dataset, _train_data, _valid_data, _
 
     with open(os.path.join(base_exps_file, "config.pkl"), 'wb') as config_file:
         pickle.dump(config, config_file)
-    
+
     utils.wandb_init(
         config,
         **wandb_env_data,
@@ -153,7 +153,7 @@ def explain(config, model, _rec_data, _full_dataset, _train_data, _valid_data, _
 
     explainer = explainer_model(config, _train_data.dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
     explainer.set_checkpoint_path(checkpoint_path)
-    exp, users_order, model_preds = explainer.explain(user_data, _full_dataset, _train_data, _valid_data, _test_data, epochs, topk=topk)    
+    exp, users_order, model_preds = explainer.explain(user_data, _full_dataset, _train_data, _valid_data, _test_data, epochs, topk=topk)
 
     with open(exps_filename, 'wb') as f:
         pickle.dump(exp, f)
@@ -163,8 +163,8 @@ def explain(config, model, _rec_data, _full_dataset, _train_data, _valid_data, _
         pickle.dump(model_preds, f)
 
     logging.getLogger().info(f"Saved explanations at path {base_exps_file}")
-    
-    
+
+
 def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_exps_file, **kwargs):
     """
     Function that explains, that is generates perturbed graphs.
@@ -188,13 +188,13 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         "dpbg": DPBG,
         "bab": BaB
     }.get(config["explainer"].lower(), DPBG)
-    
+
     exp_token = f"{model.__class__.__name__}_" + \
                 f"{config['dataset']}_" + \
                 f"{config['sensitive_attribute'].title()}_" + \
                 f"epochs{config['cf_epochs']}_" + \
                 f"exp{os.path.basename(base_exps_file)}"
-    
+
     def objective(trial):
         wandb_config_keys = [
             'cf_learning_rate',
@@ -202,26 +202,26 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
             'cf_beta',
             'dropout_prob'
         ]
-        
+
         config['cf_learning_rate'] = trial.suggest_int('cf_learning_rate', 1000, 10000)
-        
+
         config['user_batch_exp'] = trial.suggest_int(
             'user_batch_exp',
             min(int(_test_data.dataset.user_num * 0.1), 32),
             min(int(_test_data.dataset.user_num * 0.33), 220)
         )
-        
+
         config['cf_beta'] = trial.suggest_float('cf_beta', 0.01, 10.0)
-        
+
         # config['dropout_prob'] = trial.suggest_float('dropout_prob', 0, 0.3)
-        
+
         if config["explainer"].lower() == "bab":
             config['bab_min_del_edges'] = trial.suggest_int('bab_min_del_edges', 10, 200)
             config['bab_max_tries'] = trial.suggest_int('bab_max_tries', 50, 400)
             wandb_config_keys.extend(['bab_min_del_edges', 'bab_max_tries'])
-        
+
         wandb_config = {k: config[k] for k in wandb_config_keys}
-        
+
         run = utils.wandb_init(
             wandb_config,
             **wandb_env_data,
@@ -232,30 +232,30 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
             mode=wandb_mode,
             reinit=True
         )
-        
+
         explainer = explainer_model(config, _train_dataset, _rec_data, model, dist=config['cf_dist'], **kwargs)
         exp, model_preds = explainer.explain(user_data, _test_data, epochs, topk=topk)
         best_exp = utils.get_best_exp_early_stopping(exp, config)
-        
+
         fair_metric = best_exp[utils.exp_col_index('fair_metric')]
-        
+
         with run:
             run.log({'trial_fair_metric': fair_metric})
 
         return fair_metric
-    
+
     study_name = exp_token + '_' + str([k for k in config['explainer_policies'] if config['explainer_policies'][k]])
     storage_name = "sqlite:///{}.db".format(study_name)
     study = optuna.create_study(direction="minimize", study_name=study_name, storage=storage_name, load_if_exists=True)
-    
+
     n_trials = 100
     if study.trials:
         n_trials -= study.trials[-1].number  # it is not done automatically by optuna
         if n_trials <= 0:
             raise ValueError(f"Optuna study with storage name {study_name}.db is already completed")
-    
+
     study.optimize(objective, n_trials=n_trials)
-    
+
     summary = utils.wandb_init(
         config,
         **wandb_env_data,
@@ -264,7 +264,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         group=exp_token,
         mode=wandb_mode
     )
-    
+
     trials = study.trials
 
     print("Number of finished trials: ", len(trials))
@@ -277,7 +277,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         # Logging the parameters.
         for k, v in trial.params.items():
             summary.log({k: v}, step=step)
-    
+
     with open(os.path.join(base_exps_file, 'best_params.json'), 'w') as param_file:
         json.dump(dict(trial.params.items()), param_file, indent=4)
 
@@ -325,10 +325,10 @@ def execute_explanation(model_file,
         exp_content=exp_content,
         hyper=hyperoptimization
     )
-        
+
     if not os.path.exists(base_exps_filepath):
         os.makedirs(base_exps_filepath)
-    
+
     global wandb_env_data
     wandb_env_data = {}
     if os.path.exists("wandb_init.json"):
@@ -340,7 +340,7 @@ def execute_explanation(model_file,
         wandb_mode=wandb_mode,
         overwrite=overwrite
     )
-    
+
     if not hyperoptimization:
         explain(
             config,

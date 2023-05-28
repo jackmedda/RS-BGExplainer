@@ -43,14 +43,14 @@ def _igraph_distances(graph):
     import joblib
     vcount = graph.vcount()
     distances = np.zeros((vcount, vcount), dtype=int)
-    
+
     def _add_sp(i):
         distances[i] = [len(sp) for sp in graph.get_shortest_paths(i)]
-    
+
     joblib.Parallel(n_jobs=-1, require='sharedmem')(
         joblib.delayed(_add_sp)(i) for i in range(vcount)
     )
-        
+
     return distances
 
 
@@ -157,9 +157,9 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
             nodes = nodes[:(last + 1)]
 
     dist = np.array(graph.distances(source=nodes, target=nodes))
-        
-    reach = _get_reachability_per_node(dist) 
-        
+
+    reach = _get_reachability_per_node(dist)
+
     return dict(zip(nodes, reach))
 
 
@@ -167,7 +167,7 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
 def _get_reachability_per_node(dist):
     n_nodes = dist.shape[0]
     reach = np.zeros((n_nodes,), dtype=np.float32)
-    
+
     for i in numba.prange(n_nodes):
         n_dist = dist[i]
         mask = (~np.isinf(n_dist)) & (n_dist > 0)

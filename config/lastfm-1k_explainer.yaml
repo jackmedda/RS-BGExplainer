@@ -3,7 +3,7 @@ explainer: DPBG
 # optimizer for explainer
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 15000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 100000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -86,7 +86,7 @@ early_stopping:
     ignore: 0
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
-    delta: 0.0005  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
+    delta: 0.0001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
     check_value: 'fair_metric'  # ['fair_loss', 'fair_metric']
 
 previous_loss_value: False
@@ -103,6 +103,11 @@ explainer_policies:
     random_perturbation: False
     neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors
     users_zero_constraint: False  # only perturbs users with `eval_metric` <= `users_zero_constraint_value`
+    users_low_degree: False  # only perturbs users with an interaction history shorter than `users_low_degree_value`
+    items_preference_constraint: True  # only perturbs edges connected with items preferred by the perturbed group
 
 random_perturbation_p: 0.00071
 users_zero_constraint_value: 0
+users_low_degree_value: 40
+# Taken from the paper that defines "feminine" and "masculine" items, e.g. movies
+items_preference_constraint_ratio: 0.2  # it represent the ratio of items mostly preferred by the perturbed group

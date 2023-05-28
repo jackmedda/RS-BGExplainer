@@ -10,7 +10,7 @@ class PerturbedModel(object):
     RANDOM_POLICY = 'RANDOM'
 
     # missing attributes are obtained by multiple inheritance
-    def __init__(self, config, adv_group=None, filtered_users=None):
+    def __init__(self, config, adv_group=None, filtered_users=None, filtered_items=None):
         self.num_all = self.n_users + self.n_items
 
         self.n_hops = config['n_hops']
@@ -23,7 +23,7 @@ class PerturbedModel(object):
         self.pred_same = config['pred_same']
 
         self.edge_additions = config['edge_additions']
-        self.random_perturb_p = config['random_perturbation_p'] or 0.05
+        self.random_perturb_p = (config['random_perturbation_p'] or 0.05) if filtered_users is not None else None
         self.random_perturb_rs = np.random.RandomState(config['seed'] or 0)
         self.initialization = config['perturbation_initialization']
         self.P_symm = None
@@ -33,10 +33,9 @@ class PerturbedModel(object):
         self.D_indices = None
 
         self.adv_group = adv_group
-        self.filtered_users = filtered_users
-        if self.filtered_users is not None:
-            if isinstance(self.filtered_users, str):
-                if self.filtered_users != self.RANDOM_POLICY:
+        if filtered_users is not None:
+            if isinstance(filtered_users, str):
+                if filtered_users != self.RANDOM_POLICY:
                     raise AttributeError(f'filtered_users can be a tensor of user ids or `{self.RANDOM_POLICY}`')
         self.mask_filter = None
         self.mask_neighborhood = None
@@ -46,8 +45,7 @@ class PerturbedModel(object):
             self.num_all,
             self.n_users
         )
-
-        self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to(self.device)
+        self.Graph, self.sub_Graph = self.Graph.to(self.device), self.sub_Graph.to('cpu')
 
         self.force_removed_edges = None
         if self.edge_additions:
@@ -56,23 +54,24 @@ class PerturbedModel(object):
                 :, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)
             ]
             self.mask_sub_adj[1] += self.n_users
-            self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int)
+            self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device='cpu')
 
-            if self.filtered_users is not None:
-                user_filter = model_utils.edges_filter_nodes(
-                    self.mask_sub_adj[[0]], self.filtered_users, edge_additions=True
-                )
-                self.mask_sub_adj = self.mask_sub_adj[:, user_filter]
+            if filtered_users is not None:
+                filtered_nodes_mask = model_utils.edges_filter_nodes(self.mask_sub_adj[[0]], filtered_users)
+                if filtered_items is not None:
+                    filtered_nodes_mask &= model_utils.edges_filter_nodes(
+                        self.mask_sub_adj[[1]], filtered_items + self.n_users
+                    )
+
+                self.mask_sub_adj = self.mask_sub_adj[:, filtered_nodes_mask]
         else:
-            self.mask_sub_adj = self.sub_Graph.to('cpu')
-            self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool)
+            self.mask_sub_adj = self.sub_Graph
+            self.mask_filter = torch.ones(self.mask_sub_adj.shape[1], dtype=torch.bool, device='cpu')
 
-            if self.filtered_users is not None and self.filtered_users != self.RANDOM_POLICY:
-                user_filter = model_utils.edges_filter_nodes(self.mask_sub_adj, self.filtered_users)
-                self.mask_filter &= user_filter
-            self.mask_filter = self.mask_filter.to('cpu')
-            
-        self.mask_sub_adj = self.mask_sub_adj.to('cpu')
+            if filtered_users is not None and filtered_users != self.RANDOM_POLICY:
+                self.mask_filter &= model_utils.edges_filter_nodes(self.mask_sub_adj, filtered_users)
+            if filtered_items is not None:
+                self.mask_filter &= model_utils.edges_filter_nodes(self.mask_sub_adj, filtered_items + self.n_users)
 
         self._initialize_P_symm()
 
@@ -124,7 +123,7 @@ class PerturbedModel(object):
     @P_loss.setter
     def P_loss(self, value):
         self._P_loss = value
-        
+
     def cf_state_dict(self):
         return {
             'P_symm': self.state_dict()['P_symm'],
@@ -133,7 +132,7 @@ class PerturbedModel(object):
             'force_removed_edges': self.force_removed_edges.detach() if self.force_removed_edges is not None else None,
             'mask_neighborhood': self.mask_neighborhood.detach() if self.mask_neighborhood is not None else None
         }
-    
+
     def load_cf_state_dict(self, ckpt):
         state_dict = self.state_dict()
         state_dict.update({'P_symm': ckpt['P_symm']})
@@ -197,7 +196,7 @@ class PerturbedModel(object):
         dev = P_symm.device
         if not self.edge_additions:
             if self.force_removed_edges is not None:
-                if self.filtered_users == self.RANDOM_POLICY:
+                if self.random_perturb_p is not None:  # RANDOM_POLICY is active
                     if not pred:
                         p = self.random_perturb_p
                         random_perb = torch.FloatTensor(
@@ -209,22 +208,22 @@ class PerturbedModel(object):
                 else:
                     if self.mask_neighborhood is not None:
                         P_symm = self._update_P_symm_on_neighborhood(P_symm)
-                    
+
                     force_removed_edges = self.force_removed_edges.to(dev)
                     force_removed_edges = (torch.sigmoid(P_symm.detach()) >= 0.5).float() * force_removed_edges
                     # the minus 1 assigns (0 - 1) = -1 to the already removed edges, such that the sigmoid is < 0.5
                     P_symm = torch.where(force_removed_edges == 0, force_removed_edges - 1, P_symm)
                     self.force_removed_edges = force_removed_edges.to('cpu')
                     del force_removed_edges
-                    
+
             elif self.mask_neighborhood is not None:
                 P_symm = self._update_P_symm_on_neighborhood(P_symm)
-        
+
         if pred:
             P_hat_symm = (torch.sigmoid(P_symm) >= 0.5).float()
         else:
             P_hat_symm = torch.sigmoid(P_symm)
-        
+
         kws = dict(
             edge_deletions=not self.edge_additions,
             mask_filter = self.mask_filter.to(dev) if self.mask_filter is not None else None

@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', '--d', required=True)
     parser.add_argument('--map_attributes', '--ma', nargs='+', required=True)
     parser.add_argument('--user_filepath', '--uf', default='')
-    
+
     args = parser.parse_args()
 
     datasets_path = os.path.join(
