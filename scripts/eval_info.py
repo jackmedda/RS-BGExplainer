@@ -61,12 +61,28 @@ if __name__ == "__main__":
     delcons_pol = 'GNNUERS+CN'
     zerousers_pol = 'GNNUERS+ZN'
     lowdegree_pol = 'GNNUERS+LD'
+    furthestusers_pol = 'GNNUERS+F'
+    sparseusers_pol = 'GNNUERS+S'
     itemspref_pol = 'GNNUERS+IP'
+    nicheitems_pol = 'GNNUERS+NI'
+
     random_pol = 'RND-P'
     casper_pol = 'CASPER'
     no_pert_col = 'NP'  # NoPerturbation
 
-    policy_order_base = [mondel_pol, delcons_pol, zerousers_pol, lowdegree_pol, itemspref_pol, random_pol, casper_pol, no_pert_col]
+    policy_order_base = [
+        mondel_pol,
+        delcons_pol,
+        zerousers_pol,
+        lowdegree_pol,
+        furthestusers_pol,
+        sparseusers_pol,
+        itemspref_pol,
+        nicheitems_pol,
+        random_pol,
+        casper_pol,
+        no_pert_col
+    ]
 
     palette = dict(zip(policy_order_base, sns.color_palette("colorblind")))
     pol_hatches = dict(zip(policy_order_base, ['X', '.', '/', 'O', '*']))
@@ -77,7 +93,10 @@ if __name__ == "__main__":
         'random_perturbation': random_pol,  # Random Perturbation
         'users_zero_constraint': zerousers_pol,
         'users_low_degree': lowdegree_pol,
-        'items_preference_constraint': itemspref_pol
+        'users_furthest_constraint': furthestusers_pol,
+        'sparse_users_constraint': sparseusers_pol,
+        'items_preference_constraint': itemspref_pol,
+        'niche_items_constraint': nicheitems_pol
     }
 
     exp_policies = [policy_map[k] for k, v in config['explainer_policies'].items() if v and k in policy_map]
@@ -115,14 +134,15 @@ if __name__ == "__main__":
     best_exp = utils.get_best_exp_early_stopping(exps[0], config)
 
     pert_edges = best_exp[utils.exp_col_index('del_edges')]
+    import pdb; pdb.set_trace()
 
     def pert_edges_mapper(pe, rec_dset):
         return pe
 
     test_pert_df, valid_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
-        {(dset, s_attr): best_exp[utils.exp_col_index('del_edges')]},
+        {(dset, s_attr): pert_edges},
         models=[mod],
-        metrics=["NDCG", "Precision", "Recall", "Hit"],
+        metrics=["NDCG"],  # ["NDCG", "Precision", "Recall", "Hit"],
         models_path=os.path.join(os.path.dirname(sys.path[0]), 'saved'),
         on_bad_models='ignore',
         remap=pert_edges_mapper
@@ -134,11 +154,11 @@ if __name__ == "__main__":
         _pert_df['Quantile'] = _pert_df['Value'].map(lambda x: np.ceil(x * 10) / 10 if x > 0 else 0.1)
         _pert_df["Demo Group"] = _pert_df["Demo Group"].map(real_group_map[s_attr.lower()]).to_numpy()
 
-    print(f'{"*" * 15} Test {"*" * 15}')
-    print(f'{"*" * 15} {s_attr.title()} {"*" * 15}')
-    for dg, sa_dg_df in test_pert_df.groupby('Demo Group'):
-        print(f'\n{"*" * 15} {dg.title()} {"*" * 15}')
-        print(sa_dg_df.describe())
+    # print(f'{"*" * 15} Test {"*" * 15}')
+    # print(f'{"*" * 15} {s_attr.title()} {"*" * 15}')
+    # for dg, sa_dg_df in test_pert_df.groupby('Demo Group'):
+    #     print(f'\n{"*" * 15} {dg.title()} {"*" * 15}')
+    #     print(sa_dg_df.describe())
 
     dgs = list(real_group_map[s_attr.lower()].values())
     orig_pert_pval_dict = {}

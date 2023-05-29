@@ -99,6 +99,7 @@ class Explainer:
         self.previous_batch_LR_scaling = config['previous_batch_LR_scaling']
         self.lr_scaler = None
 
+        # Init policies
         self.increase_disparity = config['explainer_policies']['increase_disparity']
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
         self.random_perturbation = config['explainer_policies']['random_perturbation']
@@ -109,10 +110,14 @@ class Explainer:
         self.users_low_degree_value = config['users_low_degree_value'] or 20
         self.items_preference_constraint = config['explainer_policies']['items_preference_constraint']
         self.items_preference_constraint_ratio = config['items_preference_constraint_ratio'] or 0.3
+        self.users_furthest_constraint = config['explainer_policies']['users_furthest_constraint']
+        self.users_furthest_constraint_ratio = config['users_furthest_constraint_ratio'] or 0.3
+        self.sparse_users_constraint = config['explainer_policies']['sparse_users_constraint']
+        self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.3
+        self.niche_items_constraint = config['explainer_policies']['niche_items_constraint']
+        self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.3
 
         self.ckpt_loading_path = None
-
-        # wandb.watch(self.cf_model)
 
     @property
     def cf_model(self):
@@ -303,13 +308,14 @@ class Explainer:
                 'fair metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
             )
 
-        pert_sets = utils.get_dataloader_with_perturbed_edges(perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data)
+        pert_sets = utils.get_dataloader_with_perturbed_edges(
+            perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
+        )
         pert_sets_dict = dict(zip(['train', 'valid', 'test'], pert_sets))
 
         test_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict['test'])
         rec_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict[self.config['exp_rec_data']])
 
-        # TODO: it uses the model once the step method on the optimizer had already been called, then there could be new edges added
         test_cf_topk_pred_idx, test_cf_dist = self._get_no_grad_pred_model_score_data(
             test_scores_args, model_topk=test_model_topk, compute_dist=True
         )
@@ -340,16 +346,16 @@ class Explainer:
             pert_sets_dict['test'].dataset
         )
 
-        def pert_edges_mapper(pe, rec_dset):
-            return pe
+#         def pert_edges_mapper(pe, rec_dset):
+#             return pe
 
-        test_pert_df, valid_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
-            {(self.dataset.dataset_name, self.sensitive_attribute): perturbed_edges},
-            models=[self.model.__class__.__name__],
-            metrics=[self.eval_metric],
-            models_path=os.path.join(os.getcwd(), 'saved'),
-            remap=pert_edges_mapper
-        )
+#         test_pert_df, valid_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
+#             {(self.dataset.dataset_name, self.sensitive_attribute): perturbed_edges},
+#             models=[self.model.__class__.__name__],
+#             metrics=[self.eval_metric],
+#             models_path=os.path.join(os.getcwd(), 'saved'),
+#             remap=pert_edges_mapper
+#         )
 
         new_example[utils.exp_col_index('fair_loss')] = epoch_fair_loss
         new_example[utils.exp_col_index('fair_metric')] = epoch_rec_fair_metric
@@ -512,6 +518,19 @@ class Explainer:
             filtered_users = filtered_users[
                 self.dataset.user_feat[self.sensitive_attribute][filtered_users] == self.adv_group
             ]
+
+            if self.users_furthest_constraint:
+                disadv_users = batched_data[
+                    self.dataset.user_feat[self.sensitive_attribute][batched_data] == self.disadv_group
+                ].numpy()
+
+                igg = eval_utils.get_bipartite_igraph(self.dataset, remove_first_row_col=True)
+                mean_dist = np.array(igg.distances(source=filtered_users, target=disadv_users)).mean(axis=1)
+                furthest_users = np.argsort(mean_dist)
+
+                filtered_users = filtered_users[
+                    furthest_users[-int(self.users_furthest_constraint_ratio * furthest_users.shape[0]):]
+                ]
         elif self.random_perturbation:
             # overwrites `increase_disparity` policy
             filtered_users = exp_models.PerturbedModel.RANDOM_POLICY
@@ -536,10 +555,10 @@ class Explainer:
             if filtered_users is None:
                 filtered_users = batched_data
 
-            _, _, hist_len = self.rec_data.dataset.history_item_matrix()
+            _, _, hist_len = self.dataset.history_item_matrix()
             hist_len = hist_len[filtered_users]
             if isinstance(self.users_low_degree_value, float):
-                mask = (hist_len / self.rec_data.dataset.item_num) <= self.users_low_degree_value
+                mask = (hist_len / self.dataset.item_num) <= self.users_low_degree_value
             elif isinstance(self.users_low_degree_value, int):
                 mask = hist_len <= self.users_low_degree_value
             else:
@@ -548,8 +567,27 @@ class Explainer:
                 )
             filtered_user = filtered_users[mask]
 
+        # sparse users are connected to low-degree items
+        if self.sparse_users_constraint and self.random_perturbation:
+            raise NotImplementedError(
+                'The policies `sparse_users_constraint` and `random_perturbation` cannot be both True'
+            )
+        elif self.sparse_users_constraint:
+            if filtered_users is None:
+                filtered_users = batched_data
+
+            sparsity_df = eval_utils.extract_graph_metrics_per_node(
+                self.dataset, remove_first_row_col=True, metrics=["Sparsity"]
+            )
+            sparsity = torch.from_numpy(
+                sparsity_df.set_index('Node').loc[filtered_users.numpy(), 'Sparsity'].to_numpy()
+            )
+
+            most_sparse = torch.argsort(sparsity)[-int(self.sparse_users_constraint_ratio * sparsity.shape[0]):]
+            filtered_users = filtered_users[most_sparse]
+
         if self.items_preference_constraint:
-            ihist_m, _, ihist_len = self.rec_data.dataset.history_user_matrix()
+            ihist_m, _, ihist_len = self.dataset.history_user_matrix()
 
             sens_map = self.dataset.user_feat[self.sensitive_attribute]
             n_adv = (sens_map == self.adv_group).sum() / (sens_map.shape[0] - 1)
@@ -560,6 +598,16 @@ class Explainer:
             adv_ratio = adv_ratio / n_adv
 
             filtered_items = torch.argsort(adv_ratio)[-int(self.items_preference_constraint_ratio * adv_ratio.shape[0]):]
+
+        if self.niche_items_constraint:
+            if filtered_items is None:
+                filtered_items = torch.arange(1, self.dataset.item_num)
+            _, _, ihist_len = self.dataset.history_user_matrix()
+            ihist_len = ihist_len[filtered_items]
+
+            filtered_items = filtered_items[
+                torch.argsort(ihist_len)[:int(self.niche_items_constraint_ratio * ihist_len.shape[0])]
+            ]
 
         return batched_data, filtered_users, filtered_items, (test_model_topk, test_scores_args, rec_model_topk, rec_scores_args)
 
@@ -755,6 +803,9 @@ class Explainer:
 
         if self.ckpt_loading_path is not None and os.path.exists(self.ckpt_loading_path):
             fair_losses, starting_epoch, best_cf_example = self._resume_checkpoint()
+            last_earlys_check_value = self.earlys.history.pop()
+            if self.earlys.check(last_earlys_check_value):
+                raise AttributeError("A checkpoint of a completed run cannot be resumed")
         else:
             starting_epoch = 0
             fair_losses = []

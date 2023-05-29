@@ -520,6 +520,9 @@ def pref_data_from_checkpoint_and_perturbed_edges(config,
     model = get_model(config['model'])(config, train_dataset).to(config['device'])
     model.load_state_dict(checkpoint['state_dict'])
     model.load_other_parameter(checkpoint.get('other_parameter'))
+    if hasattr(model, "restore_item_e"):
+        model.restore_item_e = None
+        model.restore_user_e = None
     model.eval()
 
     user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole

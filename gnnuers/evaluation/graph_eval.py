@@ -163,6 +163,15 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
     return dict(zip(nodes, reach))
 
 
+def get_reachability_source_target(graph, source, target):
+    dist = np.array(graph.distances(source=source, target=target))
+    import pdb; pdb.set_trace()
+
+    reach = _get_reachability_per_node(dist)
+
+    return dict(zip(nodes, reach))
+
+
 @numba.jit(nopython=True, parallel=True)
 def _get_reachability_per_node(dist):
     n_nodes = dist.shape[0]

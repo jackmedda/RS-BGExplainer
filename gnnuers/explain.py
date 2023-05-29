@@ -48,7 +48,12 @@ def get_base_exps_filepath(config,
     if os.path.exists(base_exps_file):
         if config_id == -1:
             paths_c_ids = sorted(filter(str.isdigit, os.listdir(base_exps_file)), key=int)
-            config_id = 1 if len(paths_c_ids) == 0 else str(int(max(paths_c_ids, key=int)) + 1)
+            if len(paths_c_ids) == 0:
+                config_id = 1
+            else:
+                int_paths_c_ids = list(map(int, paths_c_ids))
+                candidates = set(range(1, max(int_paths_c_ids) + 1)) - set(int_paths_c_ids)
+                config_id = str(min(candidates, default=max(int_paths_c_ids) + 1))
 
             for path_c in paths_c_ids:
                 config_path = os.path.join(base_exps_file, path_c, "config.pkl")

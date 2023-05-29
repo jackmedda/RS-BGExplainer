@@ -146,7 +146,8 @@ if __name__ == "__main__":
     ).reset_index()
     ecir_df[delta_col] = ecir_df.apply(lambda row: delta2sign(row, args.sensitive_attribute), axis=1)
     for mod, mod_df in ecir_df.groupby('Model'):
-        best_pol = mod_df[mod_df.Split == 'Valid'].sort_values(delta_col).iloc[0]['Policy']
+        best_pol_df = mod_df[(mod_df.Split == 'Valid') & (mod_df.Policy != 'Orig')]
+        best_pol = best_pol_df.set_index('Policy')[delta_col].abs().sort_values().index[0]
         mod_spl_df = mod_df.set_index(['Split', 'Policy'])
 
         before_delta = pval_symbol(mod_spl_df.loc[('Test', 'Orig'), 'pvalue']) + \
@@ -161,11 +162,19 @@ if __name__ == "__main__":
 
     ecir_plot_df = pd.DataFrame(ecir_plot_data, columns=['Model', 'Status', 'Value', 'Metric'])
     ecir_plot_df = ecir_plot_df.pivot(index='Model', columns=['Metric', 'Status'], values='Value')
+
     ecir_plot_df = ecir_plot_df.reindex(
-        models_order, level=0
+        models_order
     ).reindex(
         ['NDCG', delta_col], axis=1, level=0
     ).reindex(
         ['Before', 'After'], axis=1, level=1
     )
     print(ecir_plot_df)
+
+    with open(os.path.join(out_path, f'ecir_table_{"_".join(args.model)}.tex'), 'w') as f:
+        f.write(ecir_plot_df.to_latex(
+            column_format='lrrrr',
+            multicolumn_format='c',
+            escape=False
+        ).replace('*', '{\scriptsize *}').replace('^', '{\scriptsize \^{}}'))
