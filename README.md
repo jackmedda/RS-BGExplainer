@@ -38,7 +38,7 @@ cp modified_recbole_dataset.py /usr/local/lib/python3.9/dist-packages/recbole/da
 
 The same version contains a bug related to the NGCF model. A Dropout layer is instantiated inside
 the `forward` method, which makes the generation of new embeddings (after the perturbation) not reproducible
-even if `eval` is called on the model. To run our experiments the file _recbole/data/dataset/dataset.py_ should
+even if `eval` is called on the model. To run our experiments the file _recbole/model/general_recommender/ngcf.py_ should
 be replaced by the [modified_recbole_ngcf.py](modified_recbole_ngcf.py) file. In Linux:
 ```bash
 cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model/general_recommender/ngcf.py
