@@ -44,9 +44,7 @@ be replaced by the [modified_recbole_ngcf.py](modified_recbole_ngcf.py) file. In
 cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model/general_recommender/ngcf.py
 ```
 
-# Datasets
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8030711.svg)](https://doi.org/10.5281/zenodo.8030711)
+# Datasets [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8030711.svg)](https://doi.org/10.5281/zenodo.8030711)
 
 The datasets used in our datasets are MovieLens 1M, Last.FM 1K and
 can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.8030711).
@@ -122,6 +120,7 @@ python -m biga.main --run explain --model MODEL --dataset DATASET --config_file_
 ```
 where __MODEL__, __DATASET__, __TRAINING_CONFIG__ were already explained above.
 __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
+__MODEL_FILE__ is the path to the .pth model file saved by Recbole in the second step.
 
 # BiGA Output
 
