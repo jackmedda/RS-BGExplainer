@@ -1,10 +1,9 @@
 # BiGA: Explaining Unfairness in GNNs for Recommendation
 
-BiGA generates explanations in the form of user-item interactions that make
-a GNN-based recommender system favor a demographic group over another. \
-BiGA learns a perturbation vector that modifies the adjacency matrix representing
-the training network. The edges modified by the perturbation vector are the explanations
-genereated by the framework. \
+BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
+Studying the disparity in the recommendations utility across demographic groups, our method detects
+which graph edges should be added to the original data set to mitigate user unfairness on the evaluation data. \
+Thus, the added edges work as an explanation of the prior unfairness and of our mitigation procedure underlying process. \
 BiGA then needs to work on a slight extended version of a recommender system
 in order to include the perturbation vector. In our study we applied our framework on
 GCMC, LightGCN and NGCF, all provided in the [Recbole](https://github.com/RUCAIBox/RecBole)
@@ -37,10 +36,20 @@ be replaced by the [modified_recbole_dataset.py](modified_recbole_dataset.py) fi
 cp modified_recbole_dataset.py /usr/local/lib/python3.9/dist-packages/recbole/data/dataset/dataset.py
 ```
 
+The same version contains a bug related to the NGCF model. A Dropout layer is instantiated inside
+the `forward` method, which makes the generation of new embeddings (after the perturbation) not reproducible
+even if `eval` is called on the model. To run our experiments the file _recbole/data/dataset/dataset.py_ should
+be replaced by the [modified_recbole_ngcf.py](modified_recbole_ngcf.py) file. In Linux:
+```bash
+cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model/general_recommender/ngcf.py
+```
+
 # Datasets
 
-The datasets used in our datasets are MovieLens 1M, Last.FM 1K, Ta Feng, Insurance and
-can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.7602406).
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8030711.svg)](https://doi.org/10.5281/zenodo.8030711)
+
+The datasets used in our datasets are MovieLens 1M, Last.FM 1K and
+can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.8030711).
 They should be placed in a folder named _dataset_ in the project root folder,
 so next to the _config_ and _biga_ folders, e.g.:
 ```
@@ -58,10 +67,9 @@ The file [main.py](biga/main.py) is the entry point for every step to execute in
 
 BiGA scripts are based on similar Recbole config files that can be found in the
 [config](config) folder. For each dataset there is a config file for:
-- __training__: it is named after the dataset, e.g. _ml-1m.yaml_ for MovieLens-1M,
-_tafeng.yaml_ for Ta Feng
+- __training__: it is named after the dataset, e.g. _ml-1m.yaml_ for MovieLens-1M
 - __explaining__: the suffix __explainer_ is added to training config filename, e.g.
-_ml-1m_explainer.yaml_ for MovieLens 1M, _tafeng_explainer.yaml_ for Ta Feng
+_ml-1m_explainer.yaml_ for MovieLens 1M
 
 The __training__ config type parameters description can be found in the Recbole repository
 and website, except for this part:
@@ -76,12 +84,27 @@ where `LRS` (Load Ready Splits) is not a Recbole split type, but it is added in
 our _modified_recbole_dataset.py_ to support custom data splits.
 
 The description of each parameter in the __explaining__ config type can be found in the
-relative files. In particular, for the explainer_policies:
-- __force_removed_edges__: it should be always True to reproduce our results, it represents
-the policy that prevents the restore of a previously deleted edge, such that the edges
-deletions follow a monotonic trend
-- __group_deletion_constraint__: it is the Connected Nodes (CN) policy
-- __random_perturbation__: if True executes the baseline algorithm RND-P
+relative files. In particular, the following ones should not be modified:
+- edge_additions: True => edges are added, not removed
+- exp_rec_data: "valid" => the ground truth lables of the validation set are used to measure the approximated NDCG
+- __only_adv_group__: "global" => the perturbation process is optimized to perturb edges such that
+  the utility of the disadvantaged (advantaged) group gets closer to the advantaged (disadvantaged) group one.
+  In global mode the utility of the second group stays fixed and the algorithm only studies
+  the recommendations of the disadvantaged (advantaged) group
+- __perturb_adv_group__: False => the group to be perturbed is the disadvantaged one. Using
+  __only_adv_group__ = "global" the algorithm is optimized to boost the utility of the disadvantaged group
+  which is perturbed.
+
+for the explainer_policies:
+- __group_deletion_constraint__: leave it to True to reproduce our experiments. In reality,
+  it does not have effect in our experiments, since the algorithm only deals with one of the groups
+  when __only_adv_group__ = "global", hence the other group users have already been removed
+- __users_zero_constraint__: only perturbs users with `eval_metric` <= `users_zero_constraint_value` (ZN in the paper)
+- __users_low_degree__: only perturbs users with an interaction history shorter than `users_low_degree_value` (LD in the paper)
+- __users_furthest_constraint__: only perturbs edges connected to the furthest users (perturbed group) from the non perturbed group (F in the paper)
+- __sparse_users_constraint__: only perturbs edges connected to users connected with niche items (S in the paper)
+- __items_preference_constraint__: only perturbs edges connected to items preferred by the perturbed group (IP in the paper)
+- __niche_items_constraint__: only perturbs edges connected to niche items (not used because too similar with S, even though it alters the item set)
 
 ## 2. Train Recommender System
 
@@ -93,7 +116,7 @@ where __MODEL__ should be one of [GCMC, LightGCN, NGCF], __DATASET__ should matc
 of dataset, e.g. insurance, ml-1m, __TRAINING_CONFIG__ should be a config file of the
 __training__ type.
 
-## 3. Train BiGA explainer
+## 3. Train BiGA mitigation algorithm
 ```bash
 python -m biga.main --run explain --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml --explainer_config_file config/EXPLAINING_CONFIG.yaml --model_file saved/MODEL_FILE
 ```
@@ -103,38 +126,42 @@ __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
 # BiGA Output
 
 BiGA creates a folder
-_biga/experiments/dp_explanations/DATASET/MODEL/FairDP/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
+_biga/experiments/dp_explanations/DATASET/MODEL/dpbg/LOSS_TYPE/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
 where __SENSITIVE_ATTRIBUTE__ can be one of [gender, age], __EPOCHS__ is the number of
 epochs used to train BiGA, __CONF_ID__ is the configuration/run ID of the just run
 experiment. The folder contains the __EXPLAINING_CONFIG__ file in yaml and pkl format used
-for the experiment and a file _all_users.pkl_.
+for the experiment, a file _cf_data.pkl_ containing the information about the perturbed edges for each epoch,
+a file _model_rec_test_preds.pkl_ containing the original recommendations on the rec (perturbation) set and
+test set, a file _users_order_.pkl containing the users ids in the order _model_rec_test_preds.pkl_ are sorted,
+a file _checkpoint.pth_ containing data used to resume the training if stopped earlier.
 
-_all_users.pkl_ file contains a list of lists where each inner list has 13 values, relative
-to the explanations generated at a certain epoch:
-1) the user IDS
-2) the __rec__ topk recommendation lists of the non-perturbed model, where __rec__
-identifies the set on which these lists are generated, e.g. validation, test
-3) the __test__ topk recommendation lists of the non-perturbed model
-4) the __rec__ topk recommendation lists of the perturbed model
-5) the __test__ topk recommendation lists of the perturbed model
-6) the distance between __rec__ topk lists of the non-perturbed and perturbed model,
-with the distance measured as damerau levenshtain distance as default
-7) the distance between __test__ topk lists of the non-perturbed and perturbed model
-8) BiGA total loss
-9) BiGA distance loss
-10) BiGA fair loss
-11) the deleted edges in a 2xN array, where the first row contains the user ids,
-the second the item ids, such that each one of the N columns is a deleted edge
-12) epoch relative to the generated explanations
-13) BiGA fair loss measured on the topk lists of the non-perturbed graph
+_cf_data.pkl_ file contains a list of lists where each inner list has 5 values, relative
+to the perturbed edges at a certain epoch:
+1) BiGA total loss
+2) BiGA distance loss
+3) BiGA fair loss
+4) fairness measured with the __fair_metric__ (function operationalizing demographic parity, i.e. DP)
+5) the perturbed edges in a 2xN array, where the first row contains the user ids,
+the second the item ids, such that each one of the N columns is a perturbed edge
+6) epoch relative to the generated explanations
 
 # Plotting
 
-The script [plot_full_comparison.py](biga/plot_full_comparison.py) can be used to plot the
-results used in the paper, for two explaining runs, e.g. one with BiGA base (1) and one
-with BiGA+CP (2) we could run:
+The scripts inside the folder [scripts](scripts) can be used to plot the
+results used in the paper. They should be run from the root folder of this project.
+[eval_info.py](scripts/eval_info.py) can be used as follows:
 ```bash
-python -m biga.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL_FILE --explainer_config_files RUN_1_PATH/config.yaml RUN_2_PATH/config.yaml --utility_metrics [NDCG] --add_plot_table
+python scripts/eval_info.py --e biga/experiments/dp_explanations/DATASET/MODEL/dpbg/LOSS_TYPE/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID
+```
+where the argument --e stands for the path of a specific experiment.
+
+[merge_tables.py](scripts/merge_tables.py) leverages the MD files created by _eval_info.py_ and merges them to create the paper tables.
+
+```bash
+python scripts/merge_tables.py --d DATASET --m GCMC LightGCN NGCF --sa gender
 ```
 
-where RUN_1_PATH and RUN_2_PATH are the paths containing the BiGA output explanations.
+# RESULTS
+
+![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/7abed749-a602-4e48-87c5-e94079a6ad4e)
+
