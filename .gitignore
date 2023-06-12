@@ -128,5 +128,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# GNNUERS
-.gnnuers/dp_explanations/
+# BiGA
+biga/experiments
