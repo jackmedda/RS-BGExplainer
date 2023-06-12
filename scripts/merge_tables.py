@@ -1,4 +1,5 @@
 import os
+import re
 import pickle
 import argparse
 
@@ -8,13 +9,18 @@ import pandas as pd
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', '--d', required=True)
-    parser.add_argument('--model', '--m', nargs='+', required=True)
+    parser.add_argument('--model', '--m', nargs='+', default=None)
     parser.add_argument('--sensitive_attribute', '--sa', required=True)
     parser.add_argument('--cid99', help='Considers explanations with cid 99-100-101', action='store_true')
+    parser.add_argument('--exclude', '--ex', nargs='+', help='Exclude certaing config ids', default=None)
 
     args = parser.parse_args()
+    args.model = args.model or ["GCMC", "LightGCN", "NGCF"]
     args.dataset = args.dataset.lower()
     args.sensitive_attribute = args.sensitive_attribute.lower()
+    args.exclude = args.exclude or []
+    if not args.cid99:
+        args.exclude.extend(['99', '100', '101'])
     print(args)
 
     out_path = os.path.join(os.getcwd(), 'scripts', 'merged_plots', args.dataset, args.sensitive_attribute)
@@ -29,6 +35,9 @@ if __name__ == "__main__":
 
         return ''
 
+    def hl(val):
+        return "\hl{" + val + "}"
+
     delta_col = "$\Delta$NDCG"
     final_df = []
     orig_pert_pval_dicts = {}
@@ -37,7 +46,7 @@ if __name__ == "__main__":
             os.getcwd(), 'scripts', 'plots', args.dataset, mod, args.sensitive_attribute
         )
         for fold in os.scandir(plots_path):
-            if not args.cid99 and any(c in fold.name for c in ['99', '100', '101']):
+            if args.exclude is not None and any(c in fold.name for c in args.exclude):
                 continue
 
             df = pd.read_csv(os.path.join(fold, 'DP_barplot.md'), sep='|', skiprows=[1], usecols=list(range(1, 8)))
@@ -53,13 +62,9 @@ if __name__ == "__main__":
     final_df = pd.concat(final_df, ignore_index=True).drop_duplicates(subset=['Split', 'Policy', 'Model'])
 
     pol_order = ['Orig'] + sorted(filter(lambda x: x != 'Orig', final_df.Policy.unique().tolist()))
-    pol_map = {x: x.replace('_GNNUERS', '') for x in pol_order}
-    pol_order = list(pol_map.values())
 
     metric_order = ['NDCG', delta_col] + (['M', 'F'] if args.sensitive_attribute == 'gender' else ['Y', 'O'])
     models_order = ['GCMC', 'LightGCN', 'NGCF']
-
-    final_df['Policy'] = final_df['Policy'].map(pol_map)
 
     melt_df = final_df.melt(['Model', 'Split', 'Policy', 'pvalue'], var_name='Metric', value_name='Value')
 
@@ -108,8 +113,11 @@ if __name__ == "__main__":
     pivot_df = pivot_df.applymap('{:.4f}'.format)
     pivot_df.to_markdown(os.path.join(out_path, f'delta_{"_".join(args.model)}.md'))
 
+    rq3_df = pivot_df.astype(float).copy(deep=True)
+
     for m in pivot_df.index.get_level_values(0).unique():
         m_df = pivot_df.loc[m]
+
         highlight_pols = m_df.loc[
             (m_df[(delta_col, 'Valid')] < m_df.loc['Orig', (delta_col, 'Valid')]) &
             (m_df[(delta_col, 'Test')] < m_df.loc['Orig', (delta_col, 'Test')])
@@ -117,6 +125,7 @@ if __name__ == "__main__":
         for spl in ['Valid', 'Test']:
             sorted_pols = pivot_df.loc[m, (delta_col, spl)].astype(float).sort_values()
             fairest_pols = sorted_pols[sorted_pols == sorted_pols.iloc[0]].index
+
             for f_pol in fairest_pols:
                 pivot_df.loc[
                     (m, f_pol), (delta_col, spl)
@@ -125,7 +134,7 @@ if __name__ == "__main__":
             for hl_pol in highlight_pols:
                 pivot_df.loc[
                     (m, hl_pol), (delta_col, spl)
-                ] = "\hl{" + pivot_df.loc[(m, hl_pol), (delta_col, spl)] + "}"
+                ] = hl(pivot_df.loc[(m, hl_pol), (delta_col, spl)] )
 
     with open(os.path.join(out_path, f'delta_{"_".join(args.model)}.tex'), 'w') as f:
         f.write(pivot_df.to_latex(
@@ -135,10 +144,34 @@ if __name__ == "__main__":
             escape=False
         ))
 
+    rq3_table = []
+    for m in rq3_df.index.get_level_values(0).unique():
+        rq3_mdf = rq3_df.loc[m]
+        for pol in rq3_mdf.index.get_level_values(0).unique():
+            if pol == 'Orig':
+                continue
+            perc_change = ((rq3_mdf.loc[pol, (delta_col, 'Valid')] / rq3_mdf.loc['Orig', (delta_col, 'Valid')]) - 1)
+            _pol = pol.replace('CN+', '') if pol != 'CN' else 'B'
+            rq3_table.append([m, _pol, f"{perc_change * 100:.1f}\%"])
+
+    rq3_df = pd.DataFrame(rq3_table, columns=["Model", "Policy", "Change"])
+    rq3_df["SA"] = args.sensitive_attribute
+    rq3_df["Dataset"] = args.dataset
+    rq3_df = rq3_df.pivot(index="Policy", columns=["Dataset", "Model", "SA"], values="Change")
+    rq3_df.to_csv(os.path.join(out_path, f'rq3_perc_change_{"_".join(args.model)}.csv'))
+    with open(os.path.join(out_path, f'rq3_perc_change_{"_".join(args.model)}.tex'), 'w') as f:
+        f.write(rq3_df.to_latex(
+            column_format='lrrr',
+            multicolumn_format='c',
+            multirow=True,
+            escape=False
+        ))
+
     def delta2sign(row, sa):
         dg = ['M', 'F'] if sa == 'gender' else ['Y', 'O']
         return row[delta_col] * (-1 if row[dg[0]] < row[dg[1]] else 1)
 
+    rq1_table = []
     ecir_plot_data = []
     ecir_df = melt_df.copy()
     ecir_df = ecir_df.pivot(
@@ -160,6 +193,61 @@ if __name__ == "__main__":
         ecir_plot_data.append([mod, 'After', f"{mod_spl_df.loc[('Test', best_pol), 'NDCG']:.3f}", 'NDCG'])
         ecir_plot_data.append([mod, 'After', after_delta, delta_col])
 
+        rq1_sorted_pols = best_pol_df.set_index('Policy')[delta_col].abs().sort_values()
+        rq1_fairest_pols = rq1_sorted_pols[rq1_sorted_pols == rq1_sorted_pols.iloc[0]].index
+        rq1_fpols = list(rq1_fairest_pols[rq1_fairest_pols != 'Orig'])
+        rq1_mdf = mod_df.pivot(index=['Model', 'Policy'], columns=['Split'], values=delta_col)
+
+        hl_pols_mdf = rq1_mdf.abs()
+        highlight_pols = hl_pols_mdf.loc[
+            (hl_pols_mdf['Valid'] < hl_pols_mdf.loc[(mod, 'Orig'), 'Valid']) &
+            (hl_pols_mdf['Test'] < hl_pols_mdf.loc[(mod, 'Orig'), 'Test'])
+        ].index
+        # for idx in highlight_pols:
+        #     rq1_mdf.loc[idx, 'Valid'] = hl(f"{rq1_mdf.loc[idx, 'Valid']:.4f}")
+        #     rq1_mdf.loc[idx, 'Test'] = hl(f"{rq1_mdf.loc[idx, 'Test']:.4f}")
+
+        def upd_rq1_vals(row_idx, col_idx):
+            value = pval_symbol(mod_spl_df.loc[(col_idx.name, row_idx.name[1]), 'pvalue']) + f"{abs(row_idx.item()):.4f}"
+            return hl(value) if row_idx.name in highlight_pols else value
+
+        rq1_table.append(
+            rq1_mdf.reindex(['Valid', 'Test'], axis=1).loc[[(mod, p) for p in ['Orig'] + rq1_fpols]].apply(
+                lambda col_s: col_s.to_frame().apply(
+                    lambda row_s: upd_rq1_vals(row_s, col_s),
+                    axis=1
+                ), axis=0
+            )
+        )
+
+    with open(os.path.join(out_path, f'delta_{"_".join(args.model)}.tex'), 'w') as f:
+        f.write(pivot_df.to_latex(
+            column_format='llrr',
+            multicolumn_format='c',
+            multirow=True,
+            escape=False
+        ))
+
+    rq1_df = pd.concat(rq1_table)
+    rq1_df_idx = rq1_df.index.to_frame()
+    rq1_df_idx.insert(1, "SA", "G" if args.sensitive_attribute.lower() == "gender" else "A")
+    rq1_df.index = pd.MultiIndex.from_frame(rq1_df_idx)
+    rq1_df.index = rq1_df.index.map(
+        lambda x: (
+            f"\rotatebox[origin=c]{{90}}{{{x[0]}}}",
+            f"\rotatebox[origin=c]{{90}}{{{x[1]}}}",
+            x[2].replace('CN+', '') if x[2] != 'CN' else 'B'
+        )
+    )
+
+    with open(os.path.join(out_path, f'rq1_delta_{"_".join(args.model)}.tex'), 'w') as f:
+        f.write(rq1_df.to_latex(
+            column_format='lllrr',
+            multicolumn_format='c',
+            multirow=True,
+            escape=False
+        ).replace(' *', ' {\scriptsize *}').replace('^', '{\scriptsize \^{}}'))
+
     ecir_plot_df = pd.DataFrame(ecir_plot_data, columns=['Model', 'Status', 'Value', 'Metric'])
     ecir_plot_df = ecir_plot_df.pivot(index='Model', columns=['Metric', 'Status'], values='Value')
 
@@ -178,3 +266,33 @@ if __name__ == "__main__":
             multicolumn_format='c',
             escape=False
         ).replace('*', '{\scriptsize *}').replace('^', '{\scriptsize \^{}}'))
+
+    merged_plots_path = os.path.join(os.getcwd(), 'scripts', 'merged_plots')
+    rq3_csvs = []
+    for d, subd, files in os.walk(merged_plots_path):
+        if 'rq3_perc_change_GCMC_LightGCN_NGCF.csv' in files:
+            rq3_csvs.append(pd.read_csv(os.path.join(d, 'rq3_perc_change_GCMC_LightGCN_NGCF.csv'), index_col=[0], header=[0,1,2]))
+
+    if len(rq3_csvs) == 4:
+        dsets_order = ['ml-1m', 'lastfm-1k']
+        sa_order = ['gender', 'age']
+        pol_order = ['B', 'ZN', 'LD', 'S', 'F', 'IP', 'ZN+IP', 'LD+IP', 'S+IP', 'F+IP']
+        rq3_final_df = pd.concat(rq3_csvs, axis=1)
+        rq3_final_df = rq3_final_df.reindex(
+            dsets_order, axis=1, level=0
+        ).reindex(
+            models_order, axis=1, level=1
+        ).reindex(
+            sa_order, axis=1, level=2
+        ).reindex(
+            pol_order, axis=0
+        )
+
+        rq3_final_df = rq3_final_df.applymap(lambda x: hl(x) if '-' in x else x)
+
+        with open(os.path.join(merged_plots_path, f'rq3_final_perc_change_{"_".join(models_order)}.tex'), 'w') as f:
+            f.write(rq3_final_df.to_latex(
+                column_format='lrrrrrrrrrrrr',
+                multicolumn_format='c',
+                escape=False
+            ))

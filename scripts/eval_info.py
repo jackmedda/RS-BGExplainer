@@ -57,17 +57,16 @@ if __name__ == "__main__":
         os.path.join(args.exp_path, 'config.yaml')
     )
 
-    mondel_pol = 'GNNUERS'
-    delcons_pol = 'GNNUERS+CN'
-    zerousers_pol = 'GNNUERS+ZN'
-    lowdegree_pol = 'GNNUERS+LD'
-    furthestusers_pol = 'GNNUERS+F'
-    sparseusers_pol = 'GNNUERS+S'
-    itemspref_pol = 'GNNUERS+IP'
-    nicheitems_pol = 'GNNUERS+NI'
+    mondel_pol = ''
+    delcons_pol = 'CN'  # used by all the augmentation experiments (meaningless if only disadvantaged users are used)
+    zerousers_pol = 'ZN'
+    lowdegree_pol = 'LD'
+    furthestusers_pol = 'F'
+    sparseusers_pol = 'S'
+    itemspref_pol = 'IP'
+    nicheitems_pol = 'NI'  # not used because too similar with sparseusers_pol
 
     random_pol = 'RND-P'
-    casper_pol = 'CASPER'
     no_pert_col = 'NP'  # NoPerturbation
 
     policy_order_base = [
@@ -80,7 +79,6 @@ if __name__ == "__main__":
         itemspref_pol,
         nicheitems_pol,
         random_pol,
-        casper_pol,
         no_pert_col
     ]
 
@@ -88,9 +86,9 @@ if __name__ == "__main__":
     pol_hatches = dict(zip(policy_order_base, ['X', '.', '/', 'O', '*']))
 
     policy_map = {
-        'force_removed_edges': mondel_pol,  # Monotonic Deletions
-        'group_deletion_constraint': delcons_pol,  # Deletion Constraint
-        'random_perturbation': random_pol,  # Random Perturbation
+        'force_removed_edges': mondel_pol,
+        'group_deletion_constraint': delcons_pol,
+        'random_perturbation': random_pol,
         'users_zero_constraint': zerousers_pol,
         'users_low_degree': lowdegree_pol,
         'users_furthest_constraint': furthestusers_pol,
@@ -100,7 +98,7 @@ if __name__ == "__main__":
     }
 
     exp_policies = [policy_map[k] for k, v in config['explainer_policies'].items() if v and k in policy_map]
-    curr_policy = '_'.join(exp_policies)
+    curr_policy = '+'.join(exp_policies)
     if int(cid) == 99:
         curr_policy = "L-" + curr_policy
     if int(cid) == 100:
@@ -134,7 +132,6 @@ if __name__ == "__main__":
     best_exp = utils.get_best_exp_early_stopping(exps[0], config)
 
     pert_edges = best_exp[utils.exp_col_index('del_edges')]
-    import pdb; pdb.set_trace()
 
     def pert_edges_mapper(pe, rec_dset):
         return pe
@@ -217,7 +214,7 @@ if __name__ == "__main__":
     plot_df = pd.DataFrame(
         zip(
             np.concatenate([dp_samples[:, -1], orig_dp_samples[:, -1]]),
-            ['GNNUERS'] * args.iterations + ['Orig'] * args.iterations
+            ['Perturbed'] * args.iterations + ['Orig'] * args.iterations
         ),
         columns=['NDCG DP', 'Policy']
     )
@@ -228,7 +225,7 @@ if __name__ == "__main__":
     fig.savefig(os.path.join(plots_path, f'DP_across_samples.png'), bbox_inches="tight", pad_inches=0, dpi=200)
 
     fig, axs = plt.subplots(2, 1, figsize=(15, 12))
-    for i, (pref_df, pref_title) in enumerate(zip([test_pert_df, orig_pref_data], ['GNNUERS', 'Orig'])):
+    for i, (pref_df, pref_title) in enumerate(zip([test_pert_df, orig_pref_data], ['Perturbed', 'Orig'])):
         sns.boxplot(x='Quantile', y='Value', data=pref_df, hue='Demo Group', ax=axs[i])
         axs[i].set_title(pref_title)
     fig.tight_layout()
@@ -238,7 +235,7 @@ if __name__ == "__main__":
     )
 
     perc_data = []
-    for pref_df, pref_title in zip([test_pert_df, orig_pref_data], ['GNNUERS', 'Orig']):
+    for pref_df, pref_title in zip([test_pert_df, orig_pref_data], ['Perturbed', 'Orig']):
         for quant, qnt_df in pref_df.groupby('Quantile'):
             perc_data.append([
                 'M',
@@ -255,7 +252,7 @@ if __name__ == "__main__":
 
     perc_df = pd.DataFrame(perc_data, columns=['Demo Group', 'Part', 'Value', 'Method'])
     fig, axs = plt.subplots(2, 1, figsize=(15, 12))
-    for i, method in enumerate(['GNNUERS', 'Orig']):
+    for i, method in enumerate(['Perturbed', 'Orig']):
         sns.barplot(x='Part', y='Value', data=perc_df[perc_df.Method == method], hue='Demo Group', ax=axs[i])
         axs[i].set_title(method)
     fig.tight_layout()
