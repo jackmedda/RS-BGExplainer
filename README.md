@@ -1,4 +1,4 @@
-# BiGA: Explaining Unfairness in GNNs for Recommendation
+# BiGA: Bi-partite Graph Augmenter for unfairness mitigation in recommendation
 
 BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
 Studying the disparity in the recommendations utility across demographic groups, our method detects
