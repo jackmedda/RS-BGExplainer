@@ -4,7 +4,7 @@ import argparse
 
 import pandas as pd
 
-from gnnuers.utils import copytree
+from biga.utils import copytree
 
 
 def map_multi2binary(df, field, label):

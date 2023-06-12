@@ -22,8 +22,8 @@ import matplotlib.patheffects as mpl_path_eff
 import sklearn.feature_selection as sk_feats
 from recbole.evaluator import Evaluator
 
-import gnnuers.utils as utils
-import gnnuers.evaluation as eval_utils
+import biga.utils as utils
+import biga.evaluation as eval_utils
 
 
 # %%

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from recbole.utils import set_color
 
-import gnnuers.evaluation as eval_utils
+import biga.evaluation as eval_utils
 
 from .base import Explainer
 

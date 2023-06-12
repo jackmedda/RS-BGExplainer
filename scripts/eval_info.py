@@ -14,8 +14,8 @@ from recbole.evaluator import Evaluator
 from recbole.data import create_dataset
 
 sys.path.append(os.path.dirname(sys.path[0]))
-import gnnuers.utils as utils
-import gnnuers.evaluation as eval_utils
+import biga.utils as utils
+import biga.evaluation as eval_utils
 
 
 if __name__ == "__main__":
