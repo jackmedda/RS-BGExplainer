@@ -1,14 +1,14 @@
-# GNNUERS: Explaining Unfairness in GNNs for Recommendation
+# BiGA: Explaining Unfairness in GNNs for Recommendation
 
-GNNUERS generates explanations in the form of user-item interactions that make
+BiGA generates explanations in the form of user-item interactions that make
 a GNN-based recommender system favor a demographic group over another. \
-GNNUERS learns a perturbation vector that modifies the adjacency matrix representing
+BiGA learns a perturbation vector that modifies the adjacency matrix representing
 the training network. The edges modified by the perturbation vector are the explanations
 genereated by the framework. \
-GNNUERS then needs to work on a slight extended version of a recommender system
+BiGA then needs to work on a slight extended version of a recommender system
 in order to include the perturbation vector. In our study we applied our framework on
 GCMC, LightGCN and NGCF, all provided in the [Recbole](https://github.com/RUCAIBox/RecBole)
-library, from which GNNUERS depend on for the data handling, the training and evaluation.
+library, from which BiGA depend on for the data handling, the training and evaluation.
 Instead, the provided models are independent of the Recbole library.
 
 # Requirements
@@ -56,7 +56,7 @@ The file [main.py](biga/main.py) is the entry point for every step to execute in
 
 ## 1. Configuration
 
-GNNUERS scripts are based on similar Recbole config files that can be found in the
+BiGA scripts are based on similar Recbole config files that can be found in the
 [config](config) folder. For each dataset there is a config file for:
 - __training__: it is named after the dataset, e.g. _ml-1m.yaml_ for MovieLens-1M,
 _tafeng.yaml_ for Ta Feng
@@ -93,19 +93,19 @@ where __MODEL__ should be one of [GCMC, LightGCN, NGCF], __DATASET__ should matc
 of dataset, e.g. insurance, ml-1m, __TRAINING_CONFIG__ should be a config file of the
 __training__ type.
 
-## 3. Train GNNUERS explainer
+## 3. Train BiGA explainer
 ```bash
 python -m biga.main --run explain --model MODEL --dataset DATASET --config_file_list config/TRAINING_CONFIG.yaml --explainer_config_file config/EXPLAINING_CONFIG.yaml --model_file saved/MODEL_FILE
 ```
 where __MODEL__, __DATASET__, __TRAINING_CONFIG__ were already explained above.
 __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
 
-# GNNUERS Output
+# BiGA Output
 
-GNNUERS creates a folder
+BiGA creates a folder
 _biga/experiments/dp_explanations/DATASET/MODEL/FairDP/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
 where __SENSITIVE_ATTRIBUTE__ can be one of [gender, age], __EPOCHS__ is the number of
-epochs used to train GNNUERS, __CONF_ID__ is the configuration/run ID of the just run
+epochs used to train BiGA, __CONF_ID__ is the configuration/run ID of the just run
 experiment. The folder contains the __EXPLAINING_CONFIG__ file in yaml and pkl format used
 for the experiment and a file _all_users.pkl_.
 
@@ -120,21 +120,21 @@ identifies the set on which these lists are generated, e.g. validation, test
 6) the distance between __rec__ topk lists of the non-perturbed and perturbed model,
 with the distance measured as damerau levenshtain distance as default
 7) the distance between __test__ topk lists of the non-perturbed and perturbed model
-8) GNNUERS total loss
-9) GNNUERS distance loss
-10) GNNUERS fair loss
+8) BiGA total loss
+9) BiGA distance loss
+10) BiGA fair loss
 11) the deleted edges in a 2xN array, where the first row contains the user ids,
 the second the item ids, such that each one of the N columns is a deleted edge
 12) epoch relative to the generated explanations
-13) GNNUERS fair loss measured on the topk lists of the non-perturbed graph
+13) BiGA fair loss measured on the topk lists of the non-perturbed graph
 
 # Plotting
 
 The script [plot_full_comparison.py](biga/plot_full_comparison.py) can be used to plot the
-results used in the paper, for two explaining runs, e.g. one with GNNUERS base (1) and one
-with GNNUERS+CP (2) we could run:
+results used in the paper, for two explaining runs, e.g. one with BiGA base (1) and one
+with BiGA+CP (2) we could run:
 ```bash
 python -m biga.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL_FILE --explainer_config_files RUN_1_PATH/config.yaml RUN_2_PATH/config.yaml --utility_metrics [NDCG] --add_plot_table
 ```
 
-where RUN_1_PATH and RUN_2_PATH are the paths containing the GNNUERS output explanations.
+where RUN_1_PATH and RUN_2_PATH are the paths containing the BiGA output explanations.
