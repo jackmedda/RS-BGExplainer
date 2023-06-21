@@ -107,15 +107,15 @@ class Explainer:
         self.users_zero_constraint = config['explainer_policies']['users_zero_constraint']
         self.users_zero_constraint_value = config['users_zero_constraint_value'] or 0
         self.users_low_degree = config['explainer_policies']['users_low_degree']
-        self.users_low_degree_value = config['users_low_degree_value'] or 20
+        self.users_low_degree_value = config['users_low_degree_value'] or 0.2
         self.items_preference_constraint = config['explainer_policies']['items_preference_constraint']
-        self.items_preference_constraint_ratio = config['items_preference_constraint_ratio'] or 0.3
+        self.items_preference_constraint_ratio = config['items_preference_constraint_ratio'] or 0.35
         self.users_furthest_constraint = config['explainer_policies']['users_furthest_constraint']
-        self.users_furthest_constraint_ratio = config['users_furthest_constraint_ratio'] or 0.3
+        self.users_furthest_constraint_ratio = config['users_furthest_constraint_ratio'] or 0.2
         self.sparse_users_constraint = config['explainer_policies']['sparse_users_constraint']
-        self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.3
+        self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.2
         self.niche_items_constraint = config['explainer_policies']['niche_items_constraint']
-        self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.3
+        self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.35
 
         self.ckpt_loading_path = None
 
@@ -557,15 +557,9 @@ class Explainer:
 
             _, _, hist_len = self.dataset.history_item_matrix()
             hist_len = hist_len[filtered_users]
-            if isinstance(self.users_low_degree_value, float):
-                mask = (hist_len / self.dataset.item_num) <= self.users_low_degree_value
-            elif isinstance(self.users_low_degree_value, int):
-                mask = hist_len <= self.users_low_degree_value
-            else:
-                raise NotImplementedError(
-                    f'`users_low_degree_value` cannot be of type `{type(self.users_low_degree_value)}`'
-                )
-            filtered_user = filtered_users[mask]
+
+            lowest_degree = torch.argsort(hist_len)[:int(self.users_low_degree_value * hist_len.shape[0])]
+            filtered_users = filtered_users[lowest_degree]
 
         # sparse users are connected to low-degree items
         if self.sparse_users_constraint and self.random_perturbation:
