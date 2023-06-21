@@ -111,7 +111,7 @@ explainer_policies:
 
 random_perturbation_p: 0.00071
 users_zero_constraint_value: 0
-users_low_degree_value: 40
+users_low_degree_value: 0.35
 users_furthest_constraint_ratio: 0.35  # it represent the ratio of the furthest users from the non perturbed group
 sparse_users_constraint_ratio: 0.35  # it represent the ratio of the users most connected with niche items
 items_preference_constraint_ratio: 0.2  # it represent the ratio of items mostly preferred by the perturbed group
