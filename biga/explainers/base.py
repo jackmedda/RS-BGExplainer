@@ -107,15 +107,15 @@ class Explainer:
         self.users_zero_constraint = config['explainer_policies']['users_zero_constraint']
         self.users_zero_constraint_value = config['users_zero_constraint_value'] or 0
         self.users_low_degree = config['explainer_policies']['users_low_degree']
-        self.users_low_degree_value = config['users_low_degree_value'] or 0.2
+        self.users_low_degree_value = config['users_low_degree_value'] or 0.35
         self.items_preference_constraint = config['explainer_policies']['items_preference_constraint']
-        self.items_preference_constraint_ratio = config['items_preference_constraint_ratio'] or 0.35
+        self.items_preference_constraint_ratio = config['items_preference_constraint_ratio'] or 0.2
         self.users_furthest_constraint = config['explainer_policies']['users_furthest_constraint']
-        self.users_furthest_constraint_ratio = config['users_furthest_constraint_ratio'] or 0.2
+        self.users_furthest_constraint_ratio = config['users_furthest_constraint_ratio'] or 0.35
         self.sparse_users_constraint = config['explainer_policies']['sparse_users_constraint']
-        self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.2
+        self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.35
         self.niche_items_constraint = config['explainer_policies']['niche_items_constraint']
-        self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.35
+        self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.2
 
         self.ckpt_loading_path = None
 
