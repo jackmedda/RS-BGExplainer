@@ -9,7 +9,7 @@ import numpy as np
 class RankingLoss(torch.nn.modules.loss._Loss, metaclass=abc.ABCMeta):
     __constants__ = ['reduction']
 
-    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
+    def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, **kwargs) -> None:
         super(RankingLoss, self).__init__(size_average, reduce, reduction)
         self.temperature = temperature
 
@@ -19,7 +19,7 @@ class RankingLoss(torch.nn.modules.loss._Loss, metaclass=abc.ABCMeta):
 
 
 class TopKLoss(RankingLoss):
-    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
+    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.01) -> None:
         super(TopKLoss, self).__init__(
             size_average=size_average,
             reduce=reduce,
@@ -35,7 +35,11 @@ class TopKLoss(RankingLoss):
 class NDCGApproxLoss(TopKLoss):
     __MAX_TOPK_ITEMS__ = 10000
 
-    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
+    def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.01) -> None:
+        """
+        Lower values of `temperature` makes the loss more accurate in approximating NDCG
+        """
+
         super(NDCGApproxLoss, self).__init__(
             size_average=size_average,
             reduce=reduce,
@@ -115,7 +119,7 @@ class FairLoss(torch.nn.modules.loss._Loss):
     def __init__(self,
                  sensitive_attribute: str,
                  loss: Type[RankingLoss] = NDCGApproxLoss,
-                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
+                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, **kwargs) -> None:
         super(FairLoss, self).__init__(size_average, reduce, reduction)
 
         self.loss: RankingLoss = loss(
@@ -140,7 +144,7 @@ class DPLoss(FairLoss):
                  sensitive_attribute: str,
                  loss: Type[RankingLoss] = NDCGApproxLoss,
                  adv_group_data: Tuple[str, int, float] = None,
-                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
+                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, **kwargs) -> None:
         super(DPLoss, self).__init__(
             sensitive_attribute,
             loss=loss,

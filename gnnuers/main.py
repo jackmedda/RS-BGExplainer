@@ -108,6 +108,7 @@ if __name__ == "__main__":
     train_group.add_argument('--config_file_list', nargs='+', default=None)
     train_group.add_argument('--config_dict', default=None)
     parser.add_argument('--model_file', default=None)
+    explain_group.add_argument('--base_explainer_config_file', default=os.path.join("config", "base_explainer.yaml"))
     explain_group.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
     # explain_group.add_argument('--load', action='store_true')
     explain_group.add_argument('--explain_config_id', default=-1)
@@ -131,6 +132,7 @@ if __name__ == "__main__":
 
     args.wandb_online = {False: "offline", True: "online"}[args.wandb_online]
     explain_args = [
+        args.base_explainer_config_file,
         args.explainer_config_file,
         args.explain_config_id,
         args.verbose,

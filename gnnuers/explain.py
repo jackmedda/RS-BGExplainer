@@ -288,6 +288,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
 
 
 def execute_explanation(model_file,
+                        base_explainer_config_file,
                         explainer_config_file=os.path.join("config", "explainer.yaml"),
                         config_id=-1,
                         verbose=False,
@@ -295,12 +296,14 @@ def execute_explanation(model_file,
                         cmd_config_args=None,
                         hyperoptimization=False,
                         overwrite=False):
+    explainer_config, exp_content = utils.update_base_explainer(base_explainer_config_file, explainer_config_file, return_exp_content=True)
+
     # load trained model, config, dataset
     config, model, dataset, train_data, valid_data, test_data, exp_content = utils.load_data_and_model(
         model_file,
-        explainer_config_file,
+        explainer_config,
         cmd_config_args=cmd_config_args,
-        return_exp_content=True
+        exp_file_content=exp_content
     )
 
     # force these evaluation metrics to be ready to be computed
@@ -368,20 +371,3 @@ def execute_explanation(model_file,
             base_exps_filepath,
             **kwargs
         )
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_file', required=True)
-    parser.add_argument('--explainer_config_file', default=os.path.join("config", "explainer.yaml"))
-    parser.add_argument('--config_id', default=-1)
-    parser.add_argument('--verbose', action='store_true')
-
-    args = parser.parse_args()
-
-    print(args)
-
-    execute_explanation(args.model_file,
-                        explainer_config_file=args.explainer_config_file,
-                        config_id=args.config_id,
-                        verbose=args.verbose)

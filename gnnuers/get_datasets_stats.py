@@ -32,6 +32,8 @@ if os.sep not in args.saved_path:
     args.saved_path = os.path.join(script_path, os.pardir, args.saved_path)
 
 config_path = os.path.join(args.saved_path, os.pardir, 'config')
+base_conf_exp_name = 'base_explainer.yaml'
+yaml_loader = Config('GCMC', 'ml-1m').yaml_loader
 
 print(args)
 
@@ -54,16 +56,23 @@ if not os.path.exists(stats_path):
             dset_name = dset_name[::-1].split('_', maxsplit=1)[1].split('-', maxsplit=3)[-1][::-1]  # removes date
             if dset_name.lower() not in check_datasets:
                 config_files = os.listdir(config_path)
-                try:
-                    conf_idx = config_files.index(f"{dset_name.lower()}_explainer.yaml")
-                    conf_file = os.path.join(config_path, config_files[conf_idx])
-                except ValueError:
-                    conf_file = os.path.join(config_path, 'explainer.yaml')
+
+                exp_conf_name = f"{dset_name.lower()}_explainer.yaml"
+                if exp_conf_name in config_files:
+                    exp_conf_file = os.path.join(config_path, exp_conf_name)
+                else:
+                    print(f'Using the base config explainer file. \'{dset_name.lower()}\'_explainer.yaml not found')
+                    exp_conf_file = None
+
+                config_dict = utils.update_base_explainer(
+                    os.path.join(config_path, base_conf_exp_name),
+                    exp_conf_file
+                )
 
                 check_datasets.append(dset_name.lower())
                 config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(
                     os.path.join(args.saved_path, model_path),
-                    conf_file
+                    explainer_config=config_dict
                 )
 
                 user_feat = pd.DataFrame(dataset.user_feat.numpy()).iloc[1:]

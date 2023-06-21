@@ -14,9 +14,10 @@ import numba
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
-from recbole.data import create_dataset, data_preparation, create_samplers, get_dataloader
+from recbole.config import Config
 from recbole.utils import init_logger, get_model
 from recbole.data.interaction import Interaction
+from recbole.data import create_dataset, data_preparation, create_samplers, get_dataloader
 
 try:
     from torch_geometric.utils import k_hop_subgraph, subgraph
@@ -91,7 +92,7 @@ def wandb_init(config, policies=None, **kwargs):
     )
 
 
-def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=None, return_exp_content=False):
+def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None, exp_file_content=None):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -107,11 +108,16 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
     checkpoint = torch.load(model_file)
     config = checkpoint['config']
 
-    exp_file_content = None
-    if explainer_config_file is not None:
-        with open(explainer_config_file, 'r', encoding='utf-8') as f:
-            exp_file_content = f.read()
-            explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
+    if explainer_config is not None:
+        if isinstance(explainer_config, str):
+            with open(explainer_config, 'r', encoding='utf-8') as f:
+                exp_file_content = f.read()
+                explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
+        elif isinstance(explainer_config, dict):
+            explain_config_dict = explainer_config
+        else:
+            raise ValueError(f'explainer_config cannot be `{type(explain_config)}`. Only `str` and `dict` are supported')
+
         config.final_config_dict.update(explain_config_dict)
 
     if cmd_config_args is not None:
@@ -141,7 +147,7 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
                 except (ValueError, TypeError):
                     new_val = None
 
-            if new_val is not None:
+            if new_val is not None and exp_file_content is not None:
                 exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}\n", exp_file_content)
 
     config['data_path'] = config['data_path'].replace('\\', os.sep)
@@ -164,9 +170,22 @@ def load_data_and_model(model_file, explainer_config_file=None, cmd_config_args=
 
     logger.info(model)
 
-    ret = [config, model, dataset, train_data, valid_data, test_data]
-    ret = ret + [exp_file_content] if return_exp_content else ret
-    return tuple(ret)
+    return config, model, dataset, train_data, valid_data, test_data, exp_file_content
+
+
+def update_base_explainer(base_explainer_config_file, explainer_config_file=None, return_exp_content=False):
+    yaml_loader = Config('GCMC', 'ml-1m').yaml_loader  # random attributes just to retrieve the yaml_loader
+
+    with open(base_explainer_config_file, 'r', encoding='utf-8') as f:
+        config_dict = yaml.load(f.read(), Loader=yaml_loader)
+
+    if explainer_config_file is not None:
+        with open(explainer_config_file, 'r', encoding='utf-8') as f:
+            exp_content = f.read()
+            exp_config_dict = yaml.load(exp_content, Loader=yaml_loader)
+        config_dict.update(exp_config_dict)
+
+    return config_dict, exp_content if return_exp_content else config_dict
 
 
 def load_dp_exps_file(base_exps_file):
