@@ -145,3 +145,16 @@ python -m genius.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL
 ```
 
 where RUN_1_PATH and RUN_2_PATH are the paths containing the GENIUS-RS output explanations.
+
+# Best Params
+|          | Params           | INS    | LFM-1K | ML-1M | FENG   |
+|----------|------------------|--------|--------|-------|--------|
+| GCMC     | cf_beta          | 0.4371 | 0.68   | 5.766 | 0.5517 |
+| GCMC     | user_batch_exp   | 45     | 51     | 203   | 206    |
+| GCMC     | cf_learning_rate | 8609   | 4023   | 7310  | 2593   |
+| LightGCN | cf_beta          | 1.567  | 0.2265 | 5.766 | 0.5517 |
+| LightGCN | user_batch_exp   | 67     | 47     | 203   | 206    |
+| LightGCN | cf_learning_rate | 6968   | 7023   | 7310  | 2593   |
+| NGCF     | cf_beta          | 0.27   | 1.7    | 5.766 | 0.5517 |
+| NGCF     | user_batch_exp   | 58     | 53     | 203   | 206    |
+| NGCF     | cf_learning_rate | 1057   | 3544   | 7310  | 2593   |
