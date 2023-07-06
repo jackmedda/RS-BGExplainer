@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cbook as mpl_cbook
 import matplotlib.ticker as mpl_tick
 import matplotlib.patches as mpatches
+import matplotlib.offsetbox as mpl_offsetbox
 import matplotlib.patheffects as mpl_path_eff
 import sklearn.feature_selection as sk_feats
 from recbole.evaluator import Evaluator
@@ -27,19 +28,17 @@ import gnnuers.evaluation as eval_utils
 
 
 # %%
-def get_plots_path(datasets_names, model_names, old=False):
-    plots_path = os.path.join(
-        script_path,
-        os.pardir,
-        f'dp_plots' if old else 'new_dp_plots',
+def get_plots_path(base_path, datasets_names, model_names):
+    _plots_path = os.path.join(
+        base_path,
         datasets_names,
         model_names
     )
 
-    if not os.path.exists(plots_path):
-        os.makedirs(plots_path)
+    if not os.path.exists(_plots_path):
+        os.makedirs(_plots_path)
 
-    return plots_path
+    return _plots_path
 
 
 def gini(data):
@@ -276,8 +275,8 @@ def compute_graph_metrics_analysis_tables_data(_sens_gmdf,
                 #     ).pvalue
 
                 if "del_dist" in _gm_analysis_tables_data:
-                    quartiles = np.array_split(gm_dgdf.sort_values(gm), 20)
-                    gm_del_dist[gm_i] = [q['Del Edges Count'].sum() / de_count for q in quartiles]
+                    quantiles = np.array_split(gm_dgdf.sort_values(gm), 20)
+                    gm_del_dist[gm_i] = [q['Del Edges Count'].sum() / de_count for q in quantiles]
 
             if "mi" in _gm_analysis_tables_data:
                 for mi_i in range(_iterations):
@@ -342,8 +341,14 @@ def create_del_table_best_explanations_per_group(_metric_df):
                     tot_val[stat_status] = stat_status_val
                 else:
                     tot_val[stat_status] = (tot_val[stat_status].to_numpy() + stat_status_val.to_numpy()) / 2
-            s_attr_stat[stat_dg] = scipy.stats.ttest_rel(before_stat_val, after_stat_val)
-        s_attr_stat["Total"] = scipy.stats.ttest_rel(*tot_val.values())
+            try:
+                s_attr_stat[stat_dg] = scipy.stats.wilcoxon(before_stat_val, after_stat_val)
+            except ValueError:
+                s_attr_stat[stat_dg] = 1.0
+        try:
+            s_attr_stat["Total"] = scipy.stats.wilcoxon(*tot_val.values())
+        except ValueError:
+            s_attr_stat["Total"] = 1.0
         metr_stest[mdf_stat_cols] = s_attr_stat
 
     metr_df_pivot = metr_df_mean.reset_index().pivot(
@@ -434,8 +439,14 @@ def create_table_best_explanations_per_group(_metric_df):
                     tot_val[stat_status] = stat_status_val
                 else:
                     tot_val[stat_status] = (tot_val[stat_status].to_numpy() + stat_status_val.to_numpy()) / 2
-            s_attr_stat[stat_dg] = scipy.stats.ttest_rel(before_stat_val, after_stat_val)
-        s_attr_stat["Total"] = scipy.stats.ttest_rel(*tot_val.values())
+            try:
+                s_attr_stat[stat_dg] = scipy.stats.wilcoxon(before_stat_val, after_stat_val).pvalue
+            except ValueError:
+                s_attr_stat[stat_dg] = 1.0
+        try:
+            s_attr_stat["Total"] = scipy.stats.wilcoxon(*tot_val.values()).pvalue
+        except ValueError:
+            s_attr_stat["Total"] = 1.0
         metr_stest[mdf_stat_cols] = s_attr_stat
 
     metr_df_pivot = metr_df_mean.reset_index().pivot(
@@ -457,7 +468,7 @@ def create_table_best_explanations_per_group(_metric_df):
     def relative_change(row, l_attr, row_dg):
         v1, v2 = row.loc["After"].item(), row.loc["Before"].item()
         ch = v1 - v2
-        stat_pv = metr_stest[(*row.name, l_attr)][row_dg].pvalue
+        stat_pv = metr_stest[(*row.name, l_attr)][row_dg]
         stat_s = '*' if stat_pv < P_VALUE else '\hspace{3pt}'
         zeros = "04.1f" if ch >= 0 else "05.1f"
         return f'{v1:.2f}{stat_s} ({"+" if ch >= 0 else ""}{(ch / v2) * 100:{zeros}}%)'
@@ -619,13 +630,16 @@ def clean_quantile_ax(_fig, _ax, _model, iteration, max_iteration, bbox_to_ancho
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_files', nargs='+', required=True)
 parser.add_argument('--explainer_config_files', required=True, nargs='+', type=str)
+parser.add_argument('--base_explainer_config_file', default=os.path.join("config", "base_explainer.yaml"))
 parser.add_argument('--iterations', default=100, type=int)
+parser.add_argument('--plots_path', default=None)
 parser.add_argument('--overwrite_plot_data', '--opd', action="store_true")
 parser.add_argument('--overwrite_extracted_data', '--oed', action="store_true")
 parser.add_argument('--overwrite_graph_metrics', '--ogm', action="store_true")
 parser.add_argument('--overwrite_del_dp_plot_data', '--odppd', action="store_true")
 parser.add_argument('--overwrite_casper_explanations', '--oce', action="store_true")
 parser.add_argument('--overwrite_overlay_explanations', '--ooe', action="store_true")
+parser.add_argument('--overwrite_manip_data', '--omd', action="store_true")
 parser.add_argument('--utility_metrics', '--um', nargs='+', default=None)
 parser.add_argument('--add_plot_table', '--apt', action="store_true")
 parser.add_argument('--plot_only_graph_metrics', '--pogm', action="store_true")
@@ -644,14 +658,17 @@ assert len(args.model_files) == len(args.explainer_config_files), \
 args.graph_metrics_analysis_tables = args.graph_metrics_analysis_tables or ["mi", "wd", "kl", "dcor", "del_dist"]
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
-script_path = os.path.join(script_path, 'src') if 'src' not in script_path else script_path
+
+args.plots_path = args.plots_path or script_path
 
 print(args)
 
-mondel_pol = 'GNNUERS'
-delcons_pol = 'GNNUERS+CN'
+method_name = 'GENIUS-RS'
+mondel_pol = method_name  # + '+MD'
+delcons_pol = method_name + '+CN'
 random_pol = 'RND-P'
 casper_pol = 'CASPER'
+overlay_pol = 'OVERLAY'
 no_pert_col = "NP"  # NoPerturbation
 
 policy_order_base = [mondel_pol, delcons_pol, random_pol, casper_pol, no_pert_col]
@@ -727,8 +744,12 @@ for exp_config_file in args.explainer_config_files:
 unique_datasets, unique_models, unique_sens_attrs = \
     np.unique(datasets_list).tolist(), np.unique(models_list).tolist(), np.unique(sens_attrs).tolist()
 
+args.plots_path = os.path.join(
+    args.plots_path, 'dp_plots' if old_explanations else 'new_dp_plots'
+) if 'dp_plots' not in args.plots_path and 'new_dp_plots' not in args.plots_path else args.plots_path
+
 plots_path = os.path.join(
-    get_plots_path('_'.join(unique_datasets), '_'.join(unique_models), old=old_explanations),
+    get_plots_path(args.plots_path, '_'.join(unique_datasets), '_'.join(unique_models)),
     '_'.join(exp_epochs),
     '_'.join(config_ids),
     '_'.join(sens_attrs)
@@ -785,11 +806,13 @@ else:
     test_df_data, rec_df_data = [], []
     test_del_df_data, rec_del_df_data = [], []
     for model_file, exp_config_file in zip(args.model_files, args.explainer_config_files):
-        config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, exp_config_file)
+        explainer_config = utils.update_base_explainer(args.base_explainer_config_file, exp_config_file)
+        config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file, explainer_config)
 
         dataset_name = dataset.dataset_name
         model_name = model.__class__.__name__
         sens_attr, epochs, batch_exp = config['sensitive_attribute'], config['cf_epochs'], config['user_batch_exp']
+
         cf_topk = config['cf_topk']
         for p, pm in policy_map.items():
             if config['explainer_policies'].get(p, False):  # if next policies are true `policy` is overwritten
@@ -805,6 +828,9 @@ else:
         exp_epochs.append(epochs)
 
         edge_additions = config['edge_additions']
+        import pdb; pdb.set_trace()
+        if method_name == 'GENIUS-RS':
+            policy = policy + ("$^+$" if edge_additions else "$^-$")
         exp_rec_data = config['exp_rec_data']
         delete_adv_group = config['delete_adv_group']
         rec_data = locals()[f"{exp_rec_data}_data"]
@@ -849,7 +875,8 @@ else:
                     evaluator,
                     test_data.dataset,
                     config=config,
-                    additional_cols=additional_best_cols[:1]
+                    additional_cols=additional_best_cols[:1],
+                    exp_rec_data='test'
                 )
         else:
             best_test_exp_df, best_test_exp_result = None, None
@@ -869,7 +896,8 @@ else:
                 evaluator,
                 rec_data.dataset,
                 config=config,
-                additional_cols=additional_best_cols[1:]
+                additional_cols=additional_best_cols[1:],
+                exp_rec_data=exp_rec_data
             )
 
         test_uid = best_test_exp_df[model_dp_s]['user_id'].to_numpy() if best_test_exp_df is not None else None
@@ -894,7 +922,8 @@ else:
                     evaluator,
                     sens_attr,
                     rec=False,
-                    overwrite=args.overwrite_extracted_data
+                    overwrite=args.overwrite_extracted_data,
+                    exp_rec_data='test'
                 )
         else:
             all_exp_test_dfs, test_result_all_data = None, None
@@ -917,7 +946,8 @@ else:
                 evaluator,
                 sens_attr,
                 rec=True,
-                overwrite=args.overwrite_extracted_data
+                overwrite=args.overwrite_extracted_data,
+                exp_rec_data=exp_rec_data
             )
 
         for all_exp_data_name, all_exp_del_edges in zip(["test", exp_rec_data], [all_exp_test_dfs, all_exp_rec_dfs]):
@@ -1002,7 +1032,7 @@ else:
     with open(os.path.join(plots_path, 'datasets_train_inter_sizes.pkl'), 'wb') as f:
         pickle.dump(datasets_train_inter_sizes, f)
 
-base_all_plots_path = os.path.join(script_path, os.pardir, 'dp_plots' if old_explanations else 'new_dp_plots')
+base_all_plots_path = args.plots_path
 if os.path.exists(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl')):
     with open(os.path.join(base_all_plots_path, 'graph_metrics_dfs.pkl'), 'rb') as f:
         graph_metrics_dfs = pickle.load(f)
@@ -1021,21 +1051,28 @@ plt.rc('ytick', labelsize=BIGGER_SIZE)  # fontsize of the tick labels
 plt.rc('legend', fontsize=BIGGER_SIZE)  # legend fontsize
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
-gm_metrics_base = ['Degree', 'Density', 'Reachability']
+gm_metrics_base = ['Degree', 'Density', 'Reachability', 'UPI']
 gm_dep_order = np.array(gm_metrics_base)
 for _dataset in unique_datasets:
-    if _dataset not in graph_metrics_dfs or args.overwrite_graph_metrics:
-        graph_metrics_dfs[_dataset] = eval_utils.extract_graph_metrics_per_node(
-            train_datasets[_dataset],
-            remove_first_row_col=True,
-            metrics=gm_metrics_base  # "all"
-        )
+    graph_metrics_dfs[_dataset] = eval_utils.GraphMetricsExtractor(
+        train_datasets[_dataset],
+        graph_metrics_df=graph_metrics_dfs.get(_dataset, None) if not args.overwrite_graph_metrics else None,
+        upi_kwargs={'sensitive_attribute': unique_sens_attrs},
+        metrics=gm_metrics_base  # "all"
+    ).extract_graph_metrics_per_node()
 
-        last_user_id = train_datasets[_dataset].user_num - 2
-        graph_mdf = graph_metrics_dfs[_dataset].set_index('Node')
-        graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
-        graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
-        graph_metrics_dfs[_dataset] = graph_mdf.reset_index()
+    if any('UPI ' + sa.title() in graph_metrics_dfs[_dataset].columns for sa in unique_sens_attrs):
+        gm_dep_order = list(gm_dep_order[gm_dep_order != 'UPI'])
+        for col in graph_metrics_dfs[_dataset].columns:
+            if 'UPI' in col:
+                gm_dep_order.append(col)
+        gm_dep_order = np.array(gm_dep_order)
+
+    last_user_id = train_datasets[_dataset].user_num - 2
+    graph_mdf = graph_metrics_dfs[_dataset].set_index('Node')
+    graph_mdf.loc[:last_user_id, 'Node Type'] = 'User'
+    graph_mdf.loc[(last_user_id + 1):, 'Node Type'] = 'Item'
+    graph_metrics_dfs[_dataset] = graph_mdf.reset_index()
 
     pg = sns.PairGrid(graph_metrics_dfs[_dataset], hue='Node Type')
     pg.map_diag(sns.histplot)
@@ -1153,6 +1190,8 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         with open(os.path.join(plots_path, 'fairest_del_edges_conf.pkl'), 'rb') as f:
             fairest_del_edges_conf = pickle.load(f)
 
+    palette = {k: v for k, v in palette.items() if k in policy_order}
+
     _metr_del_df_gby = del_df.groupby("Metric")
 
     index_cols = ['Dataset', 'Model', 'Policy', 'Sens Attr', 'Epoch']
@@ -1170,7 +1209,6 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         plot_del_columns = ["Model", "Dataset", "Policy", "Epoch", "# Del Edges", "Sens Attr", y_col]
         del_data_columns_per_group = ["Model", "Dataset", "Policy", "Epoch", "# Del Edges", "Sens Attr", "Demo Group", metric.upper()]
 
-        palette = {k: v for k, v in palette.items() if k in policy_order}
         m_dset_del_gby = metric_del_df.groupby(["Model", "Dataset", "Sens Attr"])
 
         m_dset_attr_list = list(m_dset_del_gby.groups.keys())
@@ -1266,7 +1304,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
         metr_df_plot_table_gby = metric_del_df.groupby(index_cols)
 
-        hatches = ['//', 'o']
+        bxp_hatches = [v for k, v in pol_hatches.items() if k in policy_order]
         fig_bar2, axs_bar2 = plt.subplots(len(unique_sens_attrs), len(unique_datasets), squeeze=False, figsize=(10, 6))
         axs_bar2 = [axs_bar2] if not isinstance(axs_bar2, np.ndarray) else axs_bar2
         # table_bar_df.loc[table_bar_df["Status"] == "Before", "Policy"] = no_pert_col
@@ -1323,21 +1361,25 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         bxp_stats = [mpl_cbook.boxplot_stats(d_ptc)[0] for d_ptc in data_ptcs]
                         height = max([_bxps['whishi'] for _bxps in bxp_stats])
                         yerr = 0
-                        for (data1, ptc1), (data2, ptc2) in itertools.combinations(zip(data_ptcs, mod_ptcs), 2):
-                            tt_stat, tt_pv = scipy.stats.ttest_rel(data1, data2)
-                            if tt_pv < P_VALUE:
+                        combs = list(itertools.combinations(zip(data_ptcs, mod_ptcs), 2))
+                        for (data1, ptc1), (data2, ptc2) in combs:
+                            try:
+                                tt_stat, tt_pv = scipy.stats.wilcoxon(data1, data2)
+                            except ValueError:
+                                tt_pv = 1.0
+
+                            if tt_pv < (P_VALUE / len(combs)):  # bonferroni correction
                                 x, h = [], [height, height]
                                 for _ptc in [ptc1, ptc2]:
                                     x.append(np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]]))
                                 dh, barh = .06, .015
                                 ax_pol_t = utils.annotate_brackets(
-                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE
+                                    ax_pol_box, 0, 1, tt_pv, x, h, [yerr, yerr], dh, barh, fs=SMALL_SIZE, pval_th=0.001
                                 )
                                 # yerr is updated such that next brackets are drawn over others
                                 offset_norm = abs(height)
                                 yerr += dh * offset_norm + barh * offset_norm + offset_norm * SMALL_SIZE * 5e-4
 
-                        bxp_hatches = [v for k, v in pol_hatches.items() if k in policy_order]
                         for _ptc, _bxp, bxp_hatch in zip(mod_ptcs, bxp_stats, bxp_hatches):
                             x = np.mean([_ptc.get_path().vertices[0][0], _ptc.get_path().vertices[1][0]])
                             med = _bxp["med"]
@@ -1384,19 +1426,33 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                     # ax_box.set_title(dataset_map[dset], pad=30)
                     ax_box.set_xlabel("")
 
-                    if False:  # i == len(axs_pol_box) - 1 and dset == "ml-1m":
-                        pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
-                        fig_pol_box.legend(
-                            pol_box_handles, pol_box_labels, loc='lower center',
-                            ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.01]
-                        )
-                        box_handles, box_labels = ax_box.get_legend_handles_labels()
-                        fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
+                    pol_box_handles, pol_box_labels = ax_pol_box.get_legend_handles_labels()
+                    for handle, h in zip(pol_box_handles, bxp_hatches):
+                        handle.set_hatch(h)
+                    figlegend = plt.figure(figsize=(4, 1))
+                    figlegend.legend(
+                        pol_box_handles, pol_box_labels, loc='center',
+                        frameon=False, ncol=len(pol_box_labels), #prop={'size': 10}
+                    )
+                    figlegend.savefig(
+                        os.path.join(
+                            plots_path,
+                            f"{'_'.join(unique_datasets)}_{sens_attr}_legend.png"),
+                        bbox_inches='tight', pad_inches=0, dpi=250
+                    )
+                    plt.close(figlegend)
+
+                        # fig_pol_box.legend(
+                        #     pol_box_handles, pol_box_labels, loc='lower center',
+                        #     ncol=len(pol_box_labels), bbox_to_anchor=[0.5, 1.01]
+                        # )
+                        # box_handles, box_labels = ax_box.get_legend_handles_labels()
+                        # fig_box.legend(box_handles, box_labels, loc='upper center', ncol=len(box_labels))
                     ax_pol_box.get_legend().remove()
                     ax_box.get_legend().remove()
 
                     # if dset != 'insurance':
-                    ax_pol_box.tick_params('x', bottom=False, labelbottom=False)
+                    ax_pol_box.tick_params('x', bottom=False, labelbottom=True, pad=42)
 
             # create_fig_bar2_legend(fig_bar2, palette, hatches, s_attr_dgs, loc="upper left")
 
@@ -1452,6 +1508,237 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 
         plt.close("all")
 
+    def manip_DP(_df, _sa):
+        _sa_map = real_group_map[_s_attr.lower()]
+        gr1_mean = _df[_df['Demo Group'] == _sa_map['M']].Value.mean()
+        gr2_mean = _df[_df['Demo Group'] == _sa_map['F']].Value.mean()
+        return eval_utils.compute_DP(gr1_mean, gr2_mean)
+
+    fairest_del_edges_conf['ndcg'] = []
+    for metric in _metrics:
+        manip_df_data = []
+        dp_metric_name = metric.upper() + " DP"
+        metric_del_df = _metr_del_df_gby.get_group(metric)
+
+        m_dset_del_gby = metric_del_df.groupby(["Model", "Dataset", "Sens Attr"])
+        m_dset_attr_list = list(m_dset_del_gby.groups.keys())
+        if not os.path.exists(os.path.join(plots_path, f'{metric.lower()}_manip_df.csv')) \
+            or args.overwrite_manip_data:
+            for it, (_model, _dataset, _s_attr) in enumerate(m_dset_attr_list):
+                sub_del_df = m_dset_del_gby.get_group((_model, _dataset, _s_attr))
+                orig_dp = manip_DP(sub_del_df[sub_del_df.Policy == no_pert_col], _s_attr)
+
+                highest_fair_epoch = 0
+                for pol in unique_policies:
+                    if pol != no_pert_col:
+                        fair_sub_del_df = sub_del_df[sub_del_df.Policy == pol]
+                        if fair_sub_del_df.empty:
+                            continue
+
+                        fair_sub_del_df = fair_sub_del_df.groupby('Epoch').apply(
+                            lambda x: manip_DP(x, _s_attr)
+                        )
+                        pol_fairest_epoch = fair_sub_del_df.sort_values().index[0]
+
+                        fairest_del_edges_conf['ndcg'].append(
+                            (_dataset, _model, pol, _s_attr, pol_fairest_epoch)
+                        )
+
+                        highest_fair_epoch = max(highest_fair_epoch, pol_fairest_epoch)
+
+                    fairest_del_edges_conf['ndcg'].append(
+                        (_dataset, _model, no_pert_col, _s_attr, sub_del_df.loc[sub_del_df.Policy == no_pert_col, 'Epoch'].iloc[0])  # which epoch is irrelevant
+                    )
+
+                fairest_sub_del_df = sub_del_df[sub_del_df.Epoch <= max(highest_fair_epoch, 15)]
+
+                for _policy, fair_policy_df in fairest_sub_del_df.groupby("Policy"):
+                    manip_fair_pol_data = fair_policy_df.groupby('Epoch').apply(lambda e_df:
+                        pd.DataFrame({
+                            **{
+                                k: [e_df[k].iloc[0]] for k in [
+                                    "Dataset", "Model", "Sens Attr", "Policy", "Epoch", "# Del Edges"
+                                ]
+                            },
+                            metric.upper(): e_df.Value.mean(),
+                            dp_metric_name: [manip_DP(e_df, _s_attr)]
+                        })
+                    ).reset_index(drop=True)
+
+                    epoch0_idx = len(manip_fair_pol_data)
+                    manip_fair_pol_data.loc[epoch0_idx] = manip_fair_pol_data.iloc[0]
+                    manip_fair_pol_data.loc[epoch0_idx, "Epoch"] = 0
+                    manip_fair_pol_data.loc[epoch0_idx, dp_metric_name] = orig_dp
+
+                    if _policy == no_pert_col:
+                        if manip_fair_pol_data.Epoch.max() < highest_fair_epoch:
+                            last_row = manip_fair_pol_data.iloc[-1]
+                            for e in range(manip_fair_pol_data.Epoch.max() + 1, highest_fair_epoch + 1):
+                                manip_fair_pol_data.loc[e] = last_row
+
+                    manip_df_data.append(manip_fair_pol_data)
+
+            manip_df = pd.concat(manip_df_data, ignore_index=True)
+            manip_df.to_csv(os.path.join(plots_path, f'{metric.lower()}_manip_df.csv'), index=None)
+
+            metr_avg_df = manip_df.groupby(
+                ["Model", "Dataset", "Sens Attr", "Policy"]
+            ).apply(lambda x: pd.Series({metric: x.sort_values(dp_metric_name).iloc[0][metric]}))
+            metr_avg_df = metr_avg_df.reset_index().pivot(index=['Model', 'Sens Attr'], columns=['Dataset', 'Policy'])
+            metr_avg_df = metr_avg_df.round(2)
+
+            pols_order = sorted(manip_df.Policy.unique(), key=lambda x: 0 if x == no_pert_col else (('+' in x) + 1))
+            metr_avg_df = metr_avg_df.reindex(pols_order, axis=1, level=2)
+
+            # > 0 is needed to not consider the manually inserted epochs results
+            fairest_epochs = manip_df.groupby(
+                ["Model", "Dataset", "Sens Attr", "Policy"]
+            ).apply(lambda x: pd.Series({"Epoch": x[x.Epoch > 0].sort_values(dp_metric_name).iloc[0]["Epoch"]}))
+            fairest_epochs_index = pd.MultiIndex.from_frame(fairest_epochs.reset_index().replace(0, 1))
+
+            f_epochs_del_df = metric_del_df.set_index(["Model", "Dataset", "Sens Attr", "Policy", "Epoch"]).loc[fairest_epochs_index]
+            f_epochs_del_df = f_epochs_del_df.reset_index().set_index(["Model", "Sens Attr", "Policy"])
+
+            metr_avg_df.to_csv(os.path.join(plots_path, f'{metric.lower()}_metr_avg_df.csv'))
+            f_epochs_del_df.to_csv(os.path.join(plots_path, f'{metric.lower()}_f_epochs_del_df.csv'))
+
+            def vals_to_change(row):
+                no_pert_val = row[row.index[0]]
+                no_pert_users_val = f_epochs_del_df.loc[(*row.name, no_pert_col), 'Value']
+                for idx in row.index[1:]:
+                    if (*row.name, idx[2]) in f_epochs_del_df.index:
+                        row_idx_users_val = f_epochs_del_df.loc[(*row.name, idx[2]), 'Value']
+                        try:
+                            pval = scipy.stats.wilcoxon(no_pert_users_val, row_idx_users_val).pvalue
+                        except ValueError:
+                            pval = 1.0
+
+                        row_val = (row[idx] / no_pert_val - 1) * 100
+                        row[idx] = ('*' if pval < P_VALUE else '') + f"{row_val:.1f}%"
+
+                return row
+
+            metr_avg_change_df = metr_avg_df.apply(vals_to_change, axis=1)
+            metr_avg_change_df.to_csv(os.path.join(plots_path, f'{metric.lower()}_metr_avg_change_df.csv'))
+        else:
+            manip_df = pd.read_csv(os.path.join(plots_path, f'{metric.lower()}_manip_df.csv'))
+            metr_avg_df = pd.read_csv(os.path.join(plots_path, f'{metric.lower()}_metr_avg_df.csv'), index_col=[0, 1], header=[0, 1, 2])
+            metr_avg_change_df = pd.read_csv(os.path.join(plots_path, f'{metric.lower()}_metr_avg_change_df.csv'), index_col=[0, 1], header=[0, 1, 2])
+            f_epochs_del_df = pd.read_csv(os.path.join(plots_path, f'{metric.lower()}_f_epochs_del_df.csv'), index_col=[0, 1, 2])
+
+        if metric.lower() == 'ndcg':
+            pos_matrix_cols = ["Dataset", "Model", "Sens Attr", "GENIUS-RS$^-$", "GENIUS-RS$^+$"]
+            pos_matrix = [
+                ['insurance', 'GCMC', 'Age', (0.1, 0.7), (0.3, 0.15)],
+                ['insurance', 'LightGCN', 'Age', (0.9, 0.7), (0.25, 0.7)],
+                ['insurance', 'NGCF', 'Age', (0.27, 0.7), (0.6, 0.7)],
+                ['insurance', 'GCMC', 'Gender', (0.8, 0.15), (0.1, 0.9)],
+                ['insurance', 'LightGCN', 'Gender', (0.9, 0.38), (0.15, 0.9)],
+                ['insurance', 'NGCF', 'Gender', (0.7, 0.5), (0.07, 0.7)],
+                ['lastfm-1k', 'GCMC', 'Age', (0.8, 0.35), (0.9, 0.9)],
+                ['lastfm-1k', 'LightGCN', 'Age', (0.5, 0.8), (0.9, 0.8)],
+                ['lastfm-1k', 'NGCF', 'Age', (0.6, 0.15), (0.1, 0.16)],
+                ['lastfm-1k', 'GCMC', 'Gender', (0.3, 0.65), (0.6, 0.65)],
+                ['lastfm-1k', 'LightGCN', 'Gender', (0.6, 0.85), (0.85, 0.85)],
+                ['lastfm-1k', 'NGCF', 'Gender', (0.4, 0.1), (0.2, 0.2)],
+                ['ml-1m', 'GCMC', 'Age', (0.9, 0.5), None],
+                ['ml-1m', 'LightGCN', 'Age', (0.9, 0.15), (0.6, 0.15)],
+                ['ml-1m', 'NGCF', 'Age', (0.9, 0.15), (0.6, 0.15)],
+                ['ml-1m', 'GCMC', 'Gender', (0.9, 0.4), None],
+                ['ml-1m', 'LightGCN', 'Gender', (0.9, 0.15), (0.5, 0.15)],
+                ['ml-1m', 'NGCF', 'Gender', (0.95, 0.2), (0.7, 0.2)],
+                ['tafeng', 'GCMC', 'Age', (0.3, 0.7), None],
+                ['tafeng', 'LightGCN', 'Age', (0.9, 0.6), None],
+                ['tafeng', 'NGCF', 'Age', (0.9, 0.7), None],
+            ]
+
+            pos_matrix_df = pd.DataFrame(pos_matrix, columns=pos_matrix_cols).set_index(['Dataset', 'Model', 'Sens Attr'])
+
+        manip_fig, manip_axs = plt.subplots(
+            len(manip_df['Sens Attr'].unique()), len(manip_df.Model.unique()),
+            sharey='row', squeeze=False, figsize=(15, 2.5 * len(manip_df['Sens Attr'].unique()))
+        )
+        ms = 8
+        manip_pols = [no_pert_col, method_name + "$^+$", method_name + "$^-$"]
+        style_order = manip_pols[1:]
+        markers = dict(zip(style_order, ['o', 'X']))
+        dashes = dict(zip(style_order, [(5, 5), (1, 1)]))
+        palette = dict(zip(manip_pols, sns.color_palette(n_colors=len(manip_pols))))
+
+        for manip_inner_ax, ((_dataset, _sens_attr), manip_dsa_df) in zip(
+            manip_axs, manip_df.groupby(['Dataset', 'Sens Attr'])
+        ):
+            for i, (_ax, (_model, manip_plot_df)) in enumerate(zip(
+                manip_inner_ax, manip_dsa_df.groupby(['Model'])
+            )):
+                _ax.plot(
+                    [0, manip_plot_df.Epoch.max()],
+                    [manip_plot_df.loc[manip_plot_df.Policy == no_pert_col, dp_metric_name].iloc[0]] * 2,
+                    color=palette[no_pert_col],
+                    label=no_pert_col
+                )
+
+                manip_pols_plot_df = manip_plot_df[manip_plot_df.Policy != no_pert_col]
+                sns.lineplot(
+                    x='Epoch', y=dp_metric_name, data=manip_pols_plot_df, hue='Policy', style='Policy',
+                    style_order=style_order, markers=markers, dashes=dashes, ms=ms, palette=palette, ax=_ax
+                )
+
+                _ax.xaxis.set_major_locator(mpl_tick.MaxNLocator(integer=True))
+                _ax.yaxis.set_major_locator(mpl_tick.MaxNLocator(3))
+                _ax.grid(axis='y', ls=':', which='both')
+                _ax.set_title(f"{_model} ($NDCG_" + "{NM}" + f"$ = {metr_avg_df.loc[(_model, _sens_attr), (metric, _dataset, no_pert_col)]})")
+                _ax.set_ylabel(_sens_attr.title())
+
+                handles, labels = _ax.get_legend_handles_labels()
+                figlegend = plt.figure(figsize=(2, 1))
+                figlegend.legend(
+                    handles, labels, loc='center', frameon=False, ncol=len(labels), #prop={'size': 10}
+                )
+                figlegend.savefig(
+                    os.path.join(
+                        plots_path, f"{'_'.join(unique_datasets)}_{_sens_attr}_manip_legend.png"
+                    ),
+                    bbox_inches='tight', pad_inches=0, dpi=250
+                )
+                plt.close(figlegend)
+
+                _ax.get_legend().remove()
+
+                if metric.lower() == 'ndcg':
+                    # Value Annotations
+                    manip_pols_plot_df_idx = manip_pols_plot_df.set_index(['Policy', 'Epoch'])
+                    for pol in manip_pols[1:]:
+                        if (_model, _sens_attr, pol) in f_epochs_del_df.index:
+                            f_epoch = f_epochs_del_df.loc[(_model, _sens_attr, pol), 'Epoch'].iloc[0]
+                            dp_val = manip_pols_plot_df_idx.loc[(pol, f_epoch), dp_metric_name]
+
+                            metr_avg = metr_avg_df.loc[(_model, _sens_attr), (metric, _dataset, pol)]
+                            stat = metr_avg_change_df.loc[(_model, _sens_attr), (metric, _dataset, pol)][0]
+                            stat = stat if stat == '*' else ''
+
+                            offsetbox = mpl_offsetbox.TextArea(f"{stat}{metr_avg}")
+                            annotation_box = mpl_offsetbox.AnnotationBbox(
+                                offsetbox, (f_epoch, dp_val), xybox=pos_matrix_df.loc[(_dataset, _model, _sens_attr), pol],
+                                xycoords='data', boxcoords=_ax.transAxes, bboxprops=dict(edgecolor=palette[pol], facecolor=(1, 1, 0, 0)),
+                                arrowprops=dict(arrowstyle="->", mutation_aspect=0.4, ls='-.', color=palette[pol]), fontsize=7, pad=0.2
+                            )
+                            _ax.add_artist(annotation_box)
+
+                        # _ax.annotate(
+                        #     f"{stat}{metr_avg}", xy=(f_epoch, dp_val), xytext=pos_matrix_df.loc[(_dataset, _model, _sens_attr), pol],
+                        #     xycoords='data', textcoords=_ax.transAxes, color=palette[pol]
+                        # )
+
+        # manip_fig.supylabel(dp_metric_name)
+        manip_fig.tight_layout()
+        manip_fig.savefig(
+            os.path.join(plots_path, f"manip_lineplot_{exp_data_name}_{metric}_DP.png"),
+            bbox_inches='tight', pad_inches=0, dpi=250
+        )
+        plt.close("all")
+
+
     with open(os.path.join(plots_path, 'fairest_del_edges_conf.pkl'), 'wb') as f:
         pickle.dump(fairest_del_edges_conf, f)
 
@@ -1502,14 +1789,20 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
             de[1] -= 1
 
             graph_mdf = graph_metrics_dfs[_dataset].copy(deep=True)
-            # each edge is counted once for one node and once for the other (it is equal to a bincount)
+            # each edge is counted once for one node, e.g. user, and once for the other, e.g. item (it is equal to a bincount)
             graph_mdf['Del Edges Count'] = np.bincount(de.flatten(), minlength=len(graph_mdf))
 
             s_attr_df['user_id'] -= 1  # reindexing to zero
             sens_gmdf = graph_mdf.join(
-                s_attr_df.reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
+                s_attr_df[s_attr_df.Epoch == s_attr_df.iloc[0]['Epoch']].reset_index()[['user_id', 'Sens Attr', 'Demo Group']].set_index('user_id'),
                 on='Node'
             ).fillna('Item')
+
+            regressor_df_path = os.path.join(plots_path, 'regression_dfs')
+            if not os.path.exists(regressor_df_path):
+                os.mkdir(regressor_df_path)
+            regressor_df = sens_gmdf.copy(deep=True)
+            regressor_df.to_csv(os.path.join(regressor_df_path, f'{_dataset}_regressor_df_{_model}_{_policy.replace("$", "")}_{_s_attr}.csv'), index=None)
 
             dset_stats = os.path.join(base_all_plots_path, 'datasets_stats.csv')
             if os.path.exists(dset_stats):
@@ -1654,7 +1947,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         pol_del_dist_giant.extend(del_dist_giant_data.tolist())
 
                         plot_cols = del_dist_plot_df.index.get_level_values(0).unique()
-                        plot_cols = [x for x in gm_metrics_base if x in plot_cols]  # reordering
+                        plot_cols = [x for x in gm_dep_order if x in plot_cols]  # reordering
                         for _del_ax, plot_col in zip(del_axs[gm_mod][gm_sa_i], plot_cols):
                             sns.barplot(
                                 data=del_dist_plot_df.loc[plot_col].reset_index(),
@@ -1846,7 +2139,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                         if d_i == 0:
                             giant_ax.set_title(
                                 f"{giant_gm} ({short_gm[giant_gm]})" if giant_gm != 'Reachability' \
-                                                                     else 'Intra-Group Distance (IDG)',
+                                                                     else 'Intra-Group Distance (IGD)',
                                 fontsize=fs_titles_labels
                             )
 
@@ -1869,7 +2162,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 )
 #     if (set(del_dist_giant["Dataset"].unique()) & set(rq3_dsets)) == set(rq3_dsets):
 #         spine_color = "red"
-#         markers_map = dict(zip(gm_metrics_base, ["d", "X", "*"]))
+#         markers_map = dict(zip(gm_dep_order, ["d", "X", "*"]))
 
 #         del_dist_giant["Dataset"] = del_dist_giant["Dataset"].map(plot_dataset_map)
 #         unique_quantiles = del_dist_giant["Quartile"].unique()
@@ -1923,9 +2216,9 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
 #                             y="Del Edges Distribution",
 #                             data=dset_g_plot_df,
 #                             hue="Graph Metric",
-#                             hue_order=gm_metrics_base,
+#                             hue_order=gm_dep_order,
 #                             style="Graph Metric",
-#                             style_order=gm_metrics_base,
+#                             style_order=gm_dep_order,
 #                             markers=markers_map,
 #                             markersize=25,
 #                             lw=2,

@@ -190,7 +190,7 @@ def old_extract_all_exp_metrics_data(_exp_paths,
     return exp_dfs, result_data, n_users_data, topk_dist
 
 
-def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None):
+def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None, exp_rec_data='test'):
     result_all = {}
     pref_data_all = {}
     filter_cols = ['user_id', 'rec_topk', 'rec_cf_topk'] if additional_cols is None else additional_cols
@@ -203,6 +203,19 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
         model_name = e_type.replace('+FairDP', '')
         exps_data, rec_model_preds, test_model_preds = utils.load_dp_exps_file(e_path)
         model_pred_map = {'rec_topk': rec_model_preds, 'test_topk': test_model_preds}
+
+        if len(exps_data[0][0]) == 12:
+            best_epoch_func = utils.old_get_best_epoch_early_stopping
+            exp_col_index_func = utils.old_rs23_tist_exp_col_index
+            n_users = len(exps_data[0][0][0])
+        else:
+            best_epoch_func = utils.get_best_epoch_early_stopping
+            exp_col_index_func = utils.exp_col_index
+            with open(os.path.join(e_path, 'users_order.pkl'), 'rb') as f:
+                users_order = pickle.load(f)
+            n_users = len(users_order)
+
+            model_pred_map['user_id'] = users_order
 
         bec = best_exp_col[e_type] if isinstance(best_exp_col, dict) else best_exp_col
 
@@ -220,16 +233,17 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
         elif bec == "mid":
             def top_exp_func(exp): return exp[len(exp) // 2]
         elif isinstance(bec, list):
-            top_exp_col = utils.exp_col_index(bec) if bec is not None else None
+            top_exp_col = exp_col_index_func(bec) if bec is not None else None
             if top_exp_col is not None:
                 def top_exp_func(exp): return sorted(exp, key=lambda x: x[top_exp_col])[0]
         elif bec == "auto":
             assert config is not None, "`auto` mode can be used only with config"
-            best_epoch = utils.get_best_epoch_early_stopping(exps_data[0], config)
-            epoch_idx = utils.exp_col_index('epoch')
+            best_epoch = best_epoch_func(exps_data[0], config)
+            epoch_idx = exp_col_index_func('epoch')
+
             def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
         elif isinstance(bec, list):
-            top_exp_col = utils.exp_col_index(bec[0])
+            top_exp_col = exp_col_index_func(bec[0])
             def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
 
         pref_data = []
@@ -239,9 +253,20 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
             else:
                 _exp = exp_entry[0]
 
-            idxs = [utils.exp_col_index(col) for col in filter_cols]
-            del_edges_idx = utils.exp_col_index('del_edges')
-            del_edges_data = [_exp[del_edges_idx]] * len(_exp[idxs[0]])
+            idxs = [exp_col_index_func(col) for col in filter_cols]
+            del_edges_idx = exp_col_index_func('del_edges')
+
+            if 'rec_cf_topk' in idxs:
+                _, _, _, _dset, _mod, _, _, _s_attr, _, _ = e_path.split(os.sep)
+                _, _, _, pert_pref_data = extract_metrics_from_perturbed_edges(
+                    {(_dset, _s_attr): _exp[del_edges_idx]}, models=[_mod], remap=False, return_pref_data=True
+                )
+                model_pred_map['rec_cf_topk'] = pert_pref_data[_mod][exp_rec_data].set_index('user_id').loc[users_order, 'cf_topk_pred'].to_numpy()
+                model_pred_map['rec_cf_dist'] = [
+                    utils.damerau_levenshtein_distance(t1, t2) for t1, t2 in zip(model_pred_map['rec_topk'], model_pred_map['rec_cf_topk'])
+                ]
+
+            del_edges_data = [_exp[del_edges_idx]] * n_users
 
             pref_data.extend(list(zip(
                   *[_exp[idx] if isinstance(idx, int) else model_pred_map[idx] for idx in idxs],
@@ -275,7 +300,8 @@ def extract_all_exp_metrics_data(_exp_paths,
                                  sens_attr,
                                  rec=False,
                                  overwrite=False,
-                                 other_cols=None):
+                                 other_cols=None,
+                                 exp_rec_data='test'):
     sensitive_map = train_data.dataset.field2id_token[sens_attr]
 
     user_df = pd.DataFrame({
@@ -321,24 +347,69 @@ def extract_all_exp_metrics_data(_exp_paths,
         exps_data, rec_model_preds, test_model_preds = utils.load_dp_exps_file(e_path)
         model_pred_map = {'rec_topk': rec_model_preds, 'test_topk': test_model_preds}
 
+        if len(exps_data[0][0]) == 12:
+            exp_col_index_func = utils.old_rs23_tist_exp_col_index
+            n_users = len(exps_data[0][0][0])
+        else:
+            exp_col_index_func = utils.exp_col_index
+            with open(os.path.join(e_path, 'users_order.pkl'), 'rb') as f:
+                users_order = pickle.load(f)
+            n_users = len(users_order)
+
+            model_pred_map['user_id'] = users_order
+
         exp_data = []
         for exp_entry in exps_data:
-            for _exp in exp_entry[:-1]:  # the last epoch is a stub epoch to retrieve back the best epoch
-                exp_row_data = [_exp[0]]
+            for _exp in tqdm.tqdm(
+                exp_entry[:-1],  # the last epoch is a stub epoch to retrieve back the best epoch
+                desc="Extracting recommendations from explainer saved data"
+            ):
+                if len(exps_data[0][0]) == 6:
+                    exp_row_data = [users_order]
+                else:
+                    exp_row_data = [_exp[0]]
                 for col in cols:
                     if col in first_type_cols:
-                        exp_row_data.append(_exp[utils.exp_col_index(col)])
+                        first_type_idx = exp_col_index_func(col)
+                        if isinstance(first_type_idx, str):
+                            if first_type_idx not in model_pred_map:
+                                orig_topk = 'test_topk' if not rec else 'rec_topk'
+                                pert_cf_topk = 'test_cf_topk' if not rec else 'rec_cf_topk'
+                                pert_cf_dist = 'test_cf_dist' if not rec else 'rec_cf_dist'
+
+                                _, _, _, _dset, _mod, _, _, _s_attr, _, _ = e_path.split(os.sep)
+                                del_edges_idx = exp_col_index_func('del_edges')
+                                _, _, _, pert_pref_data = extract_metrics_from_perturbed_edges(
+                                    {(_dset, _s_attr): _exp[del_edges_idx]}, models=[_mod],
+                                    remap=False, return_pref_data=True
+                                )
+                                model_pred_map[pert_cf_topk] = pert_pref_data[_mod][exp_rec_data].set_index(
+                                    'user_id'
+                                ).loc[users_order, 'cf_topk_pred'].to_numpy()
+                                model_pred_map[pert_cf_dist] = [
+                                    utils.damerau_levenshtein_distance(t1, t2)
+                                    for t1, t2 in zip(model_pred_map[orig_topk], model_pred_map[pert_cf_topk])
+                                ]
+                            exp_row_data.append(model_pred_map[first_type_idx])
+                        else:
+                            exp_row_data.append(_exp[first_type_idx])
                     elif col == "set":
                         orig_pred = model_pred_map[cols[0]]
-                        cf_pred = _exp[utils.exp_col_index(cols[1])]
+                        cf_pred = _exp[exp_col_index_func(cols[1])]
                         comm_items = np.array([len(set(orig) & set(pred)) for orig, pred in zip(orig_pred, cf_pred)])
                         exp_row_data.append(len(orig_pred[0]) - comm_items)
                     else:
-                        idx = utils.exp_col_index(col)
+                        idx = exp_col_index_func(col)
+
                         if isinstance(idx, int):
                             exp_row_data.append([_exp[idx]] * len(exp_row_data[0]))
                         else:
                             exp_row_data.append(model_pred_map[idx])
+
+                for model_pred_col in ['rec_cf_topk', 'rec_cf_dist', 'test_cf_topk', 'test_cf_dist']:
+                    if model_pred_col in model_pred_map:
+                        # it should be deleted otherwise the same recommendations will be use for different epochs
+                        del model_pred_map[model_pred_col]
 
                 exp_data.extend(list(zip(*exp_row_data)))
 
@@ -384,18 +455,19 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                                          models_path='saved',
                                          policy_name=None,
                                          on_bad_models="error",
-                                         remap=True):
+                                         remap=True,
+                                         return_pref_data=False):
     models = ["NGCF", "LightGCN", "GCMC"] if models is None else models
     metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
     cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric',
             'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
 
-    test_df_data = []
-    valid_df_data = []
+    exp_pref_data = {}
     model_files = list(os.scandir(models_path))
+    df_data = {'train': [], 'valid': [], 'test': []}
     for mod in models:
         for meta, path_or_pert_edges in exp_info.items():
-            if isinstance(meta, tuple):  # perturbed edges could also dependent on sensitive attributes
+            if isinstance(meta, tuple):  # perturbed edges could also be dependent on sensitive attributes
                 dset, s_attr = meta
             else:
                 dset = meta
@@ -404,12 +476,13 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
             try:
                 model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
             except IndexError:
-                if on_bad_model == "ignore":
+                if on_bad_models == "ignore":
                     continue
                 else:
                     raise ValueError(
                         f"in path `{models_path}` there is no file for model `{mod.upper()}` and dataset `{dset.upper()}`"
                     )
+            exp_pref_data[mod] = {}
 
             checkpoint = torch.load(model_file)
             config = checkpoint['config']
@@ -428,6 +501,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
             iid_field = dataset.iid_field
 
             train_data, valid_data, test_data = data_preparation(config, dataset)
+            split_dict = dict(zip(['train', 'valid', 'test'], [train_data, valid_data, test_data]))
 
             if isinstance(path_or_pert_edges, np.ndarray):
                 pert_edges = path_or_pert_edges
@@ -443,63 +517,49 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                     pert_edges[1] += dataset.user_num  # remap according to adjacency matrix
 
             user_data = torch.arange(train_data.dataset.user_num)[1:]  # id 0 is a padding in recbole
+            pert_data = {
+                split_name: utils.get_dataset_with_perturbed_edges(pert_edges, split.dataset) for split_name, split in split_dict.items()
+            }
 
-            pref_test_data = pref_data_from_checkpoint_and_perturbed_edges(
-                config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=False
-            )
-            test_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
-
-            pref_valid_data = pref_data_from_checkpoint_and_perturbed_edges(
-                config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data, on_valid_data=True
-            )
-            valid_pert_data = utils.get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
+            mod_pref_data = {}
+            args_pref_data = [config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data]
+            for split_name, split in split_dict.items():
+                mod_pref_data[split_name] = pref_data_from_checkpoint_and_perturbed_edges(*args_pref_data, split=split_name)
+                if return_pref_data:
+                    exp_pref_data[mod][split_name] = mod_pref_data[split_name]
 
             config["metrics"] = metrics
             evaluator = Evaluator(config)
             for metric in metrics:
-                test_metric_data = compute_metric(
-                    evaluator, test_pert_data, pref_test_data, 'cf_topk_pred', metric.lower()
-                )[:, -1]
-                valid_metric_data = compute_metric(
-                    evaluator, valid_pert_data, pref_valid_data, 'cf_topk_pred', metric.lower()
-                )[:, -1]
                 if s_attr is None:
                     sens_attrs = [col for col in dataset.user_feat.columns if col != uid_field]
                 else:
                     sens_attrs = [s_attr]
 
-                for s_attr in sens_attrs:
-                    demo_group_map = dataset.field2id_token[s_attr]
+                for split_name, split in split_dict.items():
+                    metric_data = compute_metric(
+                        evaluator, pert_data[split_name], mod_pref_data[split_name], 'cf_topk_pred', metric.lower()
+                    )[:, -1]
 
-                    test_df_data.extend(list(zip(*[
-                        user_data.numpy(),
-                        [-1] * len(user_data),
-                        [pert_edges.shape[1]] * len(user_data),
-                        [-1] * len(user_data),
-                        [metric] * len(user_data),
-                        [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
-                        [s_attr.title()] * len(user_data),
-                        [mod] * len(user_data),
-                        [dset] * len(user_data),
-                        test_metric_data,
-                        [policy_name] * len(user_data),
-                    ])))
+                    for s_attr in sens_attrs:
+                        demo_group_map = dataset.field2id_token[s_attr]
 
-                    valid_df_data.extend(list(zip(*[
-                        user_data.numpy(),
-                        [-1] * len(user_data),
-                        [pert_edges.shape[1]] * len(user_data),
-                        [-1] * len(user_data),
-                        [metric] * len(user_data),
-                        [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
-                        [s_attr.title()] * len(user_data),
-                        [mod] * len(user_data),
-                        [dset] * len(user_data),
-                        valid_metric_data,
-                        [policy_name] * len(user_data),
-                    ])))
+                        df_data[split_name].extend(list(zip(*[
+                            user_data.numpy(),
+                            [-1] * len(user_data),
+                            [pert_edges.shape[1]] * len(user_data),
+                            [-1] * len(user_data),
+                            [metric] * len(user_data),
+                            [demo_group_map[dg] for dg in dataset.user_feat[s_attr][user_data].numpy()],
+                            [s_attr.title()] * len(user_data),
+                            [mod] * len(user_data),
+                            [dset] * len(user_data),
+                            metric_data,
+                            [policy_name] * len(user_data),
+                        ])))
 
-    return pd.DataFrame(test_df_data, columns=cols), pd.DataFrame(valid_df_data, columns=cols)
+    out = [pd.DataFrame(df_d, columns=cols) for df_d in df_data.values()]
+    return (*out, exp_pref_data) if return_pref_data else tuple(out)
 
 
 def pref_data_from_checkpoint_and_perturbed_edges(config,
@@ -509,13 +569,13 @@ def pref_data_from_checkpoint_and_perturbed_edges(config,
                                                   train_data,
                                                   valid_data,
                                                   test_data,
-                                                  on_valid_data=False):
+                                                  split='test'):
     train_dataset = utils.get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
 
     train_data, valid_data, test_data = utils.get_dataloader_with_perturbed_edges(
         pert_edges, config, dataset, train_data, valid_data, test_data
     )
-    eval_data = valid_data if on_valid_data else test_data
+    eval_data = dict(zip(['train', 'valid', 'test'], [train_data, valid_data, test_data]))[split]
 
     model = get_model(config['model'])(config, train_dataset).to(config['device'])
     model.load_state_dict(checkpoint['state_dict'])

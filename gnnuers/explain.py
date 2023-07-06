@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import yaml
 import pickle
 import logging
 import inspect
@@ -21,10 +22,10 @@ script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
 def get_base_exps_filepath(config,
+                           exp_config,
                            config_id=-1,
                            model_name=None,
                            model_file="",
-                           exp_content=None,
                            hyper=False):
     """
     return the filepath where explanations are saved
@@ -32,7 +33,6 @@ def get_base_exps_filepath(config,
     :param config_id:
     :param model_name:
     :param model_file:
-    :param exp_content: read content as string of the explainer_config_file
     :return:
     """
     epochs = config["cf_epochs"]
@@ -82,9 +82,8 @@ def get_base_exps_filepath(config,
     if not os.path.exists(base_exps_file):
         os.makedirs(base_exps_file)
 
-    if exp_content is not None:
-        with open(os.path.join(base_exps_file, "config.yaml"), 'w') as exp_file:
-            exp_file.write(exp_content)
+    with open(os.path.join(base_exps_file, "config.yaml"), 'w') as exp_file:
+        exp_file.write(yaml.dump(config.final_config_dict, default_flow_style=False))
 
     return base_exps_file
 
@@ -296,14 +295,13 @@ def execute_explanation(model_file,
                         cmd_config_args=None,
                         hyperoptimization=False,
                         overwrite=False):
-    explainer_config, exp_content = utils.update_base_explainer(base_explainer_config_file, explainer_config_file, return_exp_content=True)
+    explainer_config = utils.update_base_explainer(base_explainer_config_file, explainer_config_file)
 
     # load trained model, config, dataset
-    config, model, dataset, train_data, valid_data, test_data, exp_content = utils.load_data_and_model(
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(
         model_file,
         explainer_config,
-        cmd_config_args=cmd_config_args,
-        exp_file_content=exp_content
+        cmd_config_args=cmd_config_args
     )
 
     # force these evaluation metrics to be ready to be computed
@@ -327,10 +325,10 @@ def execute_explanation(model_file,
 
     base_exps_filepath = get_base_exps_filepath(
         config,
+        {k: v for k, v in config.items() if k in explainer_config},  # in config the values could get updated via cmd line
         config_id=config_id,
         model_name=model.__class__.__name__,
         model_file=model_file,
-        exp_content=exp_content,
         hyper=hyperoptimization
     )
 

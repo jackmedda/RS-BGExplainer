@@ -302,48 +302,57 @@ class Explainer:
                            epoch_fair_loss):
         perturbed_edges = new_example[-2]
 
-        if self.config['exp_rec_data'] == 'rec':
-            raise NotImplementedErorr(
-                'fair metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
+        try:
+            if self.config['exp_rec_data'] == 'rec':
+                raise NotImplementedErorr(
+                    'fair metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
+                )
+
+            pert_sets = utils.get_dataloader_with_perturbed_edges(
+                perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
+            )
+            pert_sets_dict = dict(zip(['train', 'valid', 'test'], pert_sets))
+
+            test_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict['test'])
+            rec_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict[self.config['exp_rec_data']])
+
+            test_cf_topk_pred_idx, test_cf_dist = self._get_no_grad_pred_model_score_data(
+                test_scores_args, model_topk=test_model_topk, compute_dist=True
+            )
+            rec_cf_topk_pred_idx, rec_cf_dist = self._get_no_grad_pred_model_score_data(
+                rec_scores_args, model_topk=rec_model_topk, compute_dist=True
             )
 
-        pert_sets = utils.get_dataloader_with_perturbed_edges(
-            perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
-        )
-        pert_sets_dict = dict(zip(['train', 'valid', 'test'], pert_sets))
+            # new_example = [
+            #     detached_batched_data,
+            #     # rec_model_topk,
+            #     # test_model_topk,
+            #     rec_cf_topk_pred_idx,
+            #     test_cf_topk_pred_idx,
+            #     rec_cf_dist,
+            #     test_cf_dist,
+            #     *new_example[4:]
+            # ]
 
-        test_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict['test'])
-        rec_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict[self.config['exp_rec_data']])
+            epoch_rec_fair_metric = self.compute_fair_metric(
+                detached_batched_data,
+                rec_cf_topk_pred_idx,
+                pert_sets_dict[self.config['exp_rec_data']].dataset
+            )
 
-        test_cf_topk_pred_idx, test_cf_dist = self._get_no_grad_pred_model_score_data(
-            test_scores_args, model_topk=test_model_topk, compute_dist=True
-        )
-        rec_cf_topk_pred_idx, rec_cf_dist = self._get_no_grad_pred_model_score_data(
-            rec_scores_args, model_topk=rec_model_topk, compute_dist=True
-        )
-
-        # new_example = [
-        #     detached_batched_data,
-        #     # rec_model_topk,
-        #     # test_model_topk,
-        #     rec_cf_topk_pred_idx,
-        #     test_cf_topk_pred_idx,
-        #     rec_cf_dist,
-        #     test_cf_dist,
-        #     *new_example[4:]
-        # ]
-
-        epoch_rec_fair_metric = self.compute_fair_metric(
-            detached_batched_data,
-            rec_cf_topk_pred_idx,
-            pert_sets_dict[self.config['exp_rec_data']].dataset
-        )
-
-        epoch_test_fair_metric = self.compute_fair_metric(
-            detached_batched_data,
-            test_cf_topk_pred_idx,
-            pert_sets_dict['test'].dataset
-        )
+            epoch_test_fair_metric = self.compute_fair_metric(
+                detached_batched_data,
+                test_cf_topk_pred_idx,
+                pert_sets_dict['test'].dataset
+            )
+        except TypeError as e:
+            if self.earlys_check_value != 'fair_loss':
+                raise NotImplementedError(
+                    'must check how to solve the problem when certain users have no items in the history like after removing/adding edges'
+                ) from e
+            else:
+                epoch_rec_fair_metric = None
+                epoch_test_fair_metric = None
 
 #         def pert_edges_mapper(pe, rec_dset):
 #             return pe

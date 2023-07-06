@@ -68,7 +68,7 @@ def add_bar_value_labels(ax, spacing=5, format='.2f', **kwargs):
             **kwargs)                    # positive and negative values.
 
 
-def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, barh=.05, same_h=True, fs=None):
+def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, barh=.05, same_h=True, fs=None, pval_th=0.001):
     """
     https://stackoverflow.com/a/52333561
 
@@ -86,7 +86,7 @@ def annotate_brackets(ax, num1, num2, data, center, height, yerr=None, dh=.05, b
     :param fs: font size
     """
 
-    text = f"p = {data:.3f}" if data >= 0.001 else f"p < 0.001"
+    text = f"p = {data:.3f}" if data >= pval_th else "p < " + str(pval_th)
 
     lx, ly = center[num1], height[num1]
     rx, ry = center[num2], height[num2]

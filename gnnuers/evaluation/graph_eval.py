@@ -1,3 +1,5 @@
+from typing import Iterable
+
 import numba
 import numpy as np
 import pandas as pd
@@ -54,82 +56,155 @@ def _igraph_distances(graph):
     return distances
 
 
-def extract_graph_metrics_per_node(dataset, remove_first_row_col=False, metrics="all", **sp_kwargs):
-    metrics = ["Degree", "Sparsity", "Reachability", "Sharing Potentiality"] if metrics == "all" else metrics
-    sp_kwargs = sp_kwargs or dict(length=2, depth=2)
+class GraphMetricsExtractor():
 
-    item_hist, _, item_hist_len = dataset.history_user_matrix()
-    user_hist, _, user_hist_len = dataset.history_item_matrix()
+    BASE_METRICS = ["Degree", "Sparsity", "Reachability", "Sharing Potentiality", "UPI"]
 
-    G_df = None
-    node_col = 'Node'
+    def __init__(self, dataset, graph_metrics_df=None, metrics="all", sp_kwargs=None, upi_kwargs=None):
+        self.dataset = dataset
+        self.graph_metrics_df = graph_metrics_df
+        self.node_col = 'Node'
+        self.metrics = self.BASE_METRICS if metrics == "all" else metrics
 
-    igg = get_bipartite_igraph(dataset, remove_first_row_col=remove_first_row_col)
-    for metr in metrics:
-        if metr == "Degree":
-            df = pd.DataFrame(dict(zip(igg.vs.indices, igg.degree())).items(), columns=[node_col, metr])
-        elif metr == "Reachability":
-            last_user_id = dataset.user_num - (1 + remove_first_row_col)
-            user_reach = get_user_reachability(igg, last_user_id=last_user_id)
+        self._item_hist = None
+        self._item_hist_len = None
 
-            first_item_id = last_user_id + 1
-            item_reach = get_item_reachability(igg, first_item_id=first_item_id)
+        self._user_hist = None
+        self._user_hist_len = None
 
-            df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[node_col, metr])
-        elif metr == "Sparsity" or metr == "Density":
-            if remove_first_row_col:
-                item_hist = item_hist[1:].where(item_hist[1:] == 0, item_hist[1:] - 1)
-                item_pop = item_hist_len
-                user_hist = user_hist[1:].where(user_hist[1:] == 0, user_hist[1:] - 1)
-                user_hist_len = user_hist_len
+        self._igg = None
 
-            user_density = np.nan_to_num(
-                ((item_hist_len[user_hist] / user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
-                nan=0
-            )
-            user_metric = 1 - user_density if metr == "Sparsity" else user_density
+        self.sp_kwargs = sp_kwargs or dict(length=2, depth=2)
+        self.upi_kwargs = upi_kwargs or {'sensitive_attribute': ['gender']}
 
-            # item density represents the activity of the users that interact with an item.
-            # If only a user interact with item X and this user interacted with all the items in the catalog, then
-            # the density of X is maximum. A low density then means a high sparsity, which means the users that interact
-            # with that item interact with a few others
-            item_density = np.nan_to_num(
-                ((user_hist_len[item_hist] / item_hist.shape[0]).sum(dim=1) / item_pop[1:]).numpy(),
-                nan=0
-            )
-            item_metric = 1 - item_density if metr == "Sparsity" else item_density
+    @property
+    def item_hist(self):
+        if self._item_hist is None:
+            self._item_hist, _, self._item_hist_len = self.dataset.history_user_matrix()
+        return self._item_hist
 
-            df = pd.DataFrame(
-                zip(igg.vs.indices, np.concatenate([user_metric, item_metric])),
-                columns=[node_col, metr]
-            )
-        elif metr == "Sharing Potentiality":
-            n_users = user_hist[1:].shape[0]
-            user_user = get_node_node_graph_data(user_hist[1:].numpy())
-            user_user = np.asarray(sp.coo_matrix(
-                (user_user[:, -1], (user_user[:, 0], user_user[:, 1])), shape=(n_users, n_users)
-            ).todense())
-            user_sp = compute_sharing_potentiality(
-                user_user, user_hist_len[1:].numpy(), **sp_kwargs
-            )
+    @property
+    def item_hist_len(self):
+        if self._item_hist_len is None:
+            self._item_hist, _, self._item_hist_len = self.dataset.history_user_matrix()
+        return self._item_hist_len
 
-            n_items = item_hist[1:].shape[0]
-            item_item = get_node_node_graph_data(item_hist[1:].numpy())
-            item_item = np.asarray(sp.coo_matrix(
-                (item_item[:, -1], (item_item[:, 0], item_item[:, 1])), shape=(n_items, n_items)
-            ).todense())
-            item_sp = compute_sharing_potentiality(
-                item_item, item_hist_len[1:].numpy(), **sp_kwargs
-            )
+    @property
+    def user_hist(self):
+        if self._user_hist is None:
+            self._user_hist, _, self._user_hist_len = self.dataset.history_item_matrix()
+        return self._user_hist
 
-            sp_data = np.concatenate([user_sp, item_sp])
-            df = pd.DataFrame(zip(range(len(sp_data)), sp_data), columns=[node_col, metr])
+    @property
+    def user_hist_len(self):
+        if self._user_hist_len is None:
+            self._user_hist, _, self._user_hist_len = self.dataset.history_item_matrix()
+        return self._user_hist
 
-        if G_df is None:
-            G_df = df
-        else:
-            G_df = G_df.join(df.set_index(node_col), on=node_col)
-    return G_df
+    @property
+    def igg(self):
+        if self._igg is None:
+            self._igg = get_bipartite_igraph(self.dataset, remove_first_row_col=True)
+        return self._igg
+
+    def extract_graph_metrics_per_node(self):
+        G_df = self.graph_metrics_df.copy(deep=True)
+
+        for metr in self.metrics:
+            if G_df is not None and metr in G_df.columns:
+                continue
+
+            if metr == "Degree":
+                df = pd.DataFrame(dict(zip(self.igg.vs.indices, self.igg.degree())).items(), columns=[self.node_col, metr])
+            elif metr == "Reachability":
+                last_user_id = self.dataset.user_num - 2
+                user_reach = get_user_reachability(self.igg, last_user_id=last_user_id)
+
+                first_item_id = last_user_id + 1
+                item_reach = get_item_reachability(self.igg, first_item_id=first_item_id)
+
+                df = pd.DataFrame({**user_reach, **item_reach}.items(), columns=[self.node_col, metr])
+            elif metr == "Sparsity" or metr == "Density":
+                _item_hist = self.item_hist[1:].where(self.item_hist[1:] == 0, self.item_hist[1:] - 1)
+                item_pop = self.item_hist_len
+                _user_hist = self.user_hist[1:].where(self.user_hist[1:] == 0, self.user_hist[1:] - 1)
+                user_hist_len = self.user_hist_len
+
+                user_density = np.nan_to_num(
+                    ((item_pop[_user_hist] / _user_hist.shape[0]).sum(dim=1) / user_hist_len[1:]).numpy(),
+                    nan=0
+                )
+                user_metric = 1 - user_density if metr == "Sparsity" else user_density
+
+                # item density represents the activity of the users that interact with an item.
+                # If only a user interact with item X and this user interacted with all the items in the catalog, then
+                # the density of X is maximum. A low density then means a high sparsity, which means the users that interact
+                # with that item interact with a few others
+                item_density = np.nan_to_num(
+                    ((user_hist_len[_item_hist] / _item_hist.shape[0]).sum(dim=1) / item_pop[1:]).numpy(),
+                    nan=0
+                )
+                item_metric = 1 - item_density if metr == "Sparsity" else item_density
+
+                df = pd.DataFrame(
+                    zip(igg.vs.indices, np.concatenate([user_metric, item_metric])), columns=[self.node_col, metr]
+                )
+            elif metr == "Sharing Potentiality":
+                n_users = self.user_hist[1:].shape[0]
+                user_user = get_node_node_graph_data(self.user_hist[1:].numpy())
+                user_user = np.asarray(sp.coo_matrix(
+                    (user_user[:, -1], (user_user[:, 0], user_user[:, 1])), shape=(n_users, n_users)
+                ).todense())
+                user_sp = compute_sharing_potentiality(
+                    user_user, self.user_hist_len[1:].numpy(), **self.sp_kwargs
+                )
+
+                n_items = self.item_hist[1:].shape[0]
+                item_item = get_node_node_graph_data(self.item_hist[1:].numpy())
+                item_item = np.asarray(sp.coo_matrix(
+                    (item_item[:, -1], (item_item[:, 0], item_item[:, 1])), shape=(n_items, n_items)
+                ).todense())
+                item_sp = compute_sharing_potentiality(
+                    item_item, self.item_hist_len[1:].numpy(), **self.sp_kwargs
+                )
+
+                sp_data = np.concatenate([user_sp, item_sp])
+                df = pd.DataFrame(zip(range(len(sp_data)), sp_data), columns=[self.node_col, metr])
+            elif metr == "Unprotected Preference Index" or metr.upper() == "UPI":
+                if self.upi_kwargs is None:
+                    raise('UPI needs the upi_kwargs to know the sensitive attribute and the disadvantaged group')
+                else:
+                    sens_attrs = self.upi_kwargs.pop('sensitive_attribute')
+                    sens_attrs = [sens_attrs] if not isinstance(sens_attrs, Iterable) else sens_attrs
+
+                sa_dfs = []
+                for sa in sens_attrs:
+                    if "UPI " + sa.title() not in G_df.columns:
+                        _item_hist = self.item_hist[1:].where(self.item_hist[1:] == 0, self.item_hist[1:] - 1)
+                        _user_hist = self.user_hist[1:].where(self.user_hist[1:] == 0, self.user_hist[1:] - 1)
+
+                        sens_map = self.dataset.user_feat[sa]
+                        grs_size = sens_map[1:].bincount()
+                        minor_gr = ((grs_size > 0) & (grs_size < grs_size.max())).nonzero().item()
+                        n_minor = (sens_map == minor_gr).sum() / (sens_map.shape[0] - 1)
+
+                        sens_item_hist = sens_map[_item_hist]
+                        items_upi = ((sens_item_hist == minor_gr).sum(dim=1) / self.item_hist_len[1:]).nan_to_num(nan=0)
+                        # values higher than 1 means the advantaged group prefer those items w.r.t. to their representation
+                        items_upi = items_upi / n_minor
+
+                        users_upi = items_upi[_user_hist].mean(dim=1)
+
+                        upi = np.concatenate((users_upi.numpy(), items_upi.numpy()))
+                        sa_dfs.append(pd.DataFrame(zip(range(len(upi)), upi), columns=[self.node_col, "UPI " + sa.title()]).set_index('Node'))
+                if not sa_dfs:
+                    continue
+                df = pd.concat(sa_dfs, axis=1).reset_index()
+            if G_df is None:
+                G_df = df
+            else:
+                G_df = G_df.join(df.set_index(self.node_col), on=self.node_col)
+        return G_df
 
 
 def get_user_reachability(graph, last_user_id):

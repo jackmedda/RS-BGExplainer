@@ -22,6 +22,7 @@ if __name__ == "__main__":
     """It works only when called from outside of the scripts folder as a script (not as a module)."""
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp_path', '--e', required=True)
+    parser.add_argument('--base_plots_path', '--bpp', default=os.path.join('scripts', 'plots'))
     parser.add_argument('--iterations', '--it', default=100, type=int)
     args = parser.parse_args()
 
@@ -52,9 +53,15 @@ if __name__ == "__main__":
     model_files = os.scandir(os.path.join(os.path.dirname(sys.path[0]), 'saved'))
     model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
 
-    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(
+    explainer_config, exp_content = utils.update_base_explainer(
+        os.path.join('config', 'base_explainer.yaml'),
+        os.path.join(args.exp_path, 'config.yaml'),
+        return_exp_content=True
+    )
+    config, model, dataset, train_data, valid_data, test_data, _ = utils.load_data_and_model(
         model_file,
-        os.path.join(args.exp_path, 'config.yaml')
+        explainer_config,
+        exp_file_content=exp_content
     )
 
     mondel_pol = ''
@@ -106,7 +113,7 @@ if __name__ == "__main__":
     if int(cid) == 101:
         curr_policy = "N-" + curr_policy
 
-    plots_path = os.path.join('scripts', 'plots', dset, mod, s_attr, f"{cid}_{curr_policy}")
+    plots_path = os.path.join(args.base_plots_path, dset, mod, s_attr, f"{cid}_{curr_policy}")
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
@@ -133,16 +140,13 @@ if __name__ == "__main__":
 
     pert_edges = best_exp[utils.exp_col_index('del_edges')]
 
-    def pert_edges_mapper(pe, rec_dset):
-        return pe
-
-    test_pert_df, valid_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
+    _, valid_pert_df, test_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
         {(dset, s_attr): pert_edges},
         models=[mod],
         metrics=["NDCG"],  # ["NDCG", "Precision", "Recall", "Hit"],
         models_path=os.path.join(os.path.dirname(sys.path[0]), 'saved'),
         on_bad_models='ignore',
-        remap=pert_edges_mapper
+        remap=False
     )
 
     test_pert_df = test_pert_df[test_pert_df['Metric'].str.upper() == 'NDCG']
@@ -172,7 +176,7 @@ if __name__ == "__main__":
         pval = scipy.stats.mannwhitneyu(metr_dg1, metr_dg2).pvalue
         plot_df_data.append([_dp, split, 'Orig', metr_dg1.mean(), metr_dg2.mean(), total, pval])
 
-        total = orig_dp_df['Value'].mean()
+        total = pert_dp_df['Value'].mean()
         metr_dg1 = pert_dp_df.loc[pert_dp_df['Demo Group'] == dgs[0], 'Value'].to_numpy()
         metr_dg2 = pert_dp_df.loc[pert_dp_df['Demo Group'] == dgs[1], 'Value'].to_numpy()
         _dp = eval_utils.compute_DP(metr_dg1.mean(), metr_dg2.mean())

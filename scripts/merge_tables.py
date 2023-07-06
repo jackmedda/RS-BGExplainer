@@ -11,6 +11,8 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', '--d', required=True)
     parser.add_argument('--model', '--m', nargs='+', default=None)
     parser.add_argument('--sensitive_attribute', '--sa', required=True)
+    parser.add_argument('--plots_path_to_merge', '--pptm', default=os.path.join('scripts', 'plots'))
+    parser.add_argument('--base_plots_path', '--bpp', default=os.path.join('scripts', 'merged_plots'))
     parser.add_argument('--cid99', help='Considers explanations with cid 99-100-101', action='store_true')
     parser.add_argument('--exclude', '--ex', nargs='+', help='Exclude certaing config ids', default=None)
 
@@ -23,7 +25,7 @@ if __name__ == "__main__":
         args.exclude.extend(['99', '100', '101'])
     print(args)
 
-    out_path = os.path.join(os.getcwd(), 'scripts', 'merged_plots', args.dataset, args.sensitive_attribute)
+    out_path = os.path.join(args.base_plots_path, args.dataset, args.sensitive_attribute)
     if not os.path.exists(out_path):
         os.makedirs(out_path)
 
@@ -43,7 +45,7 @@ if __name__ == "__main__":
     orig_pert_pval_dicts = {}
     for mod in args.model:
         plots_path = os.path.join(
-            os.getcwd(), 'scripts', 'plots', args.dataset, mod, args.sensitive_attribute
+            args.plots_path_to_merge, args.dataset, mod, args.sensitive_attribute
         )
         for fold in os.scandir(plots_path):
             if args.exclude is not None and any(c in fold.name for c in args.exclude):
@@ -198,6 +200,8 @@ if __name__ == "__main__":
         rq1_fpols = list(rq1_fairest_pols[rq1_fairest_pols != 'Orig'])
         rq1_mdf = mod_df.pivot(index=['Model', 'Policy'], columns=['Split'], values=delta_col)
 
+        ecir_plot_data.append([mod, '', ' ; '.join(rq1_fpols), 'Policy'])
+
         hl_pols_mdf = rq1_mdf.abs()
         highlight_pols = hl_pols_mdf.loc[
             (hl_pols_mdf['Valid'] < hl_pols_mdf.loc[(mod, 'Orig'), 'Valid']) &
@@ -254,11 +258,12 @@ if __name__ == "__main__":
     ecir_plot_df = ecir_plot_df.reindex(
         models_order
     ).reindex(
-        ['NDCG', delta_col], axis=1, level=0
+        ['NDCG', delta_col, 'Policy'], axis=1, level=0
     ).reindex(
-        ['Before', 'After'], axis=1, level=1
+        ['Before', 'After', ''], axis=1, level=1
     )
     print(ecir_plot_df)
+    ecir_plot_df.to_csv(os.path.join(out_path, f'ecir_table_{"_".join(args.model)}.csv'))
 
     with open(os.path.join(out_path, f'ecir_table_{"_".join(args.model)}.tex'), 'w') as f:
         f.write(ecir_plot_df.to_latex(
@@ -267,7 +272,7 @@ if __name__ == "__main__":
             escape=False
         ).replace('*', '{\scriptsize *}').replace('^', '{\scriptsize \^{}}'))
 
-    merged_plots_path = os.path.join(os.getcwd(), 'scripts', 'merged_plots')
+    merged_plots_path = args.base_plots_path
     rq3_csvs = []
     for d, subd, files in os.walk(merged_plots_path):
         if 'rq3_perc_change_GCMC_LightGCN_NGCF.csv' in files:

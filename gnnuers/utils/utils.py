@@ -43,6 +43,24 @@ _EXPS_COLUMNS = [
 ]
 
 
+_OLD_RS23_TIST_EXPS_COLUMNS = [
+    "user_id",
+    # "rec_topk",
+    # "test_topk",
+    "rec_cf_topk",
+    "test_cf_topk",
+    "rec_cf_dist",
+    "test_cf_dist",
+    "loss_total",
+    "loss_graph_dist",
+    "fair_loss",
+    "fair_metric",
+    "del_edges",
+    "epoch",
+    "first_fair_loss"
+]
+
+
 _OLD_EXPS_COLUMNS = [
     "user_id",
     "rec_topk",
@@ -76,6 +94,14 @@ def old_exp_col_index(col):
     return idx
 
 
+def old_rs23_tist_exp_col_index(col):
+    try:
+        idx = _OLD_RS23_TIST_EXPS_COLUMNS.index(col)
+    except ValueError:
+        idx = col
+    return idx
+
+
 def wandb_init(config, policies=None, **kwargs):
     config = config.final_config_dict if not isinstance(config, dict) else config
 
@@ -92,7 +118,7 @@ def wandb_init(config, policies=None, **kwargs):
     )
 
 
-def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None, exp_file_content=None):
+def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -111,12 +137,11 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
     if explainer_config is not None:
         if isinstance(explainer_config, str):
             with open(explainer_config, 'r', encoding='utf-8') as f:
-                exp_file_content = f.read()
-                explain_config_dict = yaml.load(exp_file_content, Loader=config.yaml_loader)
+                explain_config_dict = yaml.load(f.read(), Loader=config.yaml_loader)
         elif isinstance(explainer_config, dict):
             explain_config_dict = explainer_config
         else:
-            raise ValueError(f'explainer_config cannot be `{type(explain_config)}`. Only `str` and `dict` are supported')
+            raise ValueError(f'explainer_config cannot be `{type(explainer_config)}`. Only `str` and `dict` are supported')
 
         config.final_config_dict.update(explain_config_dict)
 
@@ -147,9 +172,6 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
                 except (ValueError, TypeError):
                     new_val = None
 
-            if new_val is not None and exp_file_content is not None:
-                exp_file_content = re.sub(arg + r':.*\n', f"{arg}: {new_val}\n", exp_file_content)
-
     config['data_path'] = config['data_path'].replace('\\', os.sep)
     # config['device'] = 'cuda'
 
@@ -170,10 +192,10 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
 
     logger.info(model)
 
-    return config, model, dataset, train_data, valid_data, test_data, exp_file_content
+    return config, model, dataset, train_data, valid_data, test_data
 
 
-def update_base_explainer(base_explainer_config_file, explainer_config_file=None, return_exp_content=False):
+def update_base_explainer(base_explainer_config_file, explainer_config_file=None):
     yaml_loader = Config('GCMC', 'ml-1m').yaml_loader  # random attributes just to retrieve the yaml_loader
 
     with open(base_explainer_config_file, 'r', encoding='utf-8') as f:
@@ -181,11 +203,10 @@ def update_base_explainer(base_explainer_config_file, explainer_config_file=None
 
     if explainer_config_file is not None:
         with open(explainer_config_file, 'r', encoding='utf-8') as f:
-            exp_content = f.read()
-            exp_config_dict = yaml.load(exp_content, Loader=yaml_loader)
+            exp_config_dict = yaml.load(f.read(), Loader=yaml_loader)
         config_dict.update(exp_config_dict)
 
-    return config_dict, exp_content if return_exp_content else config_dict
+    return config_dict
 
 
 def load_dp_exps_file(base_exps_file):
@@ -255,7 +276,9 @@ def old_get_best_epoch_early_stopping(exps, config_dict):
     except TypeError:
         patience = config_dict['earlys_patience']
 
-    return max([e[old_exp_col_index('epoch')] for e in exps]) - patience
+    old_index_func = old_rs23_tist_exp_col_index if len(exps[0]) == 12 else old_exp_col_index
+
+    return max([e[old_index_func('epoch')] for e in exps]) - patience
 
 
 def get_best_epoch_early_stopping(exps, config_dict):
@@ -282,10 +305,11 @@ def prepare_batched_data(input_data, data, item_data=None):
 
     if hasattr(data, "uid2history_item"):
         history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
+        history_item = [x if x is not None else torch.Tensor([]) for x in history_item]
 
         if len(input_data) > 1:
-            history_u = torch.cat([torch.full_like(hist_iid, i) for i, hist_iid in enumerate(history_item)])
-            history_i = torch.cat(list(history_item))
+            history_u = torch.cat([torch.full_like(hist_iid, i, dtype=int) for i, hist_iid in enumerate(history_item)])
+            history_i = torch.cat(list(history_item)).long()
         else:
             history_u = torch.full_like(history_item, 0)
             history_i = history_item
