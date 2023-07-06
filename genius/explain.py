@@ -14,8 +14,8 @@ import pandas as pd
 
 from recbole.data.dataloader import FullSortEvalDataLoader
 
-import gnnuers.utils as utils
-from gnnuers.explainers import DPBG, BaB
+import genius.utils as utils
+from genius.explainers import DPBG, BaB
 
 
 script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))

@@ -5,7 +5,7 @@ import inspect
 
 import pandas as pd
 
-import gnnuers.utils as utils
+import genius.utils as utils
 
 
 # %%

@@ -14,7 +14,7 @@ from recbole.utils import get_model
 from recbole.evaluator import Evaluator
 from recbole.data import create_dataset, data_preparation
 
-import gnnuers.utils as utils
+import genius.utils as utils
 
 
 def old_extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None):

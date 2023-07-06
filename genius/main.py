@@ -13,8 +13,8 @@ from recbole.trainer import HyperTuning
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color, get_local_time
 
-from gnnuers.explain import execute_explanation
-import gnnuers.utils as utils
+from genius.explain import execute_explanation
+import genius.utils as utils
 
 
 def training(_config, saved=True, model_file=None, hyper=False):

@@ -128,5 +128,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# GNNUERS
-.gnnuers/dp_explanations/
+# GENIUS
+.genius/experiments/
+.genius/new_dp_plots/

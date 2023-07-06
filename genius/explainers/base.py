@@ -19,11 +19,11 @@ from recbole.evaluator import Evaluator
 from recbole.utils import set_color
 from recbole.data.interaction import Interaction
 
-import gnnuers.utils as utils
-import gnnuers.models as exp_models
-import gnnuers.evaluation as eval_utils
-from gnnuers.utils.early_stopping import EarlyStopping
-from gnnuers.losses import get_ranking_loss, get_fair_loss
+import genius.utils as utils
+import genius.models as exp_models
+import genius.evaluation as eval_utils
+from genius.utils.early_stopping import EarlyStopping
+from genius.losses import get_ranking_loss, get_fair_loss
 
 from . import utils as exp_utils
 

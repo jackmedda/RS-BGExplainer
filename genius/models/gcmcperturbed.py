@@ -7,7 +7,7 @@ from recbole.model.general_recommender.gcmc import GCMC, GcEncoder
 
 sys.path.append('..')
 
-from gnnuers.models import PerturbedModel
+from genius.models import PerturbedModel
 
 
 class GCMCPerturbed(PerturbedModel, GCMC):

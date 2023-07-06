@@ -669,7 +669,7 @@ delcons_pol = method_name + '+CN'
 random_pol = 'RND-P'
 casper_pol = 'CASPER'
 overlay_pol = 'OVERLAY'
-no_pert_col = "NP"  # NoPerturbation
+no_pert_col = "NM"  # NoPerturbation
 
 policy_order_base = [mondel_pol, delcons_pol, random_pol, casper_pol, no_pert_col]
 
@@ -1687,7 +1687,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
                 _ax.xaxis.set_major_locator(mpl_tick.MaxNLocator(integer=True))
                 _ax.yaxis.set_major_locator(mpl_tick.MaxNLocator(3))
                 _ax.grid(axis='y', ls=':', which='both')
-                _ax.set_title(f"{_model} ($NDCG_" + "{NM}" + f"$ = {metr_avg_df.loc[(_model, _sens_attr), (metric, _dataset, no_pert_col)]})")
+                _ax.set_title(f"{_model} ($NDCG_" + "{" + no_pert_col + "}" + f"$ = {metr_avg_df.loc[(_model, _sens_attr), (metric, _dataset, no_pert_col)]})")
                 _ax.set_ylabel(_sens_attr.title())
 
                 handles, labels = _ax.get_legend_handles_labels()
@@ -1758,7 +1758,7 @@ for df, del_df, exp_data_name in zip([test_df, rec_df], [test_del_df, rec_del_df
         gm_analysis_tables_data["del_dist"] = []
 
     def get_adv_group_for_graph_metric(adv_gr_df_gby, adv_gr_meta):
-        adv_gr_df = adv_gr_df_gby.get_group(tuple(list(adv_gr_meta)[:2] + ["NP"] + [adv_gr_meta[-1]]))
+        adv_gr_df = adv_gr_df_gby.get_group(tuple(list(adv_gr_meta)[:2] + [no_pert_col] + [adv_gr_meta[-1]]))
         adv_gr_df = adv_gr_df[adv_gr_df.Metric == 'NDCG']
         adv_gr_df = next(adv_gr_df.groupby('Epoch').__iter__())[1]
         adv_gr = adv_gr_df.groupby("Demo Group").mean()["Value"].sort_values().index[-1]
