@@ -37,6 +37,14 @@ be replaced by the [modified_recbole_dataset.py](modified_recbole_dataset.py) fi
 cp modified_recbole_dataset.py /usr/local/lib/python3.9/dist-packages/recbole/data/dataset/dataset.py
 ```
 
+The same version contains a bug related to the NGCF model. A Dropout layer is instantiated inside
+the `forward` method, which makes the generation of new embeddings (after the perturbation) not reproducible
+even if `eval` is called on the model. To run our experiments the file _recbole/model/general_recommender/ngcf.py_ should
+be replaced by the [modified_recbole_ngcf.py](modified_recbole_ngcf.py) file. In Linux:
+```bash
+cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model/general_recommender/ngcf.py
+```
+
 # Datasets
 
 The datasets used in our datasets are MovieLens 1M, Last.FM 1K, Ta Feng, Insurance and
@@ -103,30 +111,24 @@ __EXPLAINING_CONFIG__ should be the config file relative to the same dataset.
 # GNNUERS Output
 
 GNNUERS creates a folder
-_gnnuers/experiments/dp_explanations/DATASET/MODEL/FairDP/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
+_gnnuers/experiments/dp_explanations/DATASET/MODEL/dpbg/LOSS_TYPE/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID_
 where __SENSITIVE_ATTRIBUTE__ can be one of [gender, age], __EPOCHS__ is the number of
 epochs used to train GNNUERS, __CONF_ID__ is the configuration/run ID of the just run
 experiment. The folder contains the __EXPLAINING_CONFIG__ file in yaml and pkl format used
-for the experiment and a file _all_users.pkl_.
+for the experiment, a file _cf_data.pkl_ containing the information about the perturbed edges for each epoch,
+a file _model_rec_test_preds.pkl_ containing the original recommendations on the rec (perturbation) set and
+test set, a file _users_order_.pkl containing the users ids in the order _model_rec_test_preds.pkl_ are sorted,
+a file _checkpoint.pth_ containing data used to resume the training if stopped earlier.
 
-_all_users.pkl_ file contains a list of lists where each inner list has 13 values, relative
-to the explanations generated at a certain epoch:
-1) the user IDS
-2) the __rec__ topk recommendation lists of the non-perturbed model, where __rec__
-identifies the set on which these lists are generated, e.g. validation, test
-3) the __test__ topk recommendation lists of the non-perturbed model
-4) the __rec__ topk recommendation lists of the perturbed model
-5) the __test__ topk recommendation lists of the perturbed model
-6) the distance between __rec__ topk lists of the non-perturbed and perturbed model,
-with the distance measured as damerau levenshtain distance as default
-7) the distance between __test__ topk lists of the non-perturbed and perturbed model
-8) GNNUERS total loss
-9) GNNUERS distance loss
-10) GNNUERS fair loss
-11) the deleted edges in a 2xN array, where the first row contains the user ids,
-the second the item ids, such that each one of the N columns is a deleted edge
-12) epoch relative to the generated explanations
-13) GNNUERS fair loss measured on the topk lists of the non-perturbed graph
+_cf_data.pkl_ file contains a list of lists where each inner list has 5 values, relative
+to the perturbed edges at a certain epoch:
+1) GNNUERS total loss
+2) GNNUERS distance loss
+3) GNNUERS fair loss
+4) user unfairness measured with the __fair_metric__ (absolute difference of NDCG)
+5) the manipulated edges in a 2xN array, where the first row contains the user ids,
+the second the item ids, such that each one of the N columns is a manipulated edge
+6) epoch relative to the generated explanations
 
 # Plotting
 
