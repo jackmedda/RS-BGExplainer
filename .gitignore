@@ -129,4 +129,6 @@ dmypy.json
 .pyre/
 
 # GNNUERS
-.gnnuers/dp_explanations/
+.gnnuers/dp_ndcg_explanations/
+.gnnuers/experiments/
+.gnnuers/new_dp_plots/

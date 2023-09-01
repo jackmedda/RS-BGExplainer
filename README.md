@@ -47,7 +47,7 @@ cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model
 
 # Datasets
 
-The datasets used in our datasets are MovieLens 1M, Last.FM 1K, Ta Feng, Insurance and
+The datasets used in our experiments are MovieLens 1M, Last.FM 1K, Ta Feng, Insurance and
 can be downloaded from [Zenodo](https://doi.org/10.5281/zenodo.7602406).
 They should be placed in a folder named _dataset_ in the project root folder,
 so next to the _config_ and _gnnuers_ folders, e.g.:
@@ -65,7 +65,10 @@ The file [main.py](gnnuers/main.py) is the entry point for every step to execute
 ## 1. Configuration
 
 GNNUERS scripts are based on similar Recbole config files that can be found in the
-[config](config) folder. For each dataset there is a config file for:
+-[config](config) folder. The structure is hierarchical, hence the file _base_explainer.yaml_
+-can be used to set the parameters shared for all the experiments and for each dataset specify
+-the necessary parameters.
+-For each dataset there is a config file for:
 - __training__: it is named after the dataset, e.g. _ml-1m.yaml_ for MovieLens-1M,
 _tafeng.yaml_ for Ta Feng
 - __explaining__: the suffix __explainer_ is added to training config filename, e.g.
@@ -88,6 +91,11 @@ relative files. In particular, for the explainer_policies:
 - __force_removed_edges__: it should be always True to reproduce our results, it represents
 the policy that prevents the restore of a previously deleted edge, such that the edges
 deletions follow a monotonic trend
+- edge_additions: True => edges are added, not removed
+- exp_rec_data: "test" => the ground truth lables of the test set are used to measure the approximated NDCG
+- __only_adv_group__: "local" => the global issue is measured w.r.t to each batch
+- __perturb_adv_group__: the group to be perturbed. False to perturb the disadvantaged group, used when adding nodes.
+  True to perturb the advantaged group, used when removing nodes.
 - __group_deletion_constraint__: it is the Connected Nodes (CN) policy
 - __random_perturbation__: if True executes the baseline algorithm RND-P
 
@@ -120,23 +128,21 @@ a file _model_rec_test_preds.pkl_ containing the original recommendations on the
 test set, a file _users_order_.pkl containing the users ids in the order _model_rec_test_preds.pkl_ are sorted,
 a file _checkpoint.pth_ containing data used to resume the training if stopped earlier.
 
-_cf_data.pkl_ file contains a list of lists where each inner list has 5 values, relative
-to the perturbed edges at a certain epoch:
+_cf_data.pkl_ file contains a list of lists where each inner list has 5 values, relative to the perturbed edges at a certain epoch:
 1) GNNUERS total loss
 2) GNNUERS distance loss
 3) GNNUERS fair loss
-4) user unfairness measured with the __fair_metric__ (absolute difference of NDCG)
-5) the manipulated edges in a 2xN array, where the first row contains the user ids,
-the second the item ids, such that each one of the N columns is a manipulated edge
+4) fairness measured with the __fair_metric__ (absolute difference of NDCG)
+5) the perturbed edges in a 2xN array, where the first row contains the user ids,
+the second the item ids, such that each one of the N columns is a perturbed edge
 6) epoch relative to the generated explanations
 
 # Plotting
 
-The script [plot_full_comparison.py](gnnuers/plot_full_comparison.py) can be used to plot the
-results used in the paper, for two explaining runs, e.g. one with GNNUERS base (1) and one
-with GNNUERS+CP (2) we could run:
+The scripts inside the folder [scripts](scripts) can be used to plot the
+results used in the paper. They should be run from the root folder of this project.
+[eval_info.py](scripts/eval_info.py) can be used as follows:
 ```bash
-python -m gnnuers.plot_full_comparison --model_files saved/MODEL_FILE saved/MODEL_FILE --explainer_config_files RUN_1_PATH/config.yaml RUN_2_PATH/config.yaml --utility_metrics [NDCG] --add_plot_table
+python scripts/eval_info.py --e biga/experiments/dp_explanations/DATASET/MODEL/dpbg/LOSS_TYPE/SENSITIVE_ATTRIBUTE/epochs_EPOCHS/CONF_ID
 ```
-
-where RUN_1_PATH and RUN_2_PATH are the paths containing the GNNUERS output explanations.
+where the argument --e stands for the path of a specific experiment.

@@ -73,15 +73,24 @@ if __name__ == "__main__":
 
             # style_order = dict(zip(sens_df['Model'].values, ['o', 'v', '^', '<', '+', 'x', '*', 's', 'p', 'D']))
             # style_order = dict(zip(sens_df['Model'].values, ['$\mathbf{' + str(x) + '}$' for x in range(10)]))
-            style_order = dict(zip(sens_df['Model'].values, ['o', 's', 'd', 'X', 's', 'd', 'X', 's', 'd', 'X']))
+            # style_order = dict(zip(sens_df['Model'].values, ['o', 's', 'd', 'X', 's', 'd', 'X', 's', 'd', 'X']))
+            style_order = dict(zip(plot_df['Paper'].values, ['o', 'P', 'P', 'P', 'X', 'X', 'X', '*', '*', '*']))
             s = 250
             marker = '*'
 
-            sns.scatterplot(
+            scatter_kws = dict(
                 x='Rel. Diff. NDCG', y=r'Rel. Diff. $\Delta$NDCG', data=plot_df,
-                hue='Paper', s=s, ax=axs[i],
-                marker=marker,
-                # style='Model', markers=style_order
+                hue='Paper',
+                # s=s
+                # marker=marker,
+                style='Paper',
+                markers=style_order,
+                size='Paper',
+                sizes=dict(zip(plot_df['Paper'].values, [17**2 if p == 'Ours' else (17**2)/1.7 for p in plot_df['Paper']]))
+            )
+
+            sns.scatterplot(
+                ax=axs[i], **scatter_kws
             )
 
             if handles is None and labels is None:
@@ -108,8 +117,8 @@ if __name__ == "__main__":
                 inset_pos = [0.7, 0.5, 0.2, 0.4]
                 x1, x2, y1, y2 = -0.001, 0.001, -0.29, -0.14
             elif i == 1:
-                inset_pos = [0.02, 0.5, 0.4, 0.4]
-                x1, x2, y1, y2 = -0.03, 0.01, -0.26, 0.07
+                inset_pos = [0.1, 0.5, 0.4, 0.4]
+                x1, x2, y1, y2 = -0.036, 0.01, -0.26, 0.07
             elif i == 2:
                 i += 1
                 continue
@@ -121,10 +130,7 @@ if __name__ == "__main__":
 
             axins = axs[i].inset_axes(inset_pos)
             sns.scatterplot(
-                x='Rel. Diff. NDCG', y=r'Rel. Diff. $\Delta$NDCG', data=plot_df,
-                hue='Paper', s=s, ax=axins, legend=False,
-                marker=marker,
-                # style='Model', markers=style_order
+                ax=axins, legend=False, **scatter_kws
             )
 
             twin_xaxins = axins.twinx()
@@ -152,9 +158,9 @@ if __name__ == "__main__":
 
             if i in [0, 3]:
                 if i == 0:
-                    inset_pos = [0.05, 0.7, 0.15, 0.15]
+                    inset_pos = [0.155, 0.65, 0.09, 0.12]
                     spine_pos = ('axes', 0.0)
-                    x1, x2, y1, y2 = -0.046, -0.041, -0.24, -0.19
+                    x1, x2, y1, y2 = -0.049, -0.037, -0.24, -0.19
                     labelsize = 7
                 elif i == 3:
                     inset_pos = [0.35, 0.1, 0.2, 0.2]
@@ -164,10 +170,7 @@ if __name__ == "__main__":
 
                 axins_second = axs[i].inset_axes(inset_pos)
                 sns.scatterplot(
-                    x='Rel. Diff. NDCG', y=r'Rel. Diff. $\Delta$NDCG', data=plot_df,
-                    hue='Paper', s=s, ax=axins_second, legend=False,
-                    marker=marker,
-                    # style='Model', markers=style_order
+                    ax=axins_second, legend=False, **scatter_kws
                 )
 
                 twin_xaxins = axins_second.twinx()
@@ -205,6 +208,7 @@ if __name__ == "__main__":
     figlegend.savefig(os.path.join('scripts', 'legend.png'), dpi=300, bbox_inches="tight", pad_inches=0)
 
     i = 0
+    axs[0].set_ylabel("")
     for dset in ["ML-1M", "LFM-1K"]:
         for sens_attr in ["Gender", "Age"]:
             extent = axs[i].get_window_extent().transformed(fig.dpi_scale_trans.inverted())
@@ -213,9 +217,9 @@ if __name__ == "__main__":
             width = extent.width
             height = extent.height
             deltaw = (1.04 * width - width) / 2.0
-            deltah = (0.93 * height - height) / 2.0
+            deltah = (0.96 * height - height) / 2.0
             offsetw = 0.6 if i == 3 else -0.2
-            offseth = -1.4
+            offseth = -1.65
             a = np.array([[-deltaw - deltaw * offsetw, -deltah], [deltaw, deltah + deltah * offseth]])
             new_bbox = extent._points + a
             fig.savefig(os.path.join('scripts', f'ax_{dset}_{sens_attr}_expanded.png'), bbox_inches=mpl_trans.Bbox(new_bbox), dpi=300)
