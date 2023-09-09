@@ -23,7 +23,7 @@ import gnnuers.utils as utils
 import gnnuers.models as exp_models
 import gnnuers.evaluation as eval_utils
 from gnnuers.utils.early_stopping import EarlyStopping
-from gnnuers.losses import get_ranking_loss, get_fair_loss
+from gnnuers.losses import get_ranking_loss, get_beyondacc_loss
 
 from . import utils as exp_utils
 
@@ -71,12 +71,12 @@ class Explainer:
 
         self.user_batch_exp = config['user_batch_exp']
 
-        self._metric_loss = get_ranking_loss(config['metric_loss'] or 'ndcg')
-        self._fair_loss = get_fair_loss('dp')
-
         self.eval_metric = config['eval_metric'] or 'ndcg'
         self.evaluator = Evaluator(config)
-        self.fair_metric = config['fair_metric'] or 'DP_across_random_samples'
+        self.exp_metric = config['exp_metric'] or 'DP_across_random_samples'
+
+        self._metric_loss = get_ranking_loss(config['metric_loss'] or 'ndcg')
+        self._exp_loss = get_beyondacc_loss(self.exp_metric.lower())
 
         attr_map = dataset.field2id_token[self.sensitive_attribute]
         self.f_idx, self.m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
@@ -161,18 +161,18 @@ class Explainer:
     def _resume_checkpoint(self):
         ckpt = torch.load(self.ckpt_loading_path)
         epoch = ckpt['starting_epoch']
-        fair_losses = ckpt['fair_losses']
+        exp_losses = ckpt['exp_losses'] if 'exp_losses' in ckpt else ckpt['fair_losses']
         self.earlys = ckpt['early_stopping']
         best_cf_example = ckpt['best_cf_example']
         self.cf_model.load_cf_state_dict(ckpt)
 
-        return fair_losses, epoch, best_cf_example
+        return exp_losses, epoch, best_cf_example
 
-    def _save_checkpoint(self, epoch, fair_losses, best_cf_example):
+    def _save_checkpoint(self, epoch, exp_losses, best_cf_example):
         cf_state_dict = self.cf_model.cf_state_dict()
         ckpt = {
             'starting_epoch': epoch,
-            'fair_losses': fair_losses,
+            'exp_losses': exp_losses,
             'early_stopping': self.earlys,
             'best_cf_example': best_cf_example,
             **cf_state_dict
@@ -238,13 +238,13 @@ class Explainer:
                          f"CF       => {em_str} F: {cf_f}, {em_str} M: {cf_m}, Diff: {np.abs(cf_f - cf_m)}")
 
     def log_epoch(self, initial_time, epoch, *losses, **verbose_kws):
-        loss_total, fair_loss, loss_graph_dist, orig_loss_graph_dist = losses
+        loss_total, exp_loss, loss_graph_dist, orig_loss_graph_dist = losses
         self.logger.info(f"{self.cf_model.__class__.__name__} " +
                          f"Explain duration: {time.strftime('%H:%M:%S', time.gmtime(time.time() - initial_time))}, " +
                          # 'User id: {}, '.format(str(users_ids)) +
                          'Epoch: {}, '.format(epoch + 1) +
                          'loss: {:.4f}, '.format(loss_total.item()) +
-                         'fair loss: {:.4f}, '.format(fair_loss) +
+                         'exp loss: {:.4f}, '.format(exp_loss) +
                          'graph loss: {:.4f}, '.format(loss_graph_dist.item()) +
                          'perturbed edges: {:.4f}, '.format(int(orig_loss_graph_dist.item())))
         if self.verbose:
@@ -299,13 +299,13 @@ class Explainer:
                            test_data,
                            test_model_topk,
                            rec_model_topk,
-                           epoch_fair_loss):
+                           epoch_exp_loss):
         perturbed_edges = new_example[-2]
 
         try:
             if self.config['exp_rec_data'] == 'rec':
                 raise NotImplementedErorr(
-                    'fair metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
+                    'exp metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
                 )
 
             pert_sets = utils.get_dataloader_with_perturbed_edges(
@@ -334,25 +334,25 @@ class Explainer:
             #     *new_example[4:]
             # ]
 
-            epoch_rec_fair_metric = self.compute_fair_metric(
+            epoch_rec_exp_metric = self.compute_exp_metric(
                 detached_batched_data,
                 rec_cf_topk_pred_idx,
                 pert_sets_dict[self.config['exp_rec_data']].dataset
             )
 
-            epoch_test_fair_metric = self.compute_fair_metric(
+            epoch_test_exp_metric = self.compute_exp_metric(
                 detached_batched_data,
                 test_cf_topk_pred_idx,
                 pert_sets_dict['test'].dataset
             )
         except TypeError as e:
-            if self.earlys_check_value != 'fair_loss':
+            if self.earlys_check_value != 'exp_loss':
                 raise NotImplementedError(
                     'must check how to solve the problem when certain users have no items in the history like after removing/adding edges'
                 ) from e
             else:
-                epoch_rec_fair_metric = None
-                epoch_test_fair_metric = None
+                epoch_rec_exp_metric = None
+                epoch_test_exp_metric = None
 
 #         def pert_edges_mapper(pe, rec_dset):
 #             return pe
@@ -365,18 +365,18 @@ class Explainer:
 #             remap=pert_edges_mapper
 #         )
 
-        new_example[utils.exp_col_index('fair_loss')] = epoch_fair_loss
-        new_example[utils.exp_col_index('fair_metric')] = epoch_rec_fair_metric
+        new_example[utils.exp_col_index('exp_loss')] = epoch_exp_loss
+        new_example[utils.exp_col_index('exp_metric')] = epoch_rec_exp_metric
 
         wandb.log({
-            'loss': epoch_fair_loss,
-            'rec_fair_metric': epoch_rec_fair_metric,
-            'test_fair_metric': epoch_test_fair_metric,
+            'loss': epoch_exp_loss,
+            'rec_exp_metric': epoch_rec_exp_metric,
+            'test_exp_metric': epoch_test_exp_metric,
             '# Del Edges': perturbed_edges,
             'epoch': new_example[-1]
         })
 
-        return new_example, epoch_rec_fair_metric
+        return new_example, epoch_rec_exp_metric
 
     @staticmethod
     def prepare_batched_data(batched_data, data, item_data=None):
@@ -476,18 +476,18 @@ class Explainer:
         return dset_scores_args, dset_model_topk
 
     @staticmethod
-    def _verbose_plot(fair_losses, epoch):
+    def _verbose_plot(exp_losses, epoch):
         if os.path.isfile(f'loss_trend_epoch{epoch}.png'):
             os.remove(f'loss_trend_epoch{epoch}.png')
         ax = sns.lineplot(
             x='epoch',
-            y='fair loss',
-            data=pd.DataFrame(zip(np.arange(1, epoch + 2), fair_losses), columns=['epoch', 'fair loss'])
+            y='exp loss',
+            data=pd.DataFrame(zip(np.arange(1, epoch + 2), exp_losses), columns=['epoch', 'exp loss'])
         )
-        if len(fair_losses) > 20:
+        if len(exp_losses) > 20:
             sns.lineplot(
                 x=np.arange(1, epoch + 2),
-                y=sp_signal.savgol_filter(fair_losses, window_length=len(fair_losses) // 2, polyorder=2),
+                y=sp_signal.savgol_filter(exp_losses, window_length=len(exp_losses) // 2, polyorder=2),
                 ax=ax
             )
         plt.savefig(f'loss_trend_epoch{epoch + 1}.png')
@@ -657,11 +657,11 @@ class Explainer:
 
         return f_result, m_result
 
-    def compute_fair_metric(self, pref_users, model_topk, dataset, iterations=100):
+    def compute_exp_metric(self, pref_users, model_topk, dataset, iterations=100):
         pref_data = self._pref_data_sens_and_metric(pref_users, model_topk, eval_data=dataset)
 
-        return exp_utils.get_fair_metric_value(
-            self.fair_metric,
+        return exp_utils.get_exp_metric_value(
+            self.exp_metric,
             pref_data,
             self.eval_metric,
             dataset.dataset_name,
@@ -727,17 +727,17 @@ class Explainer:
 
         return batched_data, test_model_topk, test_scores_args, rec_model_topk, rec_scores_args
 
-    def run_epoch(self, epoch, batched_data, fair_losses, topk=10):
+    def run_epoch(self, epoch, batched_data, exp_losses, topk=10):
         iter_data = self.prepare_iter_batched_data(batched_data)
         iter_data = [iter_data[i] for i in np.random.permutation(len(iter_data))]
 
         previous_loss_value = self._check_previous_loss_value()
-        self._fair_loss.update_previous_loss_value(previous_loss_value)
+        self._exp_loss.update_previous_loss_value(previous_loss_value)
 
         if not self.mini_batch_descent:
             self.cf_optimizer.zero_grad()
 
-        epoch_fair_loss = []
+        epoch_exp_loss = []
         new_example, loss_total = None, None
         for batch_idx, batch_user in enumerate(iter_data):
             if self.previous_batch_LR_scaling:
@@ -746,10 +746,10 @@ class Explainer:
             batch_scores_args = self._get_scores_args(batch_user, self.rec_data)
 
             torch.cuda.empty_cache()
-            new_example, loss_total, fair_loss = self.train(
+            new_example, loss_total, exp_loss = self.train(
                 epoch, batch_scores_args, batch_user, topk=topk, previous_loss_value=previous_loss_value
             )
-            epoch_fair_loss.append(fair_loss)
+            epoch_exp_loss.append(exp_loss)
 
             if batch_idx != len(iter_data) - 1:
                 torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
@@ -759,14 +759,14 @@ class Explainer:
         if self.previous_batch_LR_scaling:
             self.lr_scaler.restore()
 
-        epoch_fair_loss = np.mean(epoch_fair_loss)
-        fair_losses.append(epoch_fair_loss)
+        epoch_exp_loss = np.mean(epoch_exp_loss)
+        exp_losses.append(epoch_exp_loss)
 
-        return new_example, loss_total, epoch_fair_loss
+        return new_example, loss_total, epoch_exp_loss
 
     def explain(self, batched_data, full_dataset, train_data, valid_data, test_data, epochs, topk=10):
         """
-        The method from which starts the perturbation of the graph by optimization of `pred_loss` or `fair_loss`
+        The method from which starts the perturbation of the graph by optimization of `pred_loss` or `exp_loss`
         :param batched_data:
         :param test_data:
         :param epochs:
@@ -789,14 +789,14 @@ class Explainer:
         if self.increase_disparity:
             test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = inc_disp_model_data
 
-        self._fair_loss = self._fair_loss(
+        self._exp_loss = self._exp_loss(
             self.sensitive_attribute,
             topk=topk,
             loss=self._metric_loss,
             adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group])
         )
 
-        # logs of fairness consider validation as seen when model recommendations are used as ground truth
+        # logs of explanation consider validation as seen when model recommendations are used as ground truth
         if self._pred_as_rec:
             self.rec_data = test_data
 
@@ -804,13 +804,13 @@ class Explainer:
         self.initialize_cf_model(filtered_users=filtered_users, filtered_items=filtered_items)
 
         if self.ckpt_loading_path is not None and os.path.exists(self.ckpt_loading_path):
-            fair_losses, starting_epoch, best_cf_example = self._resume_checkpoint()
+            exp_losses, starting_epoch, best_cf_example = self._resume_checkpoint()
             last_earlys_check_value = self.earlys.history.pop()
             if self.earlys.check(last_earlys_check_value):
                 raise AttributeError("A checkpoint of a completed run cannot be resumed")
         else:
             starting_epoch = 0
-            fair_losses = []
+            exp_losses = []
             best_cf_example = []
 
         orig_rec_dp = eval_utils.compute_DP(
@@ -822,9 +822,9 @@ class Explainer:
         self.logger.info("*********** Rec Data ***********")
         self.logger.info(self.results)
         self.logger.info(f"M idx: {self.m_idx}")
-        self.logger.info(f"Original Rec Fairness: {orig_rec_dp}")
+        self.logger.info(f"Original Rec Explanation Metric Value: {orig_rec_dp}")
         self.logger.info("*********** Test Data ***********")
-        self.logger.info(f"Original Test Fairness: {orig_test_dp}")
+        self.logger.info(f"Original Test Explanation Metric Value: {orig_test_dp}")
 
         iter_epochs = tqdm(
             range(starting_epoch, epochs),
@@ -839,13 +839,13 @@ class Explainer:
             self.lr_scaler = exp_utils.LRScaler(self.cf_optimizer, len(iter_data))
 
         for epoch in iter_epochs:
-            new_example, loss_total, epoch_fair_loss = self.run_epoch(epoch, batched_data, fair_losses, topk=topk)
+            new_example, loss_total, epoch_exp_loss = self.run_epoch(epoch, batched_data, exp_losses, topk=topk)
 
             if self.verbose:
-                Explainer._verbose_plot(fair_losses, epoch)
+                Explainer._verbose_plot(exp_losses, epoch)
 
             if new_example is not None:
-                new_example, epoch_fair_metric = self.update_new_example(
+                new_example, epoch_exp_metric = self.update_new_example(
                     new_example,
                     detached_batched_data,
                     full_dataset,
@@ -854,15 +854,15 @@ class Explainer:
                     test_data,
                     test_model_topk,
                     rec_model_topk,
-                    epoch_fair_loss
+                    epoch_exp_loss
                 )
 
                 earlys_check_value = {
-                    'fair_loss': epoch_fair_loss,
-                    'fair_metric': epoch_fair_metric
+                    'exp_loss': epoch_exp_loss,
+                    'exp_metric': epoch_exp_metric
                 }[self.earlys_check_value]
-                if self._pred_as_rec and earlys_check_value == epoch_fair_metric:
-                    raise ValueError(f"`exp_rec_data` = `rec` stores test data to log fairness metric. "
+                if self._pred_as_rec and earlys_check_value == epoch_exp_metric:
+                    raise ValueError(f"`exp_rec_data` = `rec` stores test data to log explanation metric. "
                                      f"Cannot be used as value for early stopping check")
 
                 update_best_example_args = [best_cf_example, new_example, loss_total, best_loss]
@@ -873,7 +873,7 @@ class Explainer:
                 if self.ckpt_loading_path is not None:
                     if not earlys_check:
                         # epoch + 1 because the current one is already finished
-                        self._save_checkpoint(epoch + 1, fair_losses, best_cf_example)
+                        self._save_checkpoint(epoch + 1, exp_losses, best_cf_example)
 
                 if earlys_check:
                     break
@@ -915,13 +915,14 @@ class Explainer:
         cf_scores_topk, cf_topk_idx = self.get_top_k(cf_scores, **self.topk_args)
 
         user_feat = self.get_batch_user_feat(users_ids)
-        self._fair_loss.update_user_feat(user_feat)
-
         target = self.get_target(cf_scores, user_feat)
 
-        loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, adj_sub_cf_adj = self.cf_model.loss(
+        if self._exp_loss.is_user_feat_needed():
+            self._exp_loss.update_user_feat(user_feat)
+
+        loss_total, orig_loss_graph_dist, loss_graph_dist, exp_loss, adj_sub_cf_adj = self.cf_model.loss(
             cf_scores,
-            self._fair_loss,
+            self._exp_loss,
             target
         )
 
@@ -933,19 +934,19 @@ class Explainer:
         #         print(param.grad)
         # import pdb; pdb.set_trace()
 
-        fair_loss = fair_loss.mean().item() if fair_loss is not None else torch.nan
+        exp_loss = exp_loss.mean().item() if exp_loss is not None else torch.nan
         self.log_epoch(
-            t, epoch, loss_total, fair_loss, loss_graph_dist, orig_loss_graph_dist,
+            t, epoch, loss_total, exp_loss, loss_graph_dist, orig_loss_graph_dist,
             **dict(cf_topk_idx=cf_topk_idx, cf_topk_pred_idx=cf_topk_pred_idx)
         )
 
         cf_stats = None
         if orig_loss_graph_dist.item() > 0:
             cf_stats = self.get_batch_cf_stats(
-                adj_sub_cf_adj, loss_total, loss_graph_dist, fair_loss, epoch
+                adj_sub_cf_adj, loss_total, loss_graph_dist, exp_loss, epoch
             )
 
-        return cf_stats, loss_total.item(), fair_loss
+        return cf_stats, loss_total.item(), exp_loss
 
     def get_batch_user_feat(self, users_ids):
         user_feat = self.dataset.user_feat
@@ -965,7 +966,7 @@ class Explainer:
 
         return target
 
-    def get_batch_cf_stats(self, adj_sub_cf_adj, loss_total, loss_graph_dist, fair_loss, epoch):
+    def get_batch_cf_stats(self, adj_sub_cf_adj, loss_total, loss_graph_dist, exp_loss, epoch):
         # Compute distance between original and perturbed list. Explanation maintained only if dist > 0
         # cf_dist = [self.dist(_pred, _topk_idx) for _pred, _topk_idx in zip(cf_topk_pred_idx, self.model_topk_idx)]
         cf_dist = None
@@ -976,7 +977,7 @@ class Explainer:
         # remove duplicated edges
         pert_edges = pert_edges[:, (pert_edges[0, :] < self.dataset.user_num) & (pert_edges[0, :] > 0)].numpy()
 
-        cf_stats = [loss_total.item(), loss_graph_dist.item(), fair_loss, None, pert_edges, epoch + 1]
+        cf_stats = [loss_total.item(), loss_graph_dist.item(), exp_loss, None, pert_edges, epoch + 1]
 
         if self.neighborhood_perturbation:
             self.cf_model.update_neighborhood(torch.Tensor(pert_edges))

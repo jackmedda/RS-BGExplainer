@@ -16,7 +16,7 @@ user_batch_exp: 48
 cf_beta: 0.5  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
-# how many top items to consider for model outcome list and fairness loss
+# how many top items to consider for model outcome list and explanation loss
 cf_topk: 10
 
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
@@ -25,8 +25,8 @@ metric_loss: ndcg
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
 eval_metric: ndcg
 
-# metric to evaluate the fairness of the model. choices ["DP_across_random_samples", "DP"]
-fair_metric: DP_across_random_samples
+# metric to evaluate the aspect to explain of the model. choices ["DP_across_random_samples", "DP", "UC"]
+exp_metric: UC
 
 dropout_prob: 0.3
 
@@ -53,7 +53,7 @@ bab_max_tries: 450
 # ML-1M
 # data_path: 'dataset/ml-1m' # for ML-1M
 
-# sensitive attributes to be used in the fairness losses and for following analysis
+# sensitive attributes to be used in the explanations losses if needed and for following analysis
 sensitive_attribute: gender
 
 # if True each new exp will have a different number of edges from the last one
@@ -80,7 +80,7 @@ early_stopping:
     method: 'consistency'
     mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
     delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
-    check_value: 'fair_loss'  # ['fair_loss', 'fair_metric']
+    check_value: 'exp_loss'  # ['exp_loss', 'exp_metric']
 
 previous_loss_value: False
 previous_batch_LR_scaling: False

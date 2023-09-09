@@ -9,11 +9,11 @@ PyYAML==6.0
 recbole==1.0.1
 seaborn==0.11.2
 tabulate==0.8.10
-torch==1.12.0
+torch==1.13.1
 
-torch-geometric==2.0.4
-torch-scatter==2.0.9
-torch-sparse==0.6.14
+torch-geometric
+torch-scatter
+torch-sparse
 torchviz==0.0.2
 tqdm==4.64.0
 numba

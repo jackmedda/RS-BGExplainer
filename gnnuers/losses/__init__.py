@@ -91,7 +91,6 @@ class SoftmaxLoss(RankingLoss):
     """"
     Based on TensorFlow Ranking SoftmaxLoss
     """
-    __constants__ = ['reduction']
 
     def __init__(self, size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
         super(SoftmaxLoss, self).__init__(
@@ -113,30 +112,54 @@ class SoftmaxLoss(RankingLoss):
         return torch.nn.BCEWithLogitsLoss(reduction='none')(_input_temp, target).mean(dim=1, keepdim=True)
 
 
-class FairLoss(torch.nn.modules.loss._Loss):
+class BeyondAccLoss(torch.nn.modules.loss._Loss):
     __constants__ = ['reduction']
 
     def __init__(self,
+                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, topk=10, **kwargs) -> None:
+        super(BeyondAccLoss, self).__init__(size_average, reduce, reduction)
+        self.temperature = temperature
+        self.topk = topk
+
+    def loss_type(self):
+        raise NotImplementedError("subclasses must implement this method")
+
+    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("subclasses must implement this method")
+
+    def is_user_feat_needed(self):
+        raise NotImplementedError("subclasses must implement this method")
+
+
+class FairLoss(BeyondAccLoss):
+    def __init__(self,
                  sensitive_attribute: str,
                  loss: Type[RankingLoss] = NDCGApproxLoss,
-                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, **kwargs) -> None:
-        super(FairLoss, self).__init__(size_average, reduce, reduction)
+                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.01, topk=10, **kwargs) -> None:
+        super(FairLoss, self).__init__(size_average, reduce, reduction, temperature, topk, **kwargs)
 
-        self.loss: RankingLoss = loss(
+        self.ranking_loss_function: RankingLoss = loss(
             size_average=size_average,
             reduce=reduce,
             reduction=reduction,
             temperature=temperature,
+            topk=self.topk,
             **kwargs
         )
         self.sensitive_attribute = sensitive_attribute
         self.user_feat = None
+
+    def loss_type(self):
+        return FairLoss.__name__
 
     def update_user_feat(self, user_feat):
         self.user_feat = user_feat
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("subclasses must implement this method")
+
+    def is_user_feat_needed(self):
+        return True
 
 
 class DPLoss(FairLoss):
@@ -171,7 +194,7 @@ class DPLoss(FairLoss):
             masks.append((self.user_feat[self.sensitive_attribute] == gr).numpy())
         masks = np.stack(masks)
 
-        loss_values = self.loss(_input, target)
+        loss_values = self.ranking_loss_function(_input, target)
 
         masked_loss = []
         for gr, mask in zip(groups, masks):
@@ -190,13 +213,14 @@ class DPLoss(FairLoss):
                 masked_loss.append(loss_values[mask].mean(dim=0))
         masked_loss = torch.stack(masked_loss)
 
+        fair_loss = None
         total_loss = None
         for gr_i_idx in range(len(groups)):
             if self.adv_group_data[0] == "global":
                 if groups[gr_i_idx] != self.adv_group_data[1]:
-                    # the loss works to optimize loss towards -1, the global loss is however positive
-                    loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs()
-                    total_loss = loss if total_loss is None else total_loss + loss
+                    # the loss optimizes towards -1, but the global loss is positive
+                    fair_loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs()
+                    total_loss = fair_loss if total_loss is None else total_loss + fair_loss
             else:
                 gr_i = groups[gr_i_idx]
                 for gr_j_idx in range(gr_i_idx + 1, len(groups)):
@@ -209,12 +233,51 @@ class DPLoss(FairLoss):
                         else:
                             r_val = r_val.detach()
 
-                    loss = (l_val - r_val).abs()
-                    total_loss = loss if total_loss is None else total_loss + loss
+                    fair_loss = (l_val - r_val).abs()
+                    total_loss = fair_loss if total_loss is None else total_loss + fair_loss
 
         self.update_user_feat(None)
 
-        return loss / max(int(gmpy2.comb(len(groups), 2)), 1)
+        return fair_loss / max(int(gmpy2.comb(len(groups), 2)), 1)
+
+
+class UserCoverageLoss(BeyondAccLoss):
+
+    def __init__(self,
+                 min_relevant_items=0,
+                 size_average=None, reduce=None, reduction: str = 'mean', temperature=0.1, **kwargs) -> None:
+        super(UserCoverageLoss, self).__init__(
+            size_average=size_average,
+            reduce=reduce,
+            reduction=reduction,
+            temperature=temperature,
+            **kwargs
+        )
+        self.min_relevant_items = min(min_relevant_items, round(0.5 * self.topk))
+
+    def loss_type(self):
+        return BeyondAccLoss.__name__
+
+    def is_user_feat_needed(self):
+        return False
+
+    def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        _input_temp = _input / self.temperature
+
+        _, _input_topk_idxs = torch.topk(_input, k=self.topk, dim=1)
+        relevant_idxs = target.gather(dim=1, index=_input_topk_idxs)
+        relevant_recs = relevant_idxs.sum(dim=1)
+
+        # take only users with #relevant_items < min_relevant_items
+        rel_mask = relevant_recs <= self.min_relevant_items
+
+        # exclude negative relevance
+        _input_temp = torch.relu(_input_temp)[rel_mask]
+        target = target[rel_mask]
+
+        loss = torch.where(target == 1, _input_temp * -1 - 1e-7, torch.relu(_input_temp * -1)).mean()
+
+        return torch.nan_to_num(loss, nan=0)  # if all users have enough relevant items `loss` is NaN
 
 
 def get_ranking_loss(loss="ndcg"):
@@ -224,7 +287,8 @@ def get_ranking_loss(loss="ndcg"):
     }[loss.lower()]
 
 
-def get_fair_loss(loss="dp"):
+def get_beyondacc_loss(loss="dp"):
     return {
-        "dp": DPLoss
+        "dp": DPLoss,
+        "uc": UserCoverageLoss
     }[loss.lower()]

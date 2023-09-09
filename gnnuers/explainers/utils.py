@@ -26,17 +26,18 @@ def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, 
     return utils.get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kws)
 
 
-def get_fair_metric_value(fair_metric,
-                          *args,
-                          **kwargs):
+def get_exp_metric_value(exp_metric,
+                         *args,
+                         **kwargs):
     func_map = {
         'DP_across_random_samples': _compute_explainer_DP_across_random_samples,
-        'DP': _compute_explainer_DP
+        'DP': _compute_explainer_DP,
+        'UC': _compute_explainer_UC
     }
-    if fair_metric not in func_map:
-        raise NotImplementedError(f'fair_metric `{fair_metric}` is not implemented.')
+    if exp_metric not in func_map:
+        raise NotImplementedError(f'exp_metric `{exp_metric}` is not implemented.')
 
-    return func_map[fair_metric](*args, **kwargs)
+    return func_map[exp_metric](*args, **kwargs)
 
 
 def _compute_explainer_DP_across_random_samples(pref_data,
@@ -53,11 +54,11 @@ def _compute_explainer_DP_across_random_samples(pref_data,
         if (dset_name, sens_attr) in eval_utils.compute_DP_across_random_samples.generated_groups:
             del eval_utils.compute_DP_across_random_samples.generated_groups[(dset_name, sens_attr)]
 
-    fair_metric_value, _ = eval_utils.compute_DP_across_random_samples(
+    exp_metric_value, _ = eval_utils.compute_DP_across_random_samples(
         pref_data, sens_attr, 'Demo Group', dset_name, eval_metric, iterations=iterations, batch_size=batch_size
     )
 
-    return fair_metric_value[:, -1].mean()
+    return exp_metric_value[:, -1].mean()
 
 
 def _compute_explainer_DP(pref_data,
@@ -69,3 +70,10 @@ def _compute_explainer_DP(pref_data,
         gr_results.append(pref_data.loc[gr_mask, eval_metric].mean())
 
     return eval_utils.compute_DP(*gr_results)
+
+
+def _compute_explainer_UC(pref_data,
+                          eval_metric,
+                          *args,
+                          **kwargs):
+    return (pref_data.loc[:, eval_metric] > 0).long().sum()
