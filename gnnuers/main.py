@@ -18,7 +18,7 @@ import gnnuers.utils as utils
 
 
 def training(_config, saved=True, model_file=None, hyper=False):
-    logger = logging.getLogger() if hyper else None
+    logger = logging.getLogger() if not hyper else None
 
     if model_file is not None:
         _config, _model, _dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file)
