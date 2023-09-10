@@ -22,7 +22,6 @@ script_path = os.path.abspath(os.path.dirname(inspect.getsourcefile(lambda: 0)))
 
 
 def get_base_exps_filepath(config,
-                           exp_config,
                            config_id=-1,
                            model_name=None,
                            model_file="",
@@ -325,7 +324,6 @@ def execute_explanation(model_file,
 
     base_exps_filepath = get_base_exps_filepath(
         config,
-        {k: v for k, v in config.items() if k in explainer_config},  # in config the values could get updated via cmd line
         config_id=config_id,
         model_name=model.__class__.__name__,
         model_file=model_file,
