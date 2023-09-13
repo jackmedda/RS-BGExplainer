@@ -35,8 +35,8 @@ _EXPS_COLUMNS = [
     # "test_cf_dist",
     "loss_total",
     "loss_graph_dist",
-    "fair_loss",
-    "fair_metric",
+    "exp_loss",
+    "exp_metric",
     "del_edges",
     "epoch",
     # "first_fair_loss"
@@ -202,8 +202,13 @@ def update_base_explainer(base_explainer_config_file, explainer_config_file=None
         config_dict = yaml.load(f.read(), Loader=yaml_loader)
 
     if explainer_config_file is not None:
-        with open(explainer_config_file, 'r', encoding='utf-8') as f:
-            exp_config_dict = yaml.load(f.read(), Loader=yaml_loader)
+        if os.path.splitext(explainer_config_file)[-1] == '.yaml':
+            with open(explainer_config_file, 'r', encoding='utf-8') as f:
+                exp_config_dict = yaml.load(f.read(), Loader=yaml_loader)
+        else:
+            with open(explainer_config_file, 'rb') as f:
+                exp_config_dict = pickle.load(f).final_config_dict
+
         config_dict.update(exp_config_dict)
 
     return config_dict

@@ -459,7 +459,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                                          return_pref_data=False):
     models = ["NGCF", "LightGCN", "GCMC"] if models is None else models
     metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
-    cols = ['user_id', 'Epoch', '# Del Edges', 'Fair Loss', 'Metric',
+    cols = ['user_id', 'Epoch', '# Del Edges', 'Exp Loss', 'Metric',
             'Demo Group', 'Sens Attr', 'Model', 'Dataset', 'Value', 'Policy']
 
     exp_pref_data = {}

@@ -45,7 +45,9 @@ if __name__ == "__main__":
         args.exp_path += os.sep
 
     if 'experiments' in args.exp_path:
-        _, dset, mod, _, _, s_attr, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
+        # _, dset, mod, _, _, s_attr, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
+        _, dset, mod, _, _, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
+        s_attr = 'gender'
     else:
         _, dset, mod, _, s_attr, eps, cid, _ = args.exp_path.split('dp_ndcg_explanations')[1].split(os.sep)
     eps = eps.replace('epochs_', '')
@@ -53,15 +55,13 @@ if __name__ == "__main__":
     model_files = os.scandir(os.path.join(os.path.dirname(sys.path[0]), 'saved'))
     model_file = [f.path for f in model_files if mod in f.name and dset.upper() in f.name][0]
 
-    explainer_config, exp_content = utils.update_base_explainer(
+    explainer_config = utils.update_base_explainer(
         os.path.join('config', 'base_explainer.yaml'),
-        os.path.join(args.exp_path, 'config.yaml'),
-        return_exp_content=True
+        os.path.join(args.exp_path, 'config.pkl'),
     )
-    config, model, dataset, train_data, valid_data, test_data, _ = utils.load_data_and_model(
+    config, model, dataset, train_data, valid_data, test_data = utils.load_data_and_model(
         model_file,
-        explainer_config,
-        exp_file_content=exp_content
+        explainer_config
     )
 
     mondel_pol = ''

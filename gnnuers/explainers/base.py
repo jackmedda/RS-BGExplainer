@@ -16,16 +16,17 @@ import scipy.signal as sp_signal
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from recbole.evaluator import Evaluator
-from recbole.utils import set_color
 from recbole.data.interaction import Interaction
+from recbole.utils import set_color, FeatureSource, FeatureType
 
 import gnnuers.utils as utils
 import gnnuers.models as exp_models
 import gnnuers.evaluation as eval_utils
 from gnnuers.utils.early_stopping import EarlyStopping
-from gnnuers.losses import get_ranking_loss, get_beyondacc_loss
+from gnnuers.losses import get_ranking_loss, get_loss_from_exp_metric
 
 from . import utils as exp_utils
+from . import metrics as exp_metrics
 
 
 class Explainer:
@@ -61,8 +62,6 @@ class Explainer:
         elif dist == "damerau_levenshtein":
             self.dist = utils.damerau_levenshtein_distance
 
-        self.sensitive_attribute = config['sensitive_attribute']
-
         self.topk_args = None
         self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
 
@@ -73,11 +72,12 @@ class Explainer:
 
         self.eval_metric = config['eval_metric'] or 'ndcg'
         self.evaluator = Evaluator(config)
-        self.exp_metric = config['exp_metric'] or 'DP_across_random_samples'
+        self.exp_metric = config['exp_metric'] or 'consumer_DP_across_random_samples'
 
         self._metric_loss = get_ranking_loss(config['metric_loss'] or 'ndcg')
-        self._exp_loss = get_beyondacc_loss(self.exp_metric.lower())
+        self._exp_loss = get_loss_from_exp_metric(self.exp_metric)
 
+        self.sensitive_attribute = config['sensitive_attribute']
         attr_map = dataset.field2id_token[self.sensitive_attribute]
         self.f_idx, self.m_idx = (attr_map == 'F').nonzero()[0][0], (attr_map == 'M').nonzero()[0][0]
 
@@ -99,6 +99,7 @@ class Explainer:
         self.lr_scaler = None
 
         # Init policies
+        self.gradient_deactivation_constraint = config['explainer_policies']['gradient_deactivation_constraint']
         self.increase_disparity = config['explainer_policies']['increase_disparity']
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
         self.random_perturbation = config['explainer_policies']['random_perturbation']
@@ -115,6 +116,21 @@ class Explainer:
         self.sparse_users_constraint_ratio = config['sparse_users_constraint_ratio'] or 0.3
         self.niche_items_constraint = config['explainer_policies']['niche_items_constraint']
         self.niche_items_constraint_ratio = config['niche_items_constraint_ratio'] or 0.3
+
+        self.coverage_min_relevant_items = config['coverage_min_relevant_items'] or 0
+        self.coverage_loss_only_relevant = config['coverage_loss_only_relevant'] or True
+
+        self.item_discriminative_attribute = config['item_discriminative_attribute'] or 'exposure'
+        self.item_discriminative_ratio = 1 / 4  # SH / LT Explainable Fairness in Recommendation
+        self.item_discriminative_groups_distrib = [1, 1 / self.item_discriminative_ratio]
+        self.item_discriminative_map = ['[PAD]', 'SH', 'LT']  # SH: Short Head, LT: Long Tail
+
+        self._exp_loss_args = {
+            'consumer_dp': [self.sensitive_attribute],
+            'consumer_dp_across_random_samples': [self.sensitive_attribute],
+            'provider_dp': [self.item_discriminative_attribute],
+            'uc': [self.coverage_min_relevant_items]
+        }
 
         self.ckpt_loading_path = None
 
@@ -150,8 +166,14 @@ class Explainer:
             self.cf_optimizer = torch.optim.SGD(self.cf_model.parameters(), lr=lr, **sgd_kwargs)
         elif self.config["cf_optimizer"] == "Adadelta":
             self.cf_optimizer = torch.optim.Adadelta(self.cf_model.parameters(), lr=lr)
+        elif self.config["cf_optimizer"] == "Adagrad":
+            self.cf_optimizer = torch.optim.Adagrad(self.cf_model.parameters(), lr=lr)
         elif self.config["cf_optimizer"] == "AdamW":
             self.cf_optimizer = torch.optim.AdamW(self.cf_model.parameters(), lr=lr)
+        elif self.config["cf_optimizer"] == "Adam":
+            self.cf_optimizer = torch.optim.Adam(self.cf_model.parameters(), lr=lr)
+        elif self.config["cf_optimizer"] == "RMSprop":
+            self.cf_optimizer = torch.optim.RMSprop(self.cf_model.parameters(), lr=lr)
         else:
             raise NotImplementedError("CF Optimizer not implemented")
 
@@ -372,9 +394,17 @@ class Explainer:
             'loss': epoch_exp_loss,
             'rec_exp_metric': epoch_rec_exp_metric,
             'test_exp_metric': epoch_test_exp_metric,
-            '# Del Edges': perturbed_edges,
+            '# Del Edges': perturbed_edges.shape[1],
             'epoch': new_example[-1]
         })
+
+        self.logger.info(str({
+            'loss': epoch_exp_loss,
+            'rec_exp_metric': epoch_rec_exp_metric,
+            'test_exp_metric': epoch_test_exp_metric,
+            '# Del Edges': perturbed_edges.shape[1],
+            'epoch': new_example[-1]
+        }))
 
         return new_example, epoch_rec_exp_metric
 
@@ -453,14 +483,17 @@ class Explainer:
         return iter_data
 
     def prepare_iter_batched_data(self, batched_data):
-        if self.only_adv_group != "global":
-            iter_data = self.randperm2groups(batched_data)
-            # check if each batch has at least 2 groups
-            while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
+        if self._exp_loss.loss_type() == 'Consumer':
+            if self.only_adv_group != "global":
                 iter_data = self.randperm2groups(batched_data)
+                # check if each batch has at least 2 groups
+                while any(self.dataset.user_feat[self.sensitive_attribute][d].unique().shape[0] < 2 for d in iter_data):
+                    iter_data = self.randperm2groups(batched_data)
+            else:
+                batched_attr_data = self.dataset.user_feat[self.sensitive_attribute][batched_data]
+                iter_data = batched_data[batched_attr_data == self.adv_group].split(self.user_batch_exp)
         else:
-            batched_attr_data = self.dataset.user_feat[self.sensitive_attribute][batched_data]
-            iter_data = batched_data[batched_attr_data == self.adv_group].split(self.user_batch_exp)
+            iter_data = batched_data[torch.randperm(batched_data.shape[0])].split(self.user_batch_exp)
 
         return iter_data
 
@@ -634,6 +667,25 @@ class Explainer:
             return True
         return False
 
+    def _check_item_feat(self):
+        if self.dataset.item_feat is None or self.item_discriminative_attribute not in self.dataset.item_feat:
+            pop = torch.argsort(self.dataset.history_user_matrix()[2], descending=True)
+            sh_size = round(self.item_discriminative_ratio * pop.shape[0])
+
+            if self.dataset.item_feat is None:
+                self.dataset.item_feat = self.dataset.get_item_feature()
+            # self.field2seqlen[dest_field]
+
+            exposure_group = torch.zeros_like(self.dataset.item_feat[self.dataset.iid_field])
+            exposure_group[pop[:sh_size]] = 1
+            exposure_group[pop[sh_size:]] = 2
+            exposure_group[0] = 0
+
+            self.dataset.item_feat[self.item_discriminative_attribute] = exposure_group
+            self.dataset.field2type[self.item_discriminative_attribute] = FeatureType('token')
+            self.dataset.field2source[self.item_discriminative_attribute] = FeatureSource('item')
+            self.dataset.field2seqlen[self.item_discriminative_attribute] = 1
+
     def _pref_data_sens_and_metric(self, pref_users, model_topk, eval_data=None):
         pref_data = pd.DataFrame(
             zip(pref_users, model_topk, self.dataset.user_feat[self.sensitive_attribute][pref_users].numpy()),
@@ -660,14 +712,18 @@ class Explainer:
     def compute_exp_metric(self, pref_users, model_topk, dataset, iterations=100):
         pref_data = self._pref_data_sens_and_metric(pref_users, model_topk, eval_data=dataset)
 
-        return exp_utils.get_exp_metric_value(
+        return exp_metrics.get_exp_metric_value(
             self.exp_metric,
             pref_data,
             self.eval_metric,
             dataset.dataset_name,
             self.sensitive_attribute,
             self.user_batch_exp,
-            iterations=iterations
+            dataset=self.dataset,
+            discriminative_attribute=self.item_discriminative_attribute,
+            groups_distrib=self.item_discriminative_groups_distrib,
+            iterations=iterations,
+            coverage_min_relevant_items=self.coverage_min_relevant_items
         )
 
     def determine_adv_group(self, batched_data: np.ndarray, rec_model_topk):
@@ -732,7 +788,8 @@ class Explainer:
         iter_data = [iter_data[i] for i in np.random.permutation(len(iter_data))]
 
         previous_loss_value = self._check_previous_loss_value()
-        self._exp_loss.update_previous_loss_value(previous_loss_value)
+        if self._exp_loss.loss_type() == 'Consumer':
+            self._exp_loss.update_previous_loss_value(previous_loss_value)
 
         if not self.mini_batch_descent:
             self.cf_optimizer.zero_grad()
@@ -790,11 +847,17 @@ class Explainer:
             test_model_topk, test_scores_args, rec_model_topk, rec_scores_args = inc_disp_model_data
 
         self._exp_loss = self._exp_loss(
-            self.sensitive_attribute,
+            *self._exp_loss_args[self.exp_metric.lower()],
             topk=topk,
             loss=self._metric_loss,
-            adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group])
+            adv_group_data=(self.only_adv_group, self.disadv_group, self.results[self.disadv_group]),
+            deactivate_gradient=self.gradient_deactivation_constraint,
+            only_relevant=self.coverage_loss_only_relevant,
+            groups_distrib=self.item_discriminative_groups_distrib
         )
+
+        if self._exp_loss.loss_type() == 'Provider':
+            self._check_item_feat()
 
         # logs of explanation consider validation as seen when model recommendations are used as ground truth
         if self._pred_as_rec:
@@ -813,18 +876,23 @@ class Explainer:
             exp_losses = []
             best_cf_example = []
 
-        orig_rec_dp = eval_utils.compute_DP(
-            self.results[self.adv_group], self.results[self.disadv_group]
-        )
-        orig_test_dp = eval_utils.compute_DP(
-            *self.compute_f_m_result(detached_batched_data, test_model_topk, eval_data=test_data.dataset)
-        )
+        # orig_rec_dp = eval_utils.compute_DP(
+        #     self.results[self.adv_group], self.results[self.disadv_group]
+        # )
+        # orig_test_dp = eval_utils.compute_DP(
+        #     *self.compute_f_m_result(detached_batched_data, test_model_topk, eval_data=test_data.dataset)
+        # )
+
+        orig_rec_exp_metric_val = self.compute_exp_metric(detached_batched_data, rec_model_topk, self.dataset)
+        orig_rec_exp_metric_test = self.compute_exp_metric(detached_batched_data, test_model_topk, test_data.dataset)
+
         self.logger.info("*********** Rec Data ***********")
-        self.logger.info(self.results)
-        self.logger.info(f"M idx: {self.m_idx}")
-        self.logger.info(f"Original Rec Explanation Metric Value: {orig_rec_dp}")
+        if self._exp_loss.loss_type() == 'Consumer':
+            self.logger.info(self.results)
+            self.logger.info(f"M idx: {self.m_idx}")
+        self.logger.info(f"Original Rec Explanation Metric Value: {orig_rec_exp_metric_val}")
         self.logger.info("*********** Test Data ***********")
-        self.logger.info(f"Original Test Explanation Metric Value: {orig_test_dp}")
+        self.logger.info(f"Original Test Explanation Metric Value: {orig_rec_exp_metric_test}")
 
         iter_epochs = tqdm(
             range(starting_epoch, epochs),
@@ -917,8 +985,9 @@ class Explainer:
         user_feat = self.get_batch_user_feat(users_ids)
         target = self.get_target(cf_scores, user_feat)
 
-        if self._exp_loss.is_user_feat_needed():
-            self._exp_loss.update_user_feat(user_feat)
+        if self._exp_loss.is_data_feat_needed():
+            data_feat = self.get_loss_data_feat(users_ids, user_feat)
+            self._exp_loss.update_data_feat(data_feat)
 
         loss_total, orig_loss_graph_dist, loss_graph_dist, exp_loss, adj_sub_cf_adj = self.cf_model.loss(
             cf_scores,
@@ -965,6 +1034,14 @@ class Explainer:
         target[:, 0] = 0  # item 0 is a padding item
 
         return target
+
+    def get_loss_data_feat(self, users_ids, user_feat):
+        if self._exp_loss.loss_type() == 'Consumer':
+            return user_feat
+        elif self._exp_loss.loss_type() == 'Provider':
+            return self.dataset.item_feat[1:]
+        else:
+            raise ValueError('A `FairLoss` subclass should contain "Consumer" or "Provider" in its name')
 
     def get_batch_cf_stats(self, adj_sub_cf_adj, loss_total, loss_graph_dist, exp_loss, epoch):
         # Compute distance between original and perturbed list. Explanation maintained only if dist > 0

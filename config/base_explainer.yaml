@@ -1,9 +1,9 @@
 # choices ["DPBG", "BaB"]
 explainer: DPBG
-# optimizer for explainer
+# optimizer for explainer ['SGD', 'AdamW', 'Adadelta']
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 100000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 10000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -20,17 +20,17 @@ cf_dist: damerau_levenshtein
 cf_topk: 10
 
 # metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: ndcg
+metric_loss: softmax
 
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
-eval_metric: ndcg
+eval_metric: precision
 
-# metric to evaluate the aspect to explain of the model. choices ["DP_across_random_samples", "DP", "UC"]
+# metric to evaluate the aspect to explain of the model. choices ["consumer_DP_across_random_samples", "consumer_DP", "provider_DP", "UC"]
 exp_metric: UC
 
 dropout_prob: 0.3
 
-edge_additions: True
+edge_additions: False
 
 # select which set need to be used to optimize the DP explainer. Choices ["rec", "train", "valid", "test"]
 exp_rec_data: "test"
@@ -55,6 +55,9 @@ bab_max_tries: 450
 
 # sensitive attributes to be used in the explanations losses if needed and for following analysis
 sensitive_attribute: gender
+
+#
+item_discriminative_attribute: visibility
 
 # if True each new exp will have a different number of edges from the last one
 save_unique_graph_dist_loss: True
@@ -90,8 +93,9 @@ perturbation_initialization: 'static'
 
 # Policies
 explainer_policies:
+    gradient_deactivation_constraint: True
     increase_disparity: False
-    force_removed_edges: True  # no effect on edge_additions
+    force_removed_edges: False  # no effect on edge_additions
     group_deletion_constraint: False   # this and `random_perturbation` cannot be both True
     random_perturbation: False
     neighborhood_perturbation: False   # the perturbation spread from the first perturbed edges towards the neighbors
@@ -109,3 +113,6 @@ users_furthest_constraint_ratio: 0.35  # it represent the ratio of the furthest 
 sparse_users_constraint_ratio: 0.35  # it represent the ratio of the users most connected with niche items
 items_preference_constraint_ratio: 0.2  # it represent the ratio of items mostly preferred by the perturbed group
 niche_items_constraint_ratio: 0.2  # it represents the ratio of the most niche items
+
+coverage_min_relevant_items: 0  # how many items should be relevant in a list to be considered "covered"
+coverage_loss_only_relevant: True  # if only relevant items are optimized, or the relevance of non-relevant items should be decreased in the optimization

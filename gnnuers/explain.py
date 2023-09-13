@@ -40,9 +40,9 @@ def get_base_exps_filepath(config,
     exp_type = "dp_explanations" if not hyper else "hyperoptimization"
     base_exps_file = os.path.join(script_path, "experiments", exp_type, config["dataset"], model_name, explainer)
 
-    fair_metadata = config["sensitive_attribute"].lower()
-    fair_loss = config["metric_loss"].lower() + "_loss"
-    base_exps_file = os.path.join(base_exps_file, fair_loss, fair_metadata, f"epochs_{epochs}")
+    exp_metadata = config["sensitive_attribute"].lower() if 'dp' in config["exp_metric"].lower() else ''
+    exp_loss = config["exp_metric"] + "_loss"
+    base_exps_file = os.path.join(base_exps_file, exp_loss, exp_metadata, f"epochs_{epochs}")
 
     if os.path.exists(base_exps_file):
         if config_id == -1:
@@ -240,12 +240,12 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
         exp, model_preds = explainer.explain(user_data, _test_data, epochs, topk=topk)
         best_exp = utils.get_best_exp_early_stopping(exp, config)
 
-        fair_metric = best_exp[utils.exp_col_index('fair_metric')]
+        exp_metric = best_exp[utils.exp_col_index('exp_metric')]
 
         with run:
-            run.log({'trial_fair_metric': fair_metric})
+            run.log({'trial_exp_metric': exp_metric})
 
-        return fair_metric
+        return exp_metric
 
     study_name = exp_token + '_' + str([k for k in config['explainer_policies'] if config['explainer_policies'][k]])
     storage_name = "sqlite:///{}.db".format(study_name)
@@ -275,7 +275,7 @@ def optimize_explain(config, model, _train_dataset, _rec_data, _test_data, base_
     # WandB summary.
     for step, trial in enumerate(trials):
         # Logging the loss.
-        summary.log({"trial_fair_metric": trial.value}, step=step)
+        summary.log({"trial_exp_metric": trial.value}, step=step)
 
         # Logging the parameters.
         for k, v in trial.params.items():
