@@ -76,7 +76,7 @@ def _compute_explainer_provider_DP(pref_data,
     else:
         raise NotImplementedError(f'The fairness level `{fairness_level}` of the provider explanation metric is not supported')
 
-    return abs(metric_sh / groups_distrib[0] - metric_lt / groups_distrib[1])
+    return (metric_sh / groups_distrib[0] - metric_lt / groups_distrib[1]).abs().item()
 
 
 def _compute_explainer_UC(pref_data,

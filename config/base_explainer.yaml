@@ -1,9 +1,9 @@
 # choices ["DPBG", "BaB"]
 explainer: DPBG
 # optimizer for explainer ['SGD', 'AdamW', 'Adadelta']
-cf_optimizer: SGD
+cf_optimizer: Adadelta
 # learning rate of optimizer for explainer
-cf_learning_rate: 10000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 100 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -19,14 +19,14 @@ cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and explanation loss
 cf_topk: 10
 
-# metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: softmax
+# metric used for consumer demographic parity loss and debugging. choices ["ndcg", "softmax"]
+metric_loss: ndcg
 
-# metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
-eval_metric: precision
+# metric to evaluate the consumer fairness performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
+eval_metric: ndcg
 
 # metric to evaluate the aspect to explain of the model. choices ["consumer_DP_across_random_samples", "consumer_DP", "provider_DP", "UC"]
-exp_metric: UC
+exp_metric: provider_DP
 
 dropout_prob: 0.3
 
@@ -41,7 +41,7 @@ exp_rec_data: "test"
 # "global": the optimization uses the ranking metric score of the disadvantaged group computed globally on the original model
 only_adv_group: "local"
 # Choose if the edges of the advantaged group should be perturbed or the opposite
-perturb_adv_group: False
+perturb_adv_group: True
 
 # how many edges should be deleted for each batch before passing to the next one when BaB explainer is used
 bab_min_del_edges: 100
@@ -81,9 +81,9 @@ early_stopping:
     patience: 15  # a periodicity is visible on the charts, with low peaks better than the previous ones after 20-40 epochs
     ignore: 0
     method: 'consistency'
-    mode: 'lt'  # lower than, use any other python func ('le', 'gt', 'ge')
+    mode: 'gt'  # lower than, use any other python func ('le', 'gt', 'ge')
     delta: 0.001  # several experiments show many low peaks with differences about > 0.15, which are relevant for us
-    check_value: 'exp_loss'  # ['exp_loss', 'exp_metric']
+    check_value: 'exp_metric'  # ['exp_loss', 'exp_metric']
 
 previous_loss_value: False
 previous_batch_LR_scaling: False
@@ -93,7 +93,7 @@ perturbation_initialization: 'static'
 
 # Policies
 explainer_policies:
-    gradient_deactivation_constraint: True
+    gradient_deactivation_constraint: False
     increase_disparity: False
     force_removed_edges: False  # no effect on edge_additions
     group_deletion_constraint: False   # this and `random_perturbation` cannot be both True

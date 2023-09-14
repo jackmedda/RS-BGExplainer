@@ -40,7 +40,7 @@ def get_base_exps_filepath(config,
     exp_type = "dp_explanations" if not hyper else "hyperoptimization"
     base_exps_file = os.path.join(script_path, "experiments", exp_type, config["dataset"], model_name, explainer)
 
-    exp_metadata = config["sensitive_attribute"].lower() if 'dp' in config["exp_metric"].lower() else ''
+    exp_metadata = config["sensitive_attribute"].lower() if 'consumer' in config["exp_metric"].lower() else ''
     exp_loss = config["exp_metric"] + "_loss"
     base_exps_file = os.path.join(base_exps_file, exp_loss, exp_metadata, f"epochs_{epochs}")
 

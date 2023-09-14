@@ -1,5 +1,5 @@
 # learning rate of optimizer for explainer
-cf_learning_rate: 85000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 5000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
 
 # how many users should be considered to explain?
 user_batch_exp: 192

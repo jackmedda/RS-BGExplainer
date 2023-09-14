@@ -118,7 +118,7 @@ class ConsumerDPLoss(FairLoss):
             if self.adv_group_data[0] == "global":
                 if groups[gr_i_idx] != self.adv_group_data[1]:
                     # the loss optimizes towards -1, but the global loss is positive
-                    fair_loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs()
+                    fair_loss = (masked_loss[gr_i_idx] - (-self.adv_group_data[2])).abs() * -1
                     total_loss = fair_loss if total_loss is None else total_loss + fair_loss
             else:
                 gr_i = groups[gr_i_idx]
@@ -132,7 +132,7 @@ class ConsumerDPLoss(FairLoss):
                         else:
                             r_val = r_val.detach()
 
-                    fair_loss = (l_val - r_val).abs()
+                    fair_loss = (l_val - r_val).abs() * -1
                     total_loss = fair_loss if total_loss is None else total_loss + fair_loss
 
         self.update_data_feat(None)
@@ -189,9 +189,9 @@ class ProviderDPLoss(FairLoss):
 
         disparity = groups_recs_distrib[0] / self.groups_distrib[0] - groups_recs_distrib[1] / self.groups_distrib[1]
         if self.discriminative_attribute.lower() == 'visibility':
-            fair_loss = disparity.abs()
+            fair_loss = disparity.abs() * -1
         elif self.discriminative_attribute.lower() == 'exposure':
-            fair_loss = (disparity.sum() / input_topk_vals.sum()).abs()
+            fair_loss = (disparity.sum() / input_topk_vals.sum()).abs() * -1
 
         return fair_loss
 

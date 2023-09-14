@@ -99,7 +99,7 @@ class Explainer:
         self.lr_scaler = None
 
         # Init policies
-        self.gradient_deactivation_constraint = config['explainer_policies']['gradient_deactivation_constraint']
+        self.gradient_deactivation_constraint = config['explainer_policies']['gradient_deactivation_constraint'] or False
         self.increase_disparity = config['explainer_policies']['increase_disparity']
         self.group_deletion_constraint = config['explainer_policies']['group_deletion_constraint']
         self.random_perturbation = config['explainer_policies']['random_perturbation']
