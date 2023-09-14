@@ -19,11 +19,11 @@ from recbole.evaluator import Evaluator
 from recbole.data.interaction import Interaction
 from recbole.utils import set_color, FeatureSource, FeatureType
 
-import gnnuers.utils as utils
-import gnnuers.models as exp_models
-import gnnuers.evaluation as eval_utils
-from gnnuers.utils.early_stopping import EarlyStopping
-from gnnuers.losses import get_ranking_loss, get_loss_from_exp_metric
+import cpfair_robust.utils as utils
+import cpfair_robust.models as exp_models
+import cpfair_robust.evaluation as eval_utils
+from cpfair_robust.utils.early_stopping import EarlyStopping
+from cpfair_robust.losses import get_ranking_loss, get_loss_from_exp_metric
 
 from . import utils as exp_utils
 from . import metrics as exp_metrics

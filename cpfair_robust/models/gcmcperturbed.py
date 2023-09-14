@@ -7,7 +7,7 @@ from recbole.model.general_recommender.gcmc import GCMC, GcEncoder
 
 sys.path.append('..')
 
-from gnnuers.models import PerturbedModel
+from cpfair_robust.models import PerturbedModel
 
 
 class GCMCPerturbed(PerturbedModel, GCMC):

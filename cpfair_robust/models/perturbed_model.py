@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 
-import gnnuers.utils as utils
+import cpfair_robust.utils as utils
 from . import utils as model_utils
 
 

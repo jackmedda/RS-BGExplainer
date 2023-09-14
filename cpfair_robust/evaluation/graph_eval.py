@@ -7,7 +7,7 @@ import igraph as ig
 import networkx as nx
 import scipy.sparse as sp
 
-import gnnuers.utils as utils
+import cpfair_robust.utils as utils
 
 
 def get_nx_adj_matrix(dataset):

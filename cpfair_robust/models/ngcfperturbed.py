@@ -9,7 +9,7 @@ from recbole.model.general_recommender import NGCF
 
 sys.path.append('..')
 
-from gnnuers.models import PerturbedModel
+from cpfair_robust.models import PerturbedModel
 
 
 class NGCFPerturbed(PerturbedModel, NGCF):

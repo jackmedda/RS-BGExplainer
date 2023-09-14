@@ -6,18 +6,18 @@ import argparse
 import tqdm
 import pandas as pd
 
-import gnnuers.data.utils as data_utils
+import cpfair_robust.data.utils as data_utils
 
 
 if __name__ == "__main__":
     """
     # Windows
-    python -m gnnuers.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset\lastfm-1k\lastfm-1k.inter --user_filepath dataset\lastfm-1k\lastfm-1k.user --dataset_name lastfm-1k_n-1 --min_interactions 20 --out_folderpath lastfm-1k_n-1\
+    python -m cpfair_robust.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset\lastfm-1k\lastfm-1k.inter --user_filepath dataset\lastfm-1k\lastfm-1k.user --dataset_name lastfm-1k_n-1 --min_interactions 20 --out_folderpath lastfm-1k_n-1\
     # Linux
-    python3.9 -m gnnuers.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset/lastfm-1k/lastfm-1k.inter --user_filepath dataset/lastfm-1k/lastfm-1k.user --min_interactions 20 --dataset_name lastfm-1k_n-1 --out_folderpath lastfm-1k_n-1/
+    python3.9 -m cpfair_robust.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset/lastfm-1k/lastfm-1k.inter --user_filepath dataset/lastfm-1k/lastfm-1k.user --min_interactions 20 --dataset_name lastfm-1k_n-1 --out_folderpath lastfm-1k_n-1/
 
     # Train to Test (Linux)
-    python3.9 -m gnnuers.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset/lastfm-1k/lastfm-1k.inter --user_filepath dataset/lastfm-1k/lastfm-1k.user --min_interactions 20 --dataset_name lastfm-1k_n-1 --out_folderpath lastfm-1k_n-1/ --train_to_test 1
+    python3.9 -m cpfair_robust.data.preprocess_dataset --train_split 0.7 --test_split 0.2 --validation_split 0.1 --split_type per_user --user_field user_id:token --item_field item_id:token --time_field timestamp:float --in_filepath dataset/lastfm-1k/lastfm-1k.inter --user_filepath dataset/lastfm-1k/lastfm-1k.user --min_interactions 20 --dataset_name lastfm-1k_n-1 --out_folderpath lastfm-1k_n-1/ --train_to_test 1
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--in_filepath', required=True)

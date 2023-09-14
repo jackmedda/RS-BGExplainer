@@ -18,8 +18,8 @@ from adjustText import adjust_text
 from matplotlib.lines import Line2D
 from recbole.evaluator import Evaluator
 
-import gnnuers.utils as utils
-import gnnuers.utils.plot_utils as plot_utils
+import cpfair_robust.utils as utils
+import cpfair_robust.utils.plot_utils as plot_utils
 
 
 # %%
