@@ -141,6 +141,8 @@ class ConsumerDPLoss(FairLoss):
 
 
 class ProviderDPLoss(FairLoss):
+    __TOPK_OFFSET__ = 0.1
+
     def __init__(self,
                  discriminative_attribute: str,
                  adv_group_data: Tuple[str, int, float] = None,
@@ -159,20 +161,27 @@ class ProviderDPLoss(FairLoss):
         self.groups_distrib = groups_distrib
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Instead of estimating the visibility on the top-k, we take the top 10% of items, because the top-k could not
+        include items of both groups (short-head, long-tail) due to recommendation of only short-head items or because
+        the top-k during training include also interactions in the training set.
+        """
         if self.data_feat is None:
             raise AttributeError('each forward call should be preceded by a call of `update_data_feat`')
 
         _input = _input[:, 1:]  # data_feat does not have padding item 0
 
-        input_topk_vals, input_topk_idxs = torch.topk(_input, k=self.topk, dim=1)
+        input_topk_vals, input_topk_idxs = torch.topk(_input, k=round(_input.shape[1] * self.__TOPK_OFFSET__), dim=1)
 
         groups = self.data_feat[self.discriminative_attribute].unique().numpy()
         groups_recs_distrib = []
         targets = []
         for i, gr in enumerate(groups):
-            mask = (self.data_feat[self.discriminative_attribute][input_topk_idxs] == gr).to(_input.device)
+            mask = (self.data_feat[self.discriminative_attribute].to(_input.device)[input_topk_idxs] == gr).to(_input.device)
 
             if self.discriminative_attribute.lower() == 'visibility':
+                input_topk_vals = torch.where(mask, input_topk_vals, 0)  # reduce the relevance of items not in the group
+
                 mask = mask.float()
                 mask_sum = mask.sum(dim=1, keepdim=True)
                 padded_mask = torch.where(mask_sum > 0, mask, torch.ones_like(mask) * 1e-7)
@@ -180,9 +189,11 @@ class ProviderDPLoss(FairLoss):
                 mask = torch.nan_to_num(padded_mask / padded_mask_sum, nan=0)
 
                 visibility = torch.nn.BCEWithLogitsLoss(reduction='mean')(input_topk_vals, mask)
+
                 groups_recs_distrib.append(visibility)
             elif self.discriminative_attribute.lower() == 'exposure':
                 exposure = torch.where(mask, input_topk_vals, 0).sum(dim=1)
+
                 groups_recs_distrib.append(exposure)
             else:
                 raise NotImplementedError(f'Provider fairness loss with discriminative attribute `{self.discriminative_attribute}` is not supported')

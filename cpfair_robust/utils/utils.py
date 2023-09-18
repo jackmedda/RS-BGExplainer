@@ -173,7 +173,7 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None)
                     new_val = None
 
     config['data_path'] = config['data_path'].replace('\\', os.sep)
-    # config['device'] = 'cuda'
+    # config['device'] = torch.device('cuda')
 
     logger = getLogger()
     logger.info(config)

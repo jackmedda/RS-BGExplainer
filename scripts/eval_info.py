@@ -24,6 +24,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_path', '--e', required=True)
     parser.add_argument('--base_plots_path', '--bpp', default=os.path.join('scripts', 'plots'))
     parser.add_argument('--iterations', '--it', default=100, type=int)
+    parser.add_argument('--eval_metric', '--ev', default="NDCG")
     args = parser.parse_args()
 
     real_group_map = {
@@ -45,9 +46,11 @@ if __name__ == "__main__":
         args.exp_path += os.sep
 
     if 'experiments' in args.exp_path:
-        # _, dset, mod, _, _, s_attr, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
-        _, dset, mod, _, _, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
-        s_attr = 'gender'
+        if 'consumer' in args.exp_path:
+            _, dset, mod, _, _, s_attr, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
+        else:
+            _, dset, mod, _, _, eps, cid, _ = args.exp_path.split('dp_explanations')[1].split(os.sep)
+            s_attr = 'gender'
     else:
         _, dset, mod, _, s_attr, eps, cid, _ = args.exp_path.split('dp_ndcg_explanations')[1].split(os.sep)
     eps = eps.replace('epochs_', '')
@@ -143,14 +146,16 @@ if __name__ == "__main__":
     _, valid_pert_df, test_pert_df = eval_utils.extract_metrics_from_perturbed_edges(
         {(dset, s_attr): pert_edges},
         models=[mod],
-        metrics=["NDCG"],  # ["NDCG", "Precision", "Recall", "Hit"],
+        metrics=["NDCG", "Precision"],  # ["NDCG", "Precision", "Recall", "Hit"],
         models_path=os.path.join(os.path.dirname(sys.path[0]), 'saved'),
         on_bad_models='ignore',
         remap=False
     )
 
-    test_pert_df = test_pert_df[test_pert_df['Metric'].str.upper() == 'NDCG']
-    valid_pert_df = valid_pert_df[valid_pert_df['Metric'].str.upper() == 'NDCG']
+    eval_metric = args.eval_metric.upper()
+
+    test_pert_df = test_pert_df[test_pert_df['Metric'].str.upper() == eval_metric]
+    valid_pert_df = valid_pert_df[valid_pert_df['Metric'].str.upper() == eval_metric]
     for _pert_df in [test_pert_df, valid_pert_df]:
         _pert_df['Quantile'] = _pert_df['Value'].map(lambda x: np.ceil(x * 10) / 10 if x > 0 else 0.1)
         _pert_df["Demo Group"] = _pert_df["Demo Group"].map(real_group_map[s_attr.lower()]).to_numpy()
@@ -192,7 +197,7 @@ if __name__ == "__main__":
             # highest pvalue because the distributions are equal
             orig_pert_pval_dict[split] = 1.0
 
-    dp_plot_df = pd.DataFrame(plot_df_data, columns=['$\Delta$NDCG', 'Split', 'Policy', *dgs, 'NDCG', 'pvalue'])
+    dp_plot_df = pd.DataFrame(plot_df_data, columns=['$\Delta$' + eval_metric, 'Split', 'Policy', *dgs, eval_metric, 'pvalue'])
     dp_plot_df.to_markdown(os.path.join(plots_path, 'DP_barplot.md'), index=False)
     dp_plot_df.to_latex(os.path.join(plots_path, 'DP_barplot.tex'), index=False)
     with open(os.path.join(plots_path, 'orig_pert_pval_dict.pkl'), 'wb') as f:
@@ -200,11 +205,12 @@ if __name__ == "__main__":
     print(dp_plot_df)
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-    sns.barplot(x='Split', y='$\Delta$NDCG', data=dp_plot_df, hue='Policy', ax=ax)
+    sns.barplot(x='Split', y='$\Delta$' + eval_metric, data=dp_plot_df, hue='Policy', ax=ax)
     fig.tight_layout()
     fig.savefig(os.path.join(plots_path, 'DP_barplot.png'), bbox_inches="tight", pad_inches=0, dpi=200)
     plt.close()
 
+    import pdb; pdb.set_trace()
     exit()
 
     dp_samples, dgs_order = eval_utils.compute_DP_across_random_samples(
@@ -220,11 +226,11 @@ if __name__ == "__main__":
             np.concatenate([dp_samples[:, -1], orig_dp_samples[:, -1]]),
             ['Perturbed'] * args.iterations + ['Orig'] * args.iterations
         ),
-        columns=['NDCG DP', 'Policy']
+        columns=[f'{eval_metric} DP', 'Policy']
     )
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-    sns.boxplot(x='Policy', y='NDCG DP', data=plot_df, ax=ax)
+    sns.boxplot(x='Policy', y=f'{eval_metric} DP', data=plot_df, ax=ax)
     fig.tight_layout()
     fig.savefig(os.path.join(plots_path, f'DP_across_samples.png'), bbox_inches="tight", pad_inches=0, dpi=200)
 

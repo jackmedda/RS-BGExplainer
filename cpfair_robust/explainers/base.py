@@ -330,9 +330,32 @@ class Explainer:
                     'exp metric evaluation with dataloaders with perturbed edges not implemented for `exp_rec_data` == `rec`'
                 )
 
-            pert_sets = utils.get_dataloader_with_perturbed_edges(
-                perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
-            )
+            try:
+                pert_sets = utils.get_dataloader_with_perturbed_edges(
+                    perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
+                )
+            except ValueError as e:
+                if repr(e) == "ValueError('Some users have interacted with all items, " \
+                              "which we can not sample negative items for them. " \
+                              "Please set `user_inter_num_interval` to filter those users.')":
+                    return False, None
+                raise(e)
+            # import copy
+            # conf = copy.deepcopy(self.config)
+            # dd = copy.deepcopy(full_dataset)
+
+            # import pdb; pdb.set_trace()
+            # conf['user_inter_num_interval'] = f"[0, {dd.item_num}]"
+            # dd.config['user_inter_num_interval'] = f"[0, {dd.item_num}]"
+            # dd._from_scratch()
+            # dd._filter_by_inter_num()
+
+            # pert_sets = utils.get_dataloader_with_perturbed_edges(
+            #     perturbed_edges, conf, dd, train_data, valid_data, test_data
+            # )
+            # pert_sets = utils.get_dataloader_with_perturbed_edges(
+            #     perturbed_edges, self.config, full_dataset, train_data, valid_data, test_data
+            # )
             pert_sets_dict = dict(zip(['train', 'valid', 'test'], pert_sets))
 
             test_scores_args = self._get_scores_args(detached_batched_data, pert_sets_dict['test'])
@@ -924,6 +947,10 @@ class Explainer:
                     rec_model_topk,
                     epoch_exp_loss
                 )
+
+                if new_example is False:
+                    self.logger.warning('Interrupting because one of the users interacted with all the items')
+                    break
 
                 earlys_check_value = {
                     'exp_loss': epoch_exp_loss,

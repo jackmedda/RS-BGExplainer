@@ -1,4 +1,4 @@
-import numpy as np
+import torch
 
 import cpfair_robust.evaluation as eval_utils
 
@@ -54,22 +54,22 @@ def _compute_explainer_provider_DP(pref_data,
 
     groups_distrib = [groups_distrib[0] / groups_distrib[1], 1 - groups_distrib[0] / groups_distrib[1]]
 
-    topk_recs = np.stack(pref_data['topk_pred'].values)
+    topk_recs = torch.stack(tuple(pref_data['topk_pred'].map(torch.Tensor).values)).long()
     k = topk_recs.shape[1]
 
     mask_sh = dataset.item_feat[discrim_attr] == 1
     mask_lt = dataset.item_feat[discrim_attr] == 2
 
     if discrim_attr == 'visibility':
-        metric = np.bincount(topk_recs.flatten(), minlength=dataset.item_num)
+        metric = torch.bincount(topk_recs.flatten(), minlength=dataset.item_num)
 
-        metric_sh = metric[mask_sh].sum() / np.multiply(*topk_recs.shape)
-        metric_lt = metric[mask_lt].sum() / np.multiply(*topk_recs.shape)
+        metric_sh = metric[mask_sh].sum() / torch.multiply(*topk_recs.shape)
+        metric_lt = metric[mask_lt].sum() / torch.multiply(*topk_recs.shape)
     elif discrim_attr == 'exposure':
         metric_sh = mask_sh[topk_recs].long()
         metric_lt = mask_lt[topk_recs].long()
 
-        exposure_discount = np.log2(np.arange(1, k + 1) + 1)
+        exposure_discount = torch.log2(torch.arange(1, k + 1) + 1)
 
         metric_sh = ((metric_sh / exposure_discount).sum(dim=1) / (1 / exposure_discount).sum()).mean()
         metric_lt = ((metric_lt / exposure_discount).sum(dim=1) / (1 / exposure_discount).sum()).mean()
