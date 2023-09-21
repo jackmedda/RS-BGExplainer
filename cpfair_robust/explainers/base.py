@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from recbole.evaluator import Evaluator
 from recbole.data.interaction import Interaction
-from recbole.utils import set_color, FeatureSource, FeatureType
+from recbole.utils import set_color
 
 import cpfair_robust.utils as utils
 import cpfair_robust.models as exp_models
@@ -692,22 +692,9 @@ class Explainer:
 
     def _check_item_feat(self):
         if self.dataset.item_feat is None or self.item_discriminative_attribute not in self.dataset.item_feat:
-            pop = torch.argsort(self.dataset.history_user_matrix()[2], descending=True)
-            sh_size = round(self.item_discriminative_ratio * pop.shape[0])
-
-            if self.dataset.item_feat is None:
-                self.dataset.item_feat = self.dataset.get_item_feature()
-            # self.field2seqlen[dest_field]
-
-            exposure_group = torch.zeros_like(self.dataset.item_feat[self.dataset.iid_field])
-            exposure_group[pop[:sh_size]] = 1
-            exposure_group[pop[sh_size:]] = 2
-            exposure_group[0] = 0
-
-            self.dataset.item_feat[self.item_discriminative_attribute] = exposure_group
-            self.dataset.field2type[self.item_discriminative_attribute] = FeatureType('token')
-            self.dataset.field2source[self.item_discriminative_attribute] = FeatureSource('item')
-            self.dataset.field2seqlen[self.item_discriminative_attribute] = 1
+            utils.update_item_feat_discriminative_attribute(
+                self.dataset, self.item_discriminative_attribute, self.item_discriminative_ratio, self.item_discriminative_map
+            )
 
     def _pref_data_sens_and_metric(self, pref_users, model_topk, eval_data=None):
         pref_data = pd.DataFrame(
@@ -972,10 +959,18 @@ class Explainer:
 
                 if earlys_check:
                     break
+                elif epoch == (epochs - 1):
+                    # stub explanation that means the code stopped because of the number of epochs limit, not because of the early stopping
+                    self.update_best_cf_example(best_cf_example, utils._EXPS_END_EPOCHS_STUB, loss_total, best_loss, model_topk=rec_model_topk)
+                    break
+                elif epoch == 199:  # TO REMOVE
+                    # stub explanation that means the code stopped because of the number of epochs limit, not because of the early stopping
+                    self.update_best_cf_example(best_cf_example, utils._EXPS_END_EPOCHS_STUB, loss_total, best_loss, model_topk=rec_model_topk)
+                    break
 
                 best_loss = self.update_best_cf_example(*update_best_example_args, model_topk=rec_model_topk)
 
-            # the optimizer step of the last epoch is done here to prevent computations
+            # the optimizer step of the last epoch_step is done here to prevent computations
             # done to update new example to be related to the new state of the model
             torch.nn.utils.clip_grad_norm_(self.cf_model.parameters(), 2.0)
             if self.mini_batch_descent:

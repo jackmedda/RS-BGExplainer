@@ -50,11 +50,20 @@ class PerturbedModel(object):
         self.force_removed_edges = None
         if self.edge_additions:
             self.mask_sub_adj = np.stack((self.interaction_matrix == 0).nonzero())
+            if config['dataset'] == 'tafeng':
+                # A^3 => paths of lenght 3, i.e. paths connecting a user with the item of a user neighbor
+                neighbors_items_mask = self.interaction_matrix.dot(self.interaction_matrix.T).dot(self.interaction_matrix)
+                neighbors_items_mask = np.stack((neighbors_items_mask > 0).nonzero())
+                import pdb; pdb.set_trace()
+                self.mask_sub_adj = np.unique(np.concatenate((self.mask_sub_adj, neighbors_items_mask), axis=1), axis=1)
+                # self.mask_sub_adj = self.mask_sub_adj[:, np.isin(self.mask_sub_adj, neighbors_items_mask).all(axis=0)]
+
             self.mask_sub_adj = self.mask_sub_adj[
-                :, self.mask_sub_adj[0] != self.mask_sub_adj[1] & (self.mask_sub_adj[0] != 0)
+                :, (self.mask_sub_adj[0] != self.mask_sub_adj[1]) & (self.mask_sub_adj[0] != 0)
             ]
             self.mask_sub_adj[1] += self.n_users
             self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device='cpu')
+            import pdb; pdb.set_trace()
 
             if filtered_users is not None:
                 filtered_nodes_mask = model_utils.edges_filter_nodes(self.mask_sub_adj[[0]], filtered_users)

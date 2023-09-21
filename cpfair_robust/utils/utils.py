@@ -13,16 +13,19 @@ import scipy
 import numba
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
 from recbole.config import Config
-from recbole.utils import init_logger, get_model
+from sklearn.decomposition import PCA
 from recbole.data.interaction import Interaction
+from recbole.utils import init_logger, get_model, FeatureSource, FeatureType
 from recbole.data import create_dataset, data_preparation, create_samplers, get_dataloader
 
 try:
     from torch_geometric.utils import k_hop_subgraph, subgraph
 except ModuleNotFoundError:
     pass
+
+
+_EXPS_END_EPOCHS_STUB = ['STUB', 'STUB']
 
 
 _EXPS_COLUMNS = [
@@ -270,8 +273,12 @@ def get_dataloader_with_perturbed_edges(pert_edges, config, dataset, train_data,
     return train_data, valid_data, test_data
 
 def get_best_exp_early_stopping(exps, config_dict):
+    if exps[-1] == _EXPS_END_EPOCHS_STUB:
+        return exps[-2]
+
     best_epoch = get_best_epoch_early_stopping(exps, config_dict)
     epoch_idx = exp_col_index('epoch')
+
     return [e for e in sorted(exps, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
 
 
@@ -291,6 +298,9 @@ def get_best_epoch_early_stopping(exps, config_dict):
         patience = config_dict['early_stopping']['patience']
     except TypeError:
         patience = config_dict['earlys_patience']
+
+    if exps[-1] == _EXPS_END_EPOCHS_STUB:
+        return exps[-2][exp_col_index('epoch')]
 
     return max([e[exp_col_index('epoch')] for e in exps]) - patience
 
@@ -356,6 +366,30 @@ def get_top_k(scores_tensor, topk=10):
     scores_top_k, topk_idx = torch.topk(scores_tensor, topk, dim=-1)  # n_users x k
 
     return scores_top_k, topk_idx
+
+
+def update_item_feat_discriminative_attribute(dataset, item_discriminative_attribute, item_discriminative_ratio, item_discriminative_map):
+    if isinstance(dataset.inter_feat, pd.DataFrame):
+        # + 1 because the inter_feat does not contain the padding user and item, so the indices need to be re-indexed by 1
+        pop = torch.tensor(dataset.inter_feat[dataset.iid_field].value_counts(sort=False).argsort()[::-1].values + 1)
+    else:
+        pop = torch.argsort(dataset.history_user_matrix()[2], descending=True)
+    sh_size = round(item_discriminative_ratio * pop.shape[0])
+
+    if dataset.item_feat is None:
+        dataset.item_feat = dataset.get_item_feature()
+    # field2seqlen[dest_field]
+
+    exposure_group = torch.zeros_like(dataset.item_feat[dataset.iid_field])
+    exposure_group[pop[:sh_size]] = 1
+    exposure_group[pop[sh_size:]] = 2
+    exposure_group[0] = 0
+
+    dataset.item_feat[item_discriminative_attribute] = exposure_group
+    dataset.field2type[item_discriminative_attribute] = FeatureType('token')
+    dataset.field2source[item_discriminative_attribute] = FeatureSource('item')
+    dataset.field2seqlen[item_discriminative_attribute] = 1
+    dataset.field2id_token[item_discriminative_attribute] = np.asarray(item_discriminative_map)
 
 
 def get_decomposed_adj_matrix(del_edges, train_dataset, method='PCA'):

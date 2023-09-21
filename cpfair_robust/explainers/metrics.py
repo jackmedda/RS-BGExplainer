@@ -52,31 +52,7 @@ def _compute_explainer_provider_DP(pref_data,
     discrim_attr = kwargs.pop('discriminative_attribute')
     groups_distrib = kwargs.pop('groups_distrib')
 
-    groups_distrib = [groups_distrib[0] / groups_distrib[1], 1 - groups_distrib[0] / groups_distrib[1]]
-
-    topk_recs = torch.stack(tuple(pref_data['topk_pred'].map(torch.Tensor).values)).long()
-    k = topk_recs.shape[1]
-
-    mask_sh = dataset.item_feat[discrim_attr] == 1
-    mask_lt = dataset.item_feat[discrim_attr] == 2
-
-    if discrim_attr == 'visibility':
-        metric = torch.bincount(topk_recs.flatten(), minlength=dataset.item_num)
-
-        metric_sh = metric[mask_sh].sum() / torch.multiply(*topk_recs.shape)
-        metric_lt = metric[mask_lt].sum() / torch.multiply(*topk_recs.shape)
-    elif discrim_attr == 'exposure':
-        metric_sh = mask_sh[topk_recs].long()
-        metric_lt = mask_lt[topk_recs].long()
-
-        exposure_discount = torch.log2(torch.arange(1, k + 1) + 1)
-
-        metric_sh = ((metric_sh / exposure_discount).sum(dim=1) / (1 / exposure_discount).sum()).mean()
-        metric_lt = ((metric_lt / exposure_discount).sum(dim=1) / (1 / exposure_discount).sum()).mean()
-    else:
-        raise NotImplementedError(f'The fairness level `{fairness_level}` of the provider explanation metric is not supported')
-
-    return (metric_sh / groups_distrib[0] - metric_lt / groups_distrib[1]).abs().item()
+    return eval_utils.compute_provider_DP(pref_data, dataset, discrim_attr, groups_distrib, topk_column='topk_pred')
 
 
 def _compute_explainer_UC(pref_data,

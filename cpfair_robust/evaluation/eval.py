@@ -241,7 +241,10 @@ def extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None,
             best_epoch = best_epoch_func(exps_data[0], config)
             epoch_idx = exp_col_index_func('epoch')
 
-            def top_exp_func(exp): return [e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
+            def top_exp_func(exp):
+                return [
+                    e for e in sorted(exp, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e != utils._EXPS_END_EPOCHS_STUB and e[epoch_idx] <= best_epoch
+                ][0]
         elif isinstance(bec, list):
             top_exp_col = exp_col_index_func(bec[0])
             def top_exp_func(exp): return sorted(exp, key=lambda x: abs(x[top_exp_col] - bec[1]))[0]
@@ -361,7 +364,7 @@ def extract_all_exp_metrics_data(_exp_paths,
         exp_data = []
         for exp_entry in exps_data:
             for _exp in tqdm.tqdm(
-                exp_entry[:-1],  # the last epoch is a stub epoch to retrieve back the best epoch
+                exp_entry[:-1],  # the last epoch is a stub epoch to retrieve back the best epoch or because of epoch ending
                 desc="Extracting recommendations from explainer saved data"
             ):
                 if len(exps_data[0][0]) == 6:
@@ -456,7 +459,8 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
                                          policy_name=None,
                                          on_bad_models="error",
                                          remap=True,
-                                         return_pref_data=False):
+                                         return_pref_data=False,
+                                         consumer=True):
     models = ["NGCF", "LightGCN", "GCMC"] if models is None else models
     metrics = ["NDCG", "Recall", "Hit", "MRR"] if metrics is None else metrics
     cols = ['user_id', 'Epoch', '# Del Edges', 'Exp Loss', 'Metric',
@@ -525,8 +529,11 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
             args_pref_data = [config, checkpoint, pert_edges, dataset, train_data, valid_data, test_data]
             for split_name, split in split_dict.items():
                 mod_pref_data[split_name] = pref_data_from_checkpoint_and_perturbed_edges(*args_pref_data, split=split_name)
-                if return_pref_data:
+                if return_pref_data or not consumer:
                     exp_pref_data[mod][split_name] = mod_pref_data[split_name]
+
+            if not consumer:
+                continue
 
             config["metrics"] = metrics
             evaluator = Evaluator(config)
@@ -886,6 +893,86 @@ def compute_DP_with_masks(eval_data, gr1_mask, gr2_mask):
 @numba.jit(nopython=True)
 def compute_DP(gr1_result, gr2_result):
     return np.abs(gr1_result - gr2_result)
+
+
+def compute_provider_DP(pref_data, dataset, discriminative_attribute, groups_distribution_ratio, topk_column='topk_pred'):
+    prov_metr_per_gr = compute_provider_metric_per_group(
+        pref_data, dataset, discriminative_attribute, groups_distribution_ratio, topk_column=topk_column
+    )
+    return compute_DP(*[prov_metr.numpy() for prov_metr in prov_metr_per_gr.values()])
+
+
+def compute_provider_metric_per_group(pref_data, dataset, discriminative_attribute, groups_distribution_ratio, topk_column='topk_pred', raw=False):
+    groups_distrib = [groups_distribution_ratio[0] / groups_distribution_ratio[1], 1 - groups_distribution_ratio[0] / groups_distribution_ratio[1]]
+
+    item_discrim_map = np.asarray(dataset.field2id_token[discriminative_attribute])
+
+    metric_sh = compute_provider_raw_metric(
+        pref_data, dataset, discriminative_attribute, (item_discrim_map == 'SH').nonzero()[0].item(), topk_column=topk_column
+    )
+    metric_lt = compute_provider_raw_metric(
+        pref_data, dataset, discriminative_attribute, (item_discrim_map == 'LT').nonzero()[0].item(), topk_column=topk_column
+    )
+
+    if raw:
+        item_df = pd.DataFrame(dataset.item_feat.numpy())
+        item_df.rename(columns={discriminative_attribute: discriminative_attribute + '_group'}, inplace=True)
+
+        # they are vectors with same dimension, but completely different indices > 0
+        metric_norm_distrib = (metric_sh / groups_distrib[0]) + (metric_lt / groups_distrib[1])
+        item_df[discriminative_attribute] = metric_norm_distrib
+
+        result = item_df
+    else:
+        metric_sh = metric_sh.sum() / groups_distrib[0]
+        metric_lt = metric_lt.sum() / groups_distrib[1]
+
+        result = {'SH': metric_sh, 'LT': metric_lt}
+
+    return result
+
+
+def compute_provider_raw_metric(pref_data, dataset, provider_metric, group, topk_column='topk_pred'):
+    topk_recs = torch.stack(tuple(pref_data[topk_column].map(torch.Tensor).values)).long()
+    k = topk_recs.shape[1]
+
+    mask = dataset.item_feat[provider_metric] == group
+
+    if provider_metric == 'visibility':
+        visibility = torch.bincount(topk_recs.flatten(), minlength=dataset.item_num)
+        visibility = visibility[mask] / torch.multiply(*topk_recs.shape)
+
+        metric = torch.zeros_like(mask, dtype=visibility.dtype)
+        metric[mask] = visibility
+    elif provider_metric == 'exposure':
+        exposure_discount = np.log2(np.arange(1, k + 1) + 1)
+
+        # metric = ((metric / exposure_discount).sum(dim=1) / (1 / exposure_discount).sum()).mean()
+        metric = torch.from_numpy(_compute_raw_exposure(topk_recs.numpy(), mask.numpy(), exposure_discount))
+    else:
+        raise NotImplementedError(f'The provider metric `{provider_metric}` is not supported')
+
+    return metric
+
+
+@numba.jit(nopython=True, parallel=True)
+def _compute_raw_exposure(topk_recs, mask, exposure_discount):
+    exposure = np.zeros_like(mask, dtype=np.float32)
+    items_ids = np.flatnonzero(mask)
+    exp_disc_sum = (1 / exposure_discount).sum()
+
+    for i in numba.prange(items_ids.shape[0]):
+        item_id = items_ids[i]
+
+        item_mask = np.zeros_like(mask, dtype=np.bool_)
+        item_mask[item_id] = True
+
+        item_presence = np.take(item_mask, topk_recs)
+        item_exposure = item_presence / exposure_discount
+        item_exposure = (item_exposure / exp_disc_sum).sum(axis=1).mean()
+        exposure[item_id] = item_exposure
+
+    return exposure
 
 
 def best_epoch_DP_across_samples(exp_path,
