@@ -238,9 +238,10 @@ def load_old_dp_exps_file(base_exps_file):
     return exps
 
 
-def get_dataset_with_perturbed_edges(pert_edges, data_set):
+def get_dataset_with_perturbed_edges(pert_edges: np.ndarray, data_set):
     user_num = data_set.user_num
     uid_field, iid_field = data_set.uid_field, data_set.iid_field
+    pert_edges = pert_edges.copy()
 
     pert_edges = torch.tensor(pert_edges)
     pert_edges[1] -= user_num  # remap items in range [0, item_num)
@@ -258,7 +259,9 @@ def get_dataset_with_perturbed_edges(pert_edges, data_set):
     return data_set.copy(Interaction(pert_inter_feat))
 
 
-def get_dataloader_with_perturbed_edges(pert_edges, config, dataset, train_data, valid_data, test_data):
+def get_dataloader_with_perturbed_edges(pert_edges: np.ndarray, config, dataset, train_data, valid_data, test_data):
+    pert_edges = pert_edges.copy()
+
     train_dataset = get_dataset_with_perturbed_edges(pert_edges, train_data.dataset)
     valid_dataset = get_dataset_with_perturbed_edges(pert_edges, valid_data.dataset)
     test_dataset = get_dataset_with_perturbed_edges(pert_edges, test_data.dataset)
@@ -302,7 +305,12 @@ def get_best_epoch_early_stopping(exps, config_dict):
     if exps[-1] == _EXPS_END_EPOCHS_STUB:
         return exps[-2][exp_col_index('epoch')]
 
-    return max([e[exp_col_index('epoch')] for e in exps]) - patience
+    max_epoch = max([e[exp_col_index('epoch')] for e in exps])
+    # the training process stopped because of other condition
+    if max_epoch <= patience:
+        return max_epoch
+
+    return max_epoch - patience
 
 
 def prepare_batched_data(input_data, data, item_data=None):
