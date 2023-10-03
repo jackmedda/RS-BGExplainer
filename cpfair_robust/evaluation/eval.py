@@ -977,29 +977,37 @@ def _compute_raw_exposure(topk_recs, mask, exposure_discount):
 
 def compute_edge_perturbation_impact(dataset, pert_edges, attribute, consumer=False):
     pert_edges = pert_edges.copy()
+    total_pert_edges = pert_edges.shape[1]
     attr_map = dataset.field2id_token[attribute]
 
     if (pert_edges[1] > dataset.user_num).all():
         pert_edges[1] -= dataset.user_num
 
     if consumer:
-        gr1_mask = dataset.user_feat[attribute] == 1
-        gr2_mask = dataset.user_feat[attribute] == 2
-
-        pert_edges_per_user = np.bincount(pert_edges[0], minlength=dataset.user_num)
-        gr1_pert_edges = pert_edges_per_user[gr1_mask]
-        gr2_pert_edges = pert_edges_per_user[gr2_mask]
+        data_feat = dataset.user_feat
+        data_num = dataset.user_num
+        pert_edges_idx = 0
     else:
-        gr1_mask = dataset.item_feat[attribute] == 1
-        gr2_mask = dataset.item_feat[attribute] == 2
+        data_feat = dataset.item_feat
+        data_num = dataset.item_num
+        pert_edges_idx = 1
 
-        pert_edges_per_item = np.bincount(pert_edges[1], minlength=dataset.item_num)
-        gr1_pert_edges = pert_edges_per_item[gr1_mask]
-        gr2_pert_edges = pert_edges_per_item[gr2_mask]
+    gr1_mask = data_feat[attribute] == 1
+    gr2_mask = data_feat[attribute] == 2
+
+    pert_edges_per_gr = np.bincount(pert_edges[pert_edges_idx], minlength=data_num)
+    gr1_pert_edges = pert_edges_per_gr[gr1_mask]
+    gr2_pert_edges = pert_edges_per_gr[gr2_mask]
+
+    gr1_ei_ratio = gr1_pert_edges.sum() / total_pert_edges
+    gr2_ei_ratio = gr2_pert_edges.sum() / total_pert_edges
+
+    gr1_repr_ratio = gr1_mask.sum() / data_num
+    gr2_repr_ratio = gr2_mask.sum() / data_num
 
     return {
-        attr_map[1]: (gr1_pert_edges.sum() / gr1_mask.sum()).item(),
-        attr_map[2]: (gr2_pert_edges.sum() / gr2_mask.sum()).item()
+        attr_map[1]: (gr1_ei_ratio / gr1_repr_ratio).item(),
+        attr_map[2]: (gr2_ei_ratio / gr2_repr_ratio).item()
     }
 
 

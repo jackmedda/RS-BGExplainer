@@ -6,97 +6,152 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mpl_tick
+import matplotlib.ticker as mpl_tickers
 import matplotlib.transforms as mpl_trans
+
+
+def update_plt_rc():
+    SMALL_SIZE = 16
+    MEDIUM_SIZE = 18
+    BIGGER_SIZE = 20
+
+    plt.rc('font', size=SMALL_SIZE)  # controls default text sizes
+    plt.rc('axes', titlesize=BIGGER_SIZE)  # fontsize of the axes title
+    plt.rc('axes', labelsize=BIGGER_SIZE)  # fontsize of the x and y labels
+    plt.rc('xtick', labelsize=MEDIUM_SIZE)  # fontsize of the tick labels
+    plt.rc('ytick', labelsize=MEDIUM_SIZE)  # fontsize of the tick labels
+    plt.rc('legend', fontsize=BIGGER_SIZE)  # legend fontsize
+    plt.rc('figure', titlesize=BIGGER_SIZE)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--merged_plots_path', '--mpp', default=os.path.join("scripts", "cpfair_merged_plots"))
 
-    df = pd.concat([f.path for f in os.scandir(args.merged_plots_path) if '_delta_EI_DP.csv' in f.name], ignore_index=True)
-
     args = parser.parse_args()
     print(args)
 
-    i = 0
+    full_setting_map = {
+        'CP_{Age}': 'CP (A)',
+        'CP_{Gender}': 'CP (G)',
+        'CS_{Age}': 'CS (A)',
+        'CS_{Gender}': 'CS (G)',
+        'PE': 'PE',
+        'PV': 'PV'
+    }
+
+    sns.set_context('paper')
+    update_plt_rc()
+
+    dataset_order = ['INS', 'LF1K', 'ML1M']
+    models_order = ['GCMC', 'LGCN', 'NGCF']
+    setting_order = ['CP', 'CS', 'PE', 'PV']
+    group_attr_order = ['Age', 'Gender', 'Pop']
+    pert_type_order = ['Orig', '$\dotplus$ Del', '$\dotplus$ Add']
+
+    df = pd.concat([pd.read_csv(f.path) for f in os.scandir(args.merged_plots_path) if '_delta_EI_DP.csv' in f.name], ignore_index=True)
+
+    df['FullSetting'] = df['FullSetting'].map(full_setting_map)
+    full_setting_dtype = pd.api.types.CategoricalDtype(categories=['CP (A)', 'CP (G)', 'CS (A)', 'CS (G)', 'PE', 'PV'])
+    df['FullSetting'] = df['FullSetting'].astype(full_setting_dtype)
+
+    df['DP'] /= 100
+    df['$\Delta$'] /= 100
+
     handles, labels = None, None
-    fig, axs = plt.subplots(3, 3, sharey=row, figsize=(15, 15))
+    fig = plt.figure(figsize=(6 * len(models_order), 3 * len(models_order)), constrained_layout=True)
+    width_ratios = (4, 4, 4, 2, 2, 2)
+    gs = fig.add_gridspec(
+        3, 6,  width_ratios=width_ratios,
+        # left=0.1, right=0.9, bottom=0.1, top=0.9,
+        wspace=0.15, hspace=0.15
+    )
+
+    axs = {"C": [], "P": []}
     df_idx = df.set_index(["Dataset", "Model"])
-    for dset in ["INS", "LF1K", "ML1M"]:
-        for mod in ["GCMC", "LGCN", "NGCF"]:
-            plot_df = df_idx.loc[(dset, mod)]
-            import pdb; pdb.set_trace()
+    for i, dset in enumerate(dataset_order):
+        for sk_axs in axs.values():
+            sk_axs.append([])
+        for j, mod in enumerate(models_order):
+            for sk in ["C", "P"]:
+                kws = {}
+                if j > 0:
+                    kws['sharey'] = axs[sk][i][0]
+                if i > 0:
+                    kws['sharex'] = axs[sk][0][j]
+                if sk == "C":
+                    ax = fig.add_subplot(gs[i, j], **kws)
+                else:
+                    ax = fig.add_subplot(gs[i, 3 + j], **kws)
 
-            # style_order = dict(zip(sens_df['Model'].values, ['o', 'v', '^', '<', '+', 'x', '*', 's', 'p', 'D']))
-            # style_order = dict(zip(sens_df['Model'].values, ['$\mathbf{' + str(x) + '}$' for x in range(10)]))
-            # style_order = dict(zip(sens_df['Model'].values, ['o', 's', 'd', 'X', 's', 'd', 'X', 's', 'd', 'X']))
-            style_order = dict(zip(plot_df['Setting'].values, ['o', 'P', 'P', 'P', 'X', 'X', 'X', '*', '*', '*']))
-            s = 250
-            marker = '*'
+                axs[sk][i].append(ax)
 
-            scatter_kws = dict(
-                x='Rel. Diff. NDCG', y=r'Rel. Diff. $\Delta$NDCG', data=plot_df,
-                hue='Paper',
-                # s=s
-                # marker=marker,
-                style='Paper',
-                markers=style_order,
-                size='Paper',
-                sizes=dict(zip(plot_df['Paper'].values, [17**2 if p == 'Ours' else (17**2)/1.7 for p in plot_df['Paper']]))
-            )
+                plot_df = df_idx.loc[(dset, mod)].copy(deep=True)
+                plot_df = plot_df[plot_df["Setting"].str.startswith(sk)]
 
-            sns.scatterplot(
-                ax=axs[i], **scatter_kws
-            )
+                # style_order = dict(zip(sens_df['Model'].values, ['o', 'v', '^', '<', '+', 'x', '*', 's', 'p', 'D']))
+                # style_order = dict(zip(sens_df['Model'].values, ['$\mathbf{' + str(x) + '}$' for x in range(10)]))
+                # style_order = dict(zip(sens_df['Model'].values, ['o', 's', 'd', 'X', 's', 'd', 'X', 's', 'd', 'X']))
+                style_order = dict(zip(
+                    plot_df['FullSetting'].cat.categories, ['$\maltese$', r'$\clubsuit$', r's', r'^', 'P', 'X']
+                ))
+                plot_df.rename(columns={'PerturbationType': 'Perturbation\n      Type', 'FullSetting': 'Fairness\n Setting'}, inplace=True)
 
-            if handles is None and labels is None:
-                handles, labels = axs[i].get_legend_handles_labels()
-            axs[i].get_legend().remove()
+                base_size = 21
+                scatter_kws = dict(
+                    x='$\Delta$', y=r'$\Delta$EI', data=plot_df,
+                    hue='Perturbation\n      Type',
+                    # s=s,
+                    # marker=marker,
+                    palette='colorblind',
+                    style='Fairness\n Setting',
+                    markers=style_order,
+                    size='Fairness\n Setting',
+                    sizes=dict(zip(plot_df['Fairness\n Setting'].cat.categories, [base_size**2] + [(base_size**2)/1.3] * 5))
+                )
 
-            axs[i].plot(1, 0, ">k", transform=axs[i].get_yaxis_transform(), clip_on=False)
-            axs[i].plot(0, 1, "^k", transform=axs[i].get_xaxis_transform(), clip_on=False)
+                sns.scatterplot(
+                    ax=ax, **scatter_kws
+                )
 
-            axs[i].tick_params(axis='x', direction='in', pad=-15)
-            axs[i].spines[['left', 'bottom']].set_position('zero')
-            axs[i].spines[['top', 'right']].set_visible(False)
+                if handles is None and labels is None:
+                    handles, labels = ax.get_legend_handles_labels()
+                ax.get_legend().remove()
 
-            axs[i].set_ylabel('')
-            plt.text(0.5, -0.05, axs[i].get_xlabel(), ha='center', va='center', fontsize=12, transform=axs[i].transAxes)
-            axs[i].set_xlabel('')
+                ax.plot(1, 0, ">k", linewidth=200) # , clip_on=False)
+                ax.plot(0, 1, "^k", transform=ax.get_xaxis_transform(), linewidth=200, clip_on=False)
 
-            i += 1
+                # ax.tick_params(axis='x', direction='in', pad=-15)
+                ax.spines[['left', 'bottom']].set_position('zero')
+                ax.spines[['top', 'right']].set_visible(False)
 
-            # axs[i].xaxis.set_major_formatter(lambda x, pos: f'{x*100:.1f}%')
-            # axs[i].yaxis.set_major_formatter(lambda x, pos: f'{x*100:.1f}%')
+                ax.xaxis.grid(True, ls=':', lw=2)
+                ax.yaxis.grid(True, ls=':', lw=2)
 
-            # axs[i].set_title(f"{dset}: {sens_attr}", pad=12)
+                if i == (len(dataset_order) - 1):
+                    labelpad = 105 if sk == "C" else 30
+                    ax.set_xlabel(ax.get_xlabel(), labelpad=labelpad)
+                else:
+                    ax.set_xlabel('')
+                if j > 0 or sk == "P":
+                    ax.set_ylabel('')
+                else:
+                    ax.set_ylabel(dset)
+    #             plt.text(0.5, -0.05, axs[i, j].get_xlabel(), ha='center', va='center', fontsize=12, transform=axs[i, j].transAxes)
+    #             axs[i, j].set_xlabel('')
+                if i == 0:
+                    ax.set_title(mod)
+                if i < (len(dataset_order) - 1):
+                    ax.tick_params(labelbottom=False)
+                if j > 0:
+                    ax.tick_params(labelleft=False)
 
-    # fig.supxlabel('Rel. Diff. NDCG')
-    # fig.supylabel('Rel. Diff. $\Delta$NDCG')
+                ax.xaxis.set_major_locator(mpl_tickers.MaxNLocator(4 if sk == "C" else 2))
 
-    fig.text(-0.1, 0.4, 'Rel. Diff. $\Delta$NDCG', ha='center', va='center', rotation=90, fontsize=12, transform=axs[0].transAxes)
-    fig.legend(handles, labels, loc='upper center', ncol=len(plot_df.Paper.unique()), bbox_to_anchor=(0.5, 1.05))
-    fig.tight_layout()
-    fig.savefig('aaa.png', dpi=250, bbox_inches="tight", pad_inches=0)
+    fig.savefig(os.path.join(args.merged_plots_path, 'cpfair_scatter_total.png'), dpi=300, bbox_inches="tight", pad_inches=0)
 
     figlegend = plt.figure(figsize=(4, 1))
-    figlegend.legend(handles, labels, loc='center', frameon=False, prop={'size': 10}, ncol=len(plot_df.Paper.unique()))  # labelspacing=4, ncol=1)# ncol=len(plot_df.Paper.unique()))
-    figlegend.savefig(os.path.join('scripts', 'legend.png'), dpi=300, bbox_inches="tight", pad_inches=0)
-
-    i = 0
-    axs[0].set_ylabel("")
-    for dset in ["ML-1M", "LFM-1K"]:
-        for sens_attr in ["Gender", "Age"]:
-            extent = axs[i].get_window_extent().transformed(fig.dpi_scale_trans.inverted())
-
-            # bbox_args = [1.7, 1.1] if i == 0 else [1.1, 1.1]
-            width = extent.width
-            height = extent.height
-            deltaw = (1.04 * width - width) / 2.0
-            deltah = (0.96 * height - height) / 2.0
-            offsetw = 0.6 if i == 3 else -0.2
-            offseth = -1.65
-            a = np.array([[-deltaw - deltaw * offsetw, -deltah], [deltaw, deltah + deltah * offseth]])
-            new_bbox = extent._points + a
-            fig.savefig(os.path.join('scripts', f'ax_{dset}_{sens_attr}_expanded.png'), bbox_inches=mpl_trans.Bbox(new_bbox), dpi=300)
-            i += 1
+    handles[1].set_sizes(handles[-1].get_sizes())
+    handles[2].set_sizes(handles[-1].get_sizes())
+    figlegend.legend(handles, labels, loc='center', frameon=False, prop={'size': 10}, ncol=len(labels), markerscale=0.8)
+    figlegend.savefig(os.path.join(args.merged_plots_path, 'cpfair_scatter_legend.png'), dpi=300, bbox_inches="tight", pad_inches=0)

@@ -120,8 +120,8 @@ class Explainer:
         self.coverage_loss_only_relevant = config['coverage_loss_only_relevant'] or True
 
         self.item_discriminative_attribute = config['item_discriminative_attribute'] or 'exposure'
-        self.item_discriminative_ratio = 1 / 4  # SH / LT Explainable Fairness in Recommendation
-        self.item_discriminative_groups_distrib = [1, 1 / self.item_discriminative_ratio]
+        self.item_discriminative_ratio = config['short_head_item_discriminative_ratio'] or 0.2  # SH / LT Explainable Fairness in Recommendation
+        self.item_discriminative_groups_distrib = [1, 1 / self.item_discriminative_ratio - 1]
         self.item_discriminative_map = ['[PAD]', 'SH', 'LT']  # SH: Short Head, LT: Long Tail
 
         self._exp_loss_args = {
@@ -959,10 +959,6 @@ class Explainer:
                 if earlys_check:
                     break
                 elif epoch == (epochs - 1):
-                    # stub explanation that means the code stopped because of the number of epochs limit, not because of the early stopping
-                    self.update_best_cf_example(best_cf_example, utils._EXPS_END_EPOCHS_STUB, loss_total, best_loss, model_topk=rec_model_topk)
-                    break
-                elif epoch == 199:  # TO REMOVE
                     # stub explanation that means the code stopped because of the number of epochs limit, not because of the early stopping
                     self.update_best_cf_example(best_cf_example, utils._EXPS_END_EPOCHS_STUB, loss_total, best_loss, model_topk=rec_model_topk)
                     break

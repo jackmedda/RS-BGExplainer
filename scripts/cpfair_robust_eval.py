@@ -70,7 +70,7 @@ if __name__ == "__main__":
         s_attr = config['item_discriminative_attribute']
 
         item_discriminative_attribute = config['item_discriminative_attribute']
-        item_discriminative_ratio = 1 / 4
+        item_discriminative_ratio = config['short_head_item_discriminative_ratio']
         item_discriminative_map = ['[PAD]', 'SH', 'LT']
         item_discriminative_attribute_args = [item_discriminative_attribute, item_discriminative_ratio, item_discriminative_map]
         utils.update_item_feat_discriminative_attribute(dataset, *item_discriminative_attribute_args)
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             ]
             _pref_data["Demo Group"] = _pref_data["Demo Group"].map(consumer_real_group_map[s_attr.lower()]).to_numpy()
 
-            metric_result = eval_utils.compute_metric(evaluator, _eval_data, _pref_data, 'cf_topk_pred', 'ndcg')
+            metric_result = eval_utils.compute_metric(evaluator, _eval_data, _pref_data, 'cf_topk_pred', eval_metric.lower())
             _pref_data['Value'] = metric_result[:, -1]
             _pref_data['Quantile'] = _pref_data['Value'].map(lambda x: np.ceil(x * 10) / 10 if x > 0 else 0.1)
 
