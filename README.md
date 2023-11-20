@@ -166,6 +166,4 @@ python scripts/merge_tables.py --d DATASET --m GCMC LightGCN NGCF --sa gender
 
 ![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/8fa1bfb0-1a68-4b1d-bfc9-dcefc41683f8)
 
-
-![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/7abed749-a602-4e48-87c5-e94079a6ad4e)
-
+![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/10108998-b447-4850-9dd0-75d7a61bc39a)
