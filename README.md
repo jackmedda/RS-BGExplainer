@@ -1,3 +1,5 @@
+![44804a56-fbf6-4796-b8ad-2727b05c7c13](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/b3d0c73e-f676-4b91-a869-34998675699a)
+
 # BiGA: Bi-partite Graph Augmenter for unfairness mitigation in recommendation
 
 BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
@@ -161,6 +163,9 @@ python scripts/merge_tables.py --d DATASET --m GCMC LightGCN NGCF --sa gender
 ```
 
 # RESULTS
+
+![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/8fa1bfb0-1a68-4b1d-bfc9-dcefc41683f8)
+
 
 ![image](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/7abed749-a602-4e48-87c5-e94079a6ad4e)
 
