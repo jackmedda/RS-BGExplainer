@@ -118,7 +118,7 @@ if __name__ == "__main__":
                     handles, labels = ax.get_legend_handles_labels()
                 ax.get_legend().remove()
 
-                ax.plot(1, 0, ">k", linewidth=200) # , clip_on=False)
+                ax.plot(1, 0, ">k", transform=ax.get_yaxis_transform(), linewidth=200, clip_on=False)
                 ax.plot(0, 1, "^k", transform=ax.get_xaxis_transform(), linewidth=200, clip_on=False)
 
                 # ax.tick_params(axis='x', direction='in', pad=-15)
