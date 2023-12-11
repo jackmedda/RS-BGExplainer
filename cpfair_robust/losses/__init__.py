@@ -1,11 +1,11 @@
-from .ranking_losses import NDCGApproxLoss, SoftmaxLoss
+from .ranking_losses import NDCGApproxLoss, SigmoidBCELoss
 from .beyondacc_losses import ConsumerDPLoss, ProviderDPLoss, UserCoverageLoss
 
 
 def get_ranking_loss(loss="ndcg"):
     return {
         "ndcg": NDCGApproxLoss,
-        "softmax": SoftmaxLoss
+        "sigmoid_bce_loss": SigmoidBCELoss
     }[loss.lower()]
 
 

@@ -84,13 +84,13 @@ class NDCGApproxLoss(TopKLoss):
         return -ndcg(target, ranks)
 
 
-class SoftmaxLoss(RankingLoss):
+class SigmoidBCELoss(RankingLoss):
     """"
-    Based on TensorFlow Ranking SoftmaxLoss
+    Based on TensorFlow Ranking SigmoidBCELoss
     """
 
     def __init__(self, size_average=None, reduce=None, topk=None, reduction: str = 'mean', temperature=0.1) -> None:
-        super(SoftmaxLoss, self).__init__(
+        super(SigmoidBCELoss, self).__init__(
             size_average=size_average,
             reduce=reduce,
             reduction=reduction,

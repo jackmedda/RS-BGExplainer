@@ -915,7 +915,7 @@ def compute_provider_metric_per_group(pref_data, dataset, discriminative_attribu
     )
 
     if raw:
-        item_df = pd.DataFrame(dataset.item_feat.numpy())
+        item_df = pd.DataFrame({k: v for k, v in dataset.item_feat.numpy().items() if k in [dataset.iid_field, discriminative_attribute]})
         item_df.rename(columns={discriminative_attribute: discriminative_attribute + '_group'}, inplace=True)
 
         # they are vectors with same dimension, but completely different indices > 0
@@ -973,6 +973,42 @@ def _compute_raw_exposure(topk_recs, mask, exposure_discount):
         exposure[item_id] = item_exposure
 
     return exposure
+
+
+def compute_edge_perturbation_impact(dataset, pert_edges, attribute, consumer=False):
+    pert_edges = pert_edges.copy()
+    total_pert_edges = pert_edges.shape[1]
+    attr_map = dataset.field2id_token[attribute]
+
+    if (pert_edges[1] > dataset.user_num).all():
+        pert_edges[1] -= dataset.user_num
+
+    if consumer:
+        data_feat = dataset.user_feat
+        data_num = dataset.user_num
+        pert_edges_idx = 0
+    else:
+        data_feat = dataset.item_feat
+        data_num = dataset.item_num
+        pert_edges_idx = 1
+
+    gr1_mask = data_feat[attribute] == 1
+    gr2_mask = data_feat[attribute] == 2
+
+    pert_edges_per_gr = np.bincount(pert_edges[pert_edges_idx], minlength=data_num)
+    gr1_pert_edges = pert_edges_per_gr[gr1_mask]
+    gr2_pert_edges = pert_edges_per_gr[gr2_mask]
+
+    gr1_ei_ratio = gr1_pert_edges.sum() / total_pert_edges
+    gr2_ei_ratio = gr2_pert_edges.sum() / total_pert_edges
+
+    gr1_repr_ratio = gr1_mask.sum() / data_num
+    gr2_repr_ratio = gr2_mask.sum() / data_num
+
+    return {
+        attr_map[1]: (gr1_ei_ratio / gr1_repr_ratio).item(),
+        attr_map[2]: (gr2_ei_ratio / gr2_repr_ratio).item()
+    }
 
 
 def best_epoch_DP_across_samples(exp_path,
