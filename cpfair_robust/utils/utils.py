@@ -226,7 +226,7 @@ def load_dp_exps_file(base_exps_file):
     with open(model_preds_file, 'rb') as file:
         model_preds = pickle.load(file)
 
-    return (exps, *model_preds)
+    return exps, *model_preds
 
 
 def load_old_dp_exps_file(base_exps_file):
@@ -272,6 +272,7 @@ def get_dataloader_with_perturbed_edges(pert_edges, config, dataset, train_data,
 
     return train_data, valid_data, test_data
 
+
 def get_best_exp_early_stopping(exps, config_dict):
     if exps[-1] == _EXPS_END_EPOCHS_STUB:
         return exps[-2]
@@ -280,6 +281,14 @@ def get_best_exp_early_stopping(exps, config_dict):
     epoch_idx = exp_col_index('epoch')
 
     return [e for e in sorted(exps, key=lambda x: abs(x[epoch_idx] - best_epoch)) if e[epoch_idx] <= best_epoch][0]
+
+
+def get_exp_by_epoch(exps, query_epoch):
+    epoch_idx = exp_col_index('epoch')
+
+    queried_exp = [e for e in exps if e[epoch_idx] == query_epoch]
+
+    return queried_exp[0] if len(queried_exp) > 0 else None
 
 
 def old_get_best_epoch_early_stopping(exps, config_dict):
@@ -480,8 +489,21 @@ def create_sparse_symm_matrix_from_vec(vector, idx, base_symm, edge_deletions=Fa
     symm_matrix_idxs, symm_matrix_vals = symm_matrix.indices(), symm_matrix.values()
 
     if not edge_deletions:  # if pass is edge additions
+        vector_zeros_mask = vector != 0
+
+        idx = idx[:, vector_zeros_mask]
+        vector = vector[vector_zeros_mask]
+        del vector_zeros_mask
+        torch.cuda.empty_cache()
+
+        symm_matrix_idxs = symm_matrix_idxs.to('cuda:0')
+        idx = idx.to('cuda:0')
         idx = torch.cat((symm_matrix_idxs, idx, idx[[1, 0]]), dim=1)
+        torch.cuda.empty_cache()
         vector = torch.cat((symm_matrix_vals, vector, vector))
+        torch.cuda.empty_cache()
+        idx = idx.to(vector.device)
+        torch.cuda.empty_cache()
     else:
         vector = torch.cat((vector, vector))
         if mask_filter is not None:
@@ -492,6 +514,7 @@ def create_sparse_symm_matrix_from_vec(vector, idx, base_symm, edge_deletions=Fa
             vector = symm_matrix_vals
 
     symm_matrix = torch.sparse.FloatTensor(idx, vector, symm_matrix.shape)
+    torch.cuda.empty_cache()
 
     return symm_matrix
 
@@ -526,12 +549,28 @@ def unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None,
     uid_field = uid_field or 'user_id'
     iid_field = iid_field or 'item_id'
 
-    _inter = torch.stack((inter[uid_field], inter[iid_field]))
+    _inter = torch.stack((torch.as_tensor(inter[uid_field]), torch.as_tensor(inter[iid_field])))
     if isinstance(other, dict):
-        _other = torch.stack((other[uid_field], other[iid_field]))
+        _other = torch.stack((torch.as_tensor(other[uid_field]), torch.as_tensor(other[iid_field])))
     else:
         _other = torch.as_tensor(other)
     unique, counts = torch.cat((_inter, _other), dim=1).unique(dim=1, return_counts=True)
+    new_inter = unique[:, counts == 1]
+
+    if not return_unique_counts:
+        return dict(zip([uid_field, iid_field], new_inter))
+    else:
+        return dict(zip([uid_field, iid_field], new_inter)), unique, counts
+
+
+def np_unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None, return_unique_counts=False):
+    uid_field = uid_field or 'user_id'
+    iid_field = iid_field or 'item_id'
+
+    _inter = np.stack((inter[uid_field], inter[iid_field]))
+    _other = np.stack((other[uid_field], other[iid_field])) if isinstance(other, dict) else other
+
+    unique, counts = np.unique(np.concatenate((_inter, _other), axis=1), axis=1, return_counts=True)
     new_inter = unique[:, counts == 1]
 
     if not return_unique_counts:

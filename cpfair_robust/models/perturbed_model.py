@@ -13,6 +13,10 @@ class PerturbedModel(object):
     def __init__(self, config, adv_group=None, filtered_users=None, filtered_items=None):
         self.num_all = self.n_users + self.n_items
 
+        if hasattr(self, 'norm_adj_matrix'):
+            del self.norm_adj_matrix
+            torch.cuda.empty_cache()
+
         self.n_hops = config['n_hops']
         self.neighbors_hops = config['neighbors_hops']
         self.beta = config['cf_beta']
@@ -60,9 +64,7 @@ class PerturbedModel(object):
                 self.mask_sub_adj = neighbors_items_mask[:, counts == 2]
                 # self.mask_sub_adj = self.mask_sub_adj[:, np.isin(self.mask_sub_adj, neighbors_items_mask).all(axis=0)]
 
-            self.mask_sub_adj = self.mask_sub_adj[
-                :, (self.mask_sub_adj[0] != self.mask_sub_adj[1]) & (self.mask_sub_adj[0] != 0)
-            ]
+            self.mask_sub_adj = self.mask_sub_adj[:, (self.mask_sub_adj[0] != 0) | (self.mask_sub_adj[1] != 0)]
             self.mask_sub_adj[1] += self.n_users
             self.mask_sub_adj = torch.tensor(self.mask_sub_adj, dtype=int, device='cpu')
 
@@ -114,7 +116,7 @@ class PerturbedModel(object):
 
         self.P_symm = nn.Parameter(
             torch.FloatTensor(getattr(torch, self.P_symm_func)(self.P_symm_size)) + self.P_symm_init
-        )
+        ).to(self.device)
 
     def reset_param(self):
         with torch.no_grad():
@@ -162,21 +164,23 @@ class PerturbedModel(object):
         :return:
         """
         # compute fairness loss
+        import pdb; pdb.set_trace()
         fair_loss = fair_loss_f(output, fair_loss_target)
-
-        adj = self.Graph
 
         # non-differentiable adj matrix is taken to compute the graph dist loss
         cf_adj = self.P_loss
         cf_adj.requires_grad = True  # Need to change this otherwise loss_graph_dist has no gradient
 
-        orig_dist = (cf_adj - adj).coalesce()
+        adj = self.Graph.to(cf_adj.device)
+        orig_dist = (cf_adj - adj)
+        if not orig_dist.is_coalesced():
+            orig_dist = orig_dist.coalesce()
 
         # compute normalized graph dist loss (logistic sigmoid is not used because reaches too fast 1)
         orig_loss_graph_dist = torch.sum(orig_dist.values().abs()) / 2  # Number of edges changed (symmetrical)
         loss_graph_dist = orig_loss_graph_dist / (1 + abs(orig_loss_graph_dist))  # sigmoid dist
 
-        loss_total = fair_loss + self.beta * loss_graph_dist
+        loss_total = fair_loss + self.beta * loss_graph_dist.to(fair_loss.device)
 
         return loss_total, orig_loss_graph_dist, loss_graph_dist, fair_loss, orig_dist
 
@@ -234,24 +238,39 @@ class PerturbedModel(object):
         else:
             P_hat_symm = torch.sigmoid(P_symm)
 
-        kws = dict(
+        P_hat_symm = P_hat_symm.to('cpu')
+        # self.mask_sub_adj = self.mask_sub_adj.to('cuda:1')
+        Graph = Graph.to('cpu')
+        torch.cuda.empty_cache()
+        P = utils.create_sparse_symm_matrix_from_vec(
+            P_hat_symm, self.mask_sub_adj, Graph,
             edge_deletions=not self.edge_additions,
-            mask_filter = self.mask_filter.to(dev) if self.mask_filter is not None else None
+            mask_filter=self.mask_filter if self.mask_filter is not None else None
         )
-        P = utils.create_sparse_symm_matrix_from_vec(P_hat_symm, self.mask_sub_adj.to(dev), Graph, **kws)
+
+        del P_symm
+        del P_hat_symm
+        # self.mask_sub_adj = self.mask_sub_adj.to('cpu')
+        Graph = Graph.to(dev)
+        torch.cuda.empty_cache()
+
         if pred:
             self.P_loss = P
+        else:
+            torch.cuda.empty_cache()
 
         # Don't need gradient of this if pred is False
         D_tilde = torch.sparse.sum(P, dim=1) if pred else torch.sparse.sum(P, dim=1).detach()
+        P = P.to('cuda:1')
+        torch.cuda.empty_cache()
         D_tilde_exp = (D_tilde.to_dense() + 1e-7).pow(-0.5)
 
         D_tilde_exp = torch.sparse.FloatTensor(
-            self.D_indices.to(dev), D_tilde_exp, torch.Size((self.num_all, self.num_all))
-        )
+            self.D_indices.to(D_tilde_exp.device), D_tilde_exp, torch.Size((self.num_all, self.num_all))
+        ).to(P.device)
 
         # # Create norm_adj = (D + I)^(-1/2) * (A + I) * (D + I) ^(-1/2)
-        return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp)
+        return torch.sparse.mm(torch.sparse.mm(D_tilde_exp, P), D_tilde_exp).to(Graph.device)
 
     def predict(self, interaction, pred=False):
         user = interaction[self.USER_ID]
