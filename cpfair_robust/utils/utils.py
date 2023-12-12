@@ -1,5 +1,4 @@
 import os
-import re
 import copy
 import stat
 import shutil
@@ -121,7 +120,7 @@ def wandb_init(config, policies=None, **kwargs):
     )
 
 
-def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None):
+def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None, perturbed_dataset=None):
     r"""Load filtered dataset, split dataloaders and saved model.
     Args:
         model_file (str): The path of saved model file.
@@ -181,11 +180,8 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None)
     logger = getLogger()
     logger.info(config)
 
-    dataset = create_dataset(config)
+    dataset = perturbed_dataset if perturbed_dataset is not None else create_dataset(config)
     logger.info(dataset)
-
-    if 'group_explain' in config:
-        config['explain_scope'] = 'group_explain' if config['group_explain'] else ('group' if config['user_batch_exp'] > 1 else 'individual')
 
     train_data, valid_data, test_data = data_preparation(config, dataset)
 
@@ -557,7 +553,11 @@ def unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None,
     uid_field = uid_field or 'user_id'
     iid_field = iid_field or 'item_id'
 
-    _inter = torch.stack((torch.as_tensor(inter[uid_field]), torch.as_tensor(inter[iid_field])))
+    if isinstance(inter, dict):
+        _inter = torch.stack((torch.as_tensor(inter[uid_field]), torch.as_tensor(inter[iid_field])))
+    else:
+        _inter = torch.as_tensor(inter)
+
     if isinstance(other, dict):
         _other = torch.stack((torch.as_tensor(other[uid_field]), torch.as_tensor(other[iid_field])))
     else:
@@ -575,7 +575,7 @@ def np_unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=No
     uid_field = uid_field or 'user_id'
     iid_field = iid_field or 'item_id'
 
-    _inter = np.stack((inter[uid_field], inter[iid_field]))
+    _inter = np.stack((inter[uid_field], inter[iid_field])) if isinstance(inter, dict) else inter
     _other = np.stack((other[uid_field], other[iid_field])) if isinstance(other, dict) else other
 
     unique, counts = np.unique(np.concatenate((_inter, _other), axis=1), axis=1, return_counts=True)
@@ -585,6 +585,28 @@ def np_unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=No
         return dict(zip([uid_field, iid_field], new_inter))
     else:
         return dict(zip([uid_field, iid_field], new_inter)), unique, counts
+
+
+def remap_edges_recbole_ids(dataset, edges, field2id_token=True):
+    mp_edges = []
+    for i, _field in enumerate([dataset.uid_field, dataset.iid_field]):
+        mp_edges.append([])
+        for val in edges[i]:
+            idx_val = val
+
+            if field2id_token:
+                if _field == dataset.iid_field:
+                    idx_val = val - dataset.user_num
+
+                mp_edges[-1].append(dataset.field2id_token[_field][idx_val])
+            else:
+                if _field == dataset.iid_field:
+                    mp_val = dataset.field2token_id[_field][idx_val] + dataset.user_num
+                else:
+                    mp_val = dataset.field2token_id[_field][idx_val]
+
+                mp_edges[-1].append(mp_val)
+    return np.stack(mp_edges)
 
 
 def rolling_window(input_array, size_kernel, stride, op="mean"):
@@ -763,3 +785,20 @@ def copytree(src, dst, symlinks=False, ignore=None):
             copytree(s, d, symlinks, ignore)
         else:
             shutil.copy2(s, d)
+
+
+def read_recbole_config_skip_errors(filepath, config):
+    with open(filepath, 'r') as yaml_path:
+        def construct_undefined(self, node):
+            if isinstance(node, yaml.nodes.ScalarNode):
+                value = self.construct_scalar(node)
+            elif isinstance(node, yaml.nodes.SequenceNode):
+                value = self.construct_sequence(node)
+            elif isinstance(node, yaml.nodes.MappingNode):
+                value = self.construct_mapping(node)
+            else:
+                assert False, f"unexpected node: {node!r}"
+            return {node.__str__(): value}
+
+        config.yaml_loader.add_constructor(None, construct_undefined)
+        return yaml.load(yaml_path.read(), Loader=config.yaml_loader)

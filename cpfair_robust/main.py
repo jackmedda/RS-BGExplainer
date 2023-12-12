@@ -13,18 +13,22 @@ from recbole.trainer import HyperTuning
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color, get_local_time
 
+from cpfair_robust.data import PerturbedDataset
 from cpfair_robust.explain import execute_explanation
 import cpfair_robust.utils as utils
 
 
-def training(_config, saved=True, model_file=None, hyper=False, explanations_path=None):
+def training(_config, saved=True, model_file=None, hyper=False, perturbed_dataset=None):
     logger = logging.getLogger() if not hyper else None
 
-    if model_file is not None:
-        _config, _model, _dataset, train_data, valid_data, test_data = utils.load_data_and_model(model_file)
+    if model_file is not None and perturbed_dataset is None:
+        _config, _model, _dataset, train_data, valid_data, test_data = utils.load_data_and_model(
+            model_file,
+            perturbed_dataset=perturbed_dataset
+        )
     else:
         # dataset filtering
-        _dataset = create_dataset(_config)
+        _dataset = perturbed_dataset if perturbed_dataset is not None else create_dataset(_config)
 
         # dataset splitting
         train_data, valid_data, test_data = data_preparation(_config, _dataset)
@@ -39,7 +43,8 @@ def training(_config, saved=True, model_file=None, hyper=False, explanations_pat
 
     # trainer loading and initialization
     trainer = get_trainer(_config['MODEL_TYPE'], _config['model'])(_config, _model)
-    if explanations_path is not None:
+    if perturbed_dataset is not None:
+        explanations_path = perturbed_dataset.explanations_path
         perturbed_suffix = "_PERTURBED"
         split_saved_file = os.path.basename(trainer.saved_model_file).split('-')
         perturbed_model_path = os.path.join(
@@ -51,7 +56,6 @@ def training(_config, saved=True, model_file=None, hyper=False, explanations_pat
 
         resume_perturbed_training = False
         for f in os.scandir(explanations_path):
-            import pdb; pdb.set_trace()
             if _config['model'].lower() in f.name.lower() and \
                _config['dataset'].lower() in f.name.lower() and \
                perturbed_suffix in f.name:
@@ -152,6 +156,8 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     config['data_path'] = os.path.join(config.file_config_dict['data_path'], config.dataset)
     seed = seed or config['seed']
     init_seed(seed, config['reproducibility'])
+    import torch; torch.use_deterministic_algorithms(True)
+
     # logger initialization
     init_logger(config)
     logger = logging.getLogger()
@@ -161,135 +167,9 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
     #         utils.load_data_and_model(args.original_model_file, args.explainer_config_file)
 
     if args.use_perturbed_graph:
-        if 'LRS' not in config['eval_args']['split']:
-            raise ValueError("Perturbed graph can be used only when splits are loaded.")
-
-        splits = ['train', 'validation', 'test']
-        feats = ['inter', 'item']
-        data_path = config['data_path']
-
-        # Check outside the try block
-        for spl in splits:
-            spl_file = os.path.join(data_path, f"{config['dataset']}.{spl}")
-            if os.path.isfile(spl_file):
-                if os.path.isfile(spl_file + '.temp'):
-                    raise FileExistsError("Only one training with augmented graph per dataset can be performed")
-
-        def remap_edges_adj_matrix(_dset, _edges, field2id_token=True):
-            mp_edges = []
-            for i, _field in enumerate([_dset.uid_field, _dset.iid_field]):
-                mp_edges.append([])
-                for val in _edges[i]:
-                    idx_val = val
-
-                    if field2id_token:
-                        if _field == _dset.iid_field:
-                            idx_val = val - _dset.num(_dset.uid_field)
-
-                        mp_edges[-1].append(_dset.field2id_token[_field][idx_val])
-                    else:
-                        if _field == _dset.iid_field:
-                            mp_val = _dset.field2token_id[_field][idx_val] + _dset.num(_dset.uid_field)
-                        else:
-                            mp_val = _dset.field2token_id[_field][idx_val]
-
-                        mp_edges[-1].append(mp_val)
-            return np.stack(mp_edges)
-
-        try:
-            dataset = create_dataset(config)
-
-            with open(os.path.join(args.explanations_path, 'cf_data.pkl'), 'rb') as exp_file:
-                exps = pickle.load(exp_file)
-            logger.info(f"Original Fair Loss: {exps[0][-1]}")
-
-            with open(os.path.join(args.explanations_path, 'config.yaml'), 'r') as exps_config_file:
-                def construct_undefined(self, node):
-                    if isinstance(node, yaml.nodes.ScalarNode):
-                        value = self.construct_scalar(node)
-                    elif isinstance(node, yaml.nodes.SequenceNode):
-                        value = self.construct_sequence(node)
-                    elif isinstance(node, yaml.nodes.MappingNode):
-                        value = self.construct_mapping(node)
-                    else:
-                        assert False, f"unexpected node: {node!r}"
-                    return {node.__str__(): value}
-
-                config.yaml_loader.add_constructor(None, construct_undefined)
-                exps_config = yaml.load(exps_config_file.read(), Loader=config.yaml_loader)
-
-            print(exps_config)
-            if exps_config['exp_rec_data'] != 'valid':
-                logger.warning('Performing Graph Augmentation on Explanations NOT produced on Validation Data.')
-
-            best_exp = None
-            if args.best_exp[0] == "fairest":
-                best_exp = utils.get_best_exp_early_stopping(exps, exps_config)
-            elif args.best_exp[0] == "fixed_exp":
-                best_exp = utils.get_exp_by_epoch(exps, args.best_exp[1])
-            edges = best_exp[utils.exp_col_index('del_edges')]
-            mapped_edges = remap_edges_adj_matrix(dataset, edges, field2id_token=True)
-
-            for spl in splits:
-                spl_file = os.path.join(data_path, f"{config['dataset']}.{spl}")
-                if os.path.isfile(spl_file):
-                    if os.path.isfile(spl_file + '.temp'):
-                        raise FileExistsError("Only one training with augmented graph per dataset can be performed")
-                    shutil.copyfile(spl_file, spl_file + '.temp')
-
-                with open(spl_file, 'rb') as split_data_file:
-                    split_data = pickle.load(split_data_file)
-
-                if spl == 'train':
-                    new_split_data = utils.np_unique_cat_recbole_interaction(
-                        split_data, mapped_edges, uid_field=dataset.uid_field, iid_field=dataset.iid_field
-                    )
-                    with open(spl_file, 'wb') as split_data_file:
-                        pickle.dump(new_split_data, split_data_file)
-                else:
-                    new_split_data, unique, counts = utils.np_unique_cat_recbole_interaction(
-                        split_data, mapped_edges, uid_field=dataset.uid_field, iid_field=dataset.iid_field,
-                        return_unique_counts=True
-                    )
-                    with open(spl_file, 'wb') as split_data_file:
-                        pickle.dump(new_split_data, split_data_file)
-
-            for feat in feats:
-                feat_file = os.path.join(data_path, f"{config['dataset']}.{feat}")
-                if os.path.isfile(feat_file):
-                    if os.path.isfile(feat_file + '.temp'):
-                        raise FileExistsError("Only one training with augmented graph per dataset can be performed")
-                    shutil.copyfile(feat_file, feat_file + '.temp')
-                else:
-                    continue  # it could be triggered if the dataset does not have item features (i.e. ".item" file)
-
-                feat_df = pd.read_csv(feat_file, sep='\t')
-                if feat == 'inter':
-                    feat_df_cols = [dataset.uid_field + ':token', dataset.iid_field + ':token']
-
-                    feat_data = set(map(tuple, feat_df[feat_df_cols].itertuples(index=False)))
-                    edges_data = set(map(tuple, mapped_edges.T))
-                    new_feat_edges = np.array(list(edges_data ^ feat_data))
-                elif feat == 'item':
-                    feat_df_cols = [dataset.iid_field + ':token']
-
-                    new_feat_edges = np.array(list(set(mapped_edges[1]) ^ set(feat_df[feat_df_cols[1]].values)))[:, None]
-                else:
-                    raise ValueError(f"feat {feat} not supported for modifcation when re-training with perturbed data")
-
-                if new_feat_edges.shape[0] > 0:
-                    order_feat_cols = np.concatenate((feat_df_cols, np.setdiff1d(feat_df.columns, feat_df_cols)))
-                    new_feat_df = pd.DataFrame(new_feat_edges, columns=order_feat_cols)
-                    join_index = [dataset.uid_field + ':token', dataset.iid_field + ':token']
-                    new_feat_df = new_feat_df.join(feat_df.set_index(join_index), on=join_index, how="left")
-
-                    new_feat_df.to_csv(feat_file, index=False, sep='\t')
-
-            dataset = create_dataset(config)
-            logger.info(dataset)
-
-            if args.run == 'train':
-                training(config, saved=saved, model_file=args.model_file, explanations_path=args.explanations_path)
+        perturbed_dataset = PerturbedDataset(config, args.explanations_path, args.best_exp)
+        if args.run == 'train':
+            training(config, saved=saved, model_file=args.model_file, perturbed_dataset=perturbed_dataset)
             # elif args.run == 'explain':
             #     runner(*explain_args)
             # elif args.run == 'evaluate_perturbed':
@@ -321,22 +201,6 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
             #         c_id,
             #         *args.best_exp
             #     )
-        finally:
-            # Restore train validation test splits
-            for spl in splits:
-                spl_file = os.path.join(data_path, f"{config['dataset']}.{spl}")
-                if os.path.isfile(spl_file + '.temp'):
-                    if os.path.isfile(spl_file):
-                        os.remove(spl_file)
-                    shutil.move(spl_file + '.temp', spl_file)
-            for feat in feats:
-                feat_file = os.path.join(data_path, f"{config['dataset']}.{feat}")
-                if os.path.isfile(feat_file + '.temp'):
-                    if os.path.isfile(feat_file):
-                        os.remove(feat_file)
-                    shutil.move(feat_file + '.temp', feat_file)
-                else:
-                    continue  # it could be triggered if the dataset does not have item features (i.e. ".item" file)
     else:
         dataset = create_dataset(config)
         logger.info(dataset)
