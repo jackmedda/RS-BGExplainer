@@ -26,8 +26,6 @@ series = {CIKM '23}
 }
 ```
 
-Ludovico Boratto, Francesco Fabbri, Gianni Fenu, Mirko Marras, and Giacomo Medda. 2023. Counterfactual Graph Augmentation for Consumer Unfairness Mitigation in Recommender Systems. In Proceedings of the 32nd ACM International Conference on Information and Knowledge Management (CIKM '23). Association for Computing Machinery, New York, NY, USA, 3753–3757. https://doi.org/10.1145/3583780.3615165
-
 BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
 Studying the disparity in the recommendations utility across demographic groups, our method detects
 which graph edges should be added to the original data set to mitigate user unfairness on the evaluation data. \
