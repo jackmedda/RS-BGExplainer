@@ -1,6 +1,32 @@
+# BiGA: Bipartite Graph Augmenter for unfairness mitigation in recommendation
+
 ![44804a56-fbf6-4796-b8ad-2727b05c7c13](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/b3d0c73e-f676-4b91-a869-34998675699a)
 
-# BiGA: Bi-partite Graph Augmenter for unfairness mitigation in recommendation
+This repository contains the source code of the paper [Counterfactual Graph Augmentation for Consumer Unfairness Mitigation in Recommender Systems](https://dl.acm.org/doi/10.1145/3583780.3615165).
+
+If you find this repostiory useful for your research or development cite our paper as
+
+```bibtex
+@inproceedings{10.1145/3583780.3615165,
+author = {Boratto, Ludovico and Fabbri, Francesco and Fenu, Gianni and Marras, Mirko and Medda, Giacomo},
+title = {Counterfactual Graph Augmentation for Consumer Unfairness Mitigation in Recommender Systems},
+year = {2023},
+isbn = {9798400701245},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3583780.3615165},
+doi = {10.1145/3583780.3615165},
+abstract = {In recommendation literature, explainability and fairness are becoming two prominent perspectives to consider. However, prior works have mostly addressed them separately, for instance by explaining to consumers why a certain item was recommended or mitigating disparate impacts in recommendation utility. None of them has leveraged explainability techniques to inform unfairness mitigation. In this paper, we propose an approach that relies on counterfactual explanations to augment the set of user-item interactions, such that using them while inferring recommendations leads to fairer outcomes. Modeling user-item interactions as a bipartite graph, our approach augments the latter by identifying new user-item edges that not only can explain the original unfairness by design, but can also mitigate it. Experiments on two public data sets show that our approach effectively leads to a better trade-off between fairness and recommendation utility compared with state-of-the-art mitigation procedures. We further analyze the characteristics of added edges to highlight key unfairness patterns. Source code available at https://github.com/jackmedda/RS-BGExplainer/tree/cikm2023.},
+booktitle = {Proceedings of the 32nd ACM International Conference on Information and Knowledge Management},
+pages = {3753–3757},
+numpages = {5},
+keywords = {recommender systems, mitigation, explainability, gnn, fairness},
+location = {Birmingham, United Kingdom},
+series = {CIKM '23}
+}
+```
+
+Ludovico Boratto, Francesco Fabbri, Gianni Fenu, Mirko Marras, and Giacomo Medda. 2023. Counterfactual Graph Augmentation for Consumer Unfairness Mitigation in Recommender Systems. In Proceedings of the 32nd ACM International Conference on Information and Knowledge Management (CIKM '23). Association for Computing Machinery, New York, NY, USA, 3753–3757. https://doi.org/10.1145/3583780.3615165
 
 BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
 Studying the disparity in the recommendations utility across demographic groups, our method detects
