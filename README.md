@@ -1,6 +1,18 @@
-# BiGA: Bipartite Graph Augmenter for unfairness mitigation in recommendation
+# BiGA: Bipartite Graph Augmenter for Unfairness Mitigation in Recommendation
 
 ![44804a56-fbf6-4796-b8ad-2727b05c7c13](https://github.com/jackmedda/RS-BGExplainer/assets/26059819/b3d0c73e-f676-4b91-a869-34998675699a)
+
+BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
+Studying the disparity in the recommendations utility across demographic groups, our method detects
+which graph edges should be added to the original data set to mitigate user unfairness on the evaluation data. \
+Thus, the added edges work as an explanation of the prior unfairness and of our mitigation procedure underlying process. \
+BiGA then needs to work on a slight extended version of a recommender system
+in order to include the perturbation vector. In our study we applied our framework on
+GCMC, LightGCN and NGCF, all provided in the [Recbole](https://github.com/RUCAIBox/RecBole)
+library, from which BiGA depend on for the data handling, the training and evaluation.
+Instead, the provided models are independent of the Recbole library.
+
+# Cite
 
 This repository contains the source code of the paper [Counterfactual Graph Augmentation for Consumer Unfairness Mitigation in Recommender Systems](https://dl.acm.org/doi/10.1145/3583780.3615165).
 
@@ -25,16 +37,6 @@ location = {Birmingham, United Kingdom},
 series = {CIKM '23}
 }
 ```
-
-BiGA uses counterfactual explanations to augment user-item interactions within a bi-partite graph. \
-Studying the disparity in the recommendations utility across demographic groups, our method detects
-which graph edges should be added to the original data set to mitigate user unfairness on the evaluation data. \
-Thus, the added edges work as an explanation of the prior unfairness and of our mitigation procedure underlying process. \
-BiGA then needs to work on a slight extended version of a recommender system
-in order to include the perturbation vector. In our study we applied our framework on
-GCMC, LightGCN and NGCF, all provided in the [Recbole](https://github.com/RUCAIBox/RecBole)
-library, from which BiGA depend on for the data handling, the training and evaluation.
-Instead, the provided models are independent of the Recbole library.
 
 # Requirements
 Our framework was tested on Python 3.9 with the libraries listed in the
