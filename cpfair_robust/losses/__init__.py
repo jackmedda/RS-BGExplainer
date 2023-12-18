@@ -5,7 +5,7 @@ from .beyondacc_losses import ConsumerDPLoss, ProviderDPLoss, UserCoverageLoss
 def get_ranking_loss(loss="ndcg"):
     return {
         "ndcg": NDCGApproxLoss,
-        "sigmoid_bce_loss": SigmoidBCELoss
+        "sigmoid_bce": SigmoidBCELoss
     }[loss.lower()]
 
 

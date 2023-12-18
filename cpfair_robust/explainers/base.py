@@ -16,7 +16,9 @@ from tqdm import tqdm
 from recbole.evaluator import Evaluator
 from recbole.data.interaction import Interaction
 from recbole.utils import set_color
-# from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as torch_dist
+import torch.multiprocessing as torch_mp
+import torch.nn.parallel as torch_parallel  # import DistributedDataParallel as DDP
 
 import cpfair_robust.utils as utils
 import cpfair_robust.models as exp_models
@@ -150,7 +152,12 @@ class Explainer:
             exp_models,
             f"{self.model.__class__.__name__}Perturbed"
         )(self.config, self.dataset, **kwargs).to(self.model.device)
-
+        # self.parallel_cf_model = torch_parallel.DistributedDataParallel(self.cf_model)
+        # self.parallel_cf_model = torch_parallel.DataParallel(self.cf_model)
+        # for attr in ['device', 'full_sort_predict']:
+        #     setattr(self.parallel_cf_model, attr, getattr(self.cf_model, attr))
+        #
+        # self.cf_model = self.parallel_cf_model
         self.cf_model.load_state_dict(self.model.state_dict(), strict=False)
 
         # Freeze weights from original model in cf_model
