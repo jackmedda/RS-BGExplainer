@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from recbole.model.general_recommender import Recbole_NGCF
+from recbole.model.general_recommender import NGCF as Recbole_NGCF
 
 
 class NGCF(Recbole_NGCF):

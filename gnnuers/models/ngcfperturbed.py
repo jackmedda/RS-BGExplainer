@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 sys.path.append('..')
 
-from gnnuers.models import NGCF
+from .ngcf import NGCF
 from gnnuers.models import PerturbedModel
 
 
