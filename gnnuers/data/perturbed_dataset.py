@@ -5,15 +5,13 @@ import logging
 import torch
 import numpy as np
 import pandas as pd
-from recbole.data.dataset import Dataset
-from recbole.data.interaction import Interaction
 from recbole.utils import FeatureType, FeatureSource, set_color
 
 import gnnuers.utils as utils
+from gnnuers.data import Dataset
 
 
 class PerturbedDataset(Dataset):
-    SPLITS = ['train', 'validation', 'test']
     FEATS = [FeatureSource.INTERACTION, FeatureSource.ITEM]  # our method never deletes users
 
     def __init__(self, config, explanations_path, best_exp):
@@ -27,9 +25,6 @@ class PerturbedDataset(Dataset):
         self.mapped_perturbed_edges = utils.remap_edges_recbole_ids(
             self.__base_dataset, self.perturbed_edges, field2id_token=True
         )
-
-        if 'LRS' not in self.__base_dataset.config['eval_args']['split']:
-            raise ValueError("Perturbed graph can be used only when splits are loaded.")
 
         super(PerturbedDataset, self).__init__(config)
 
@@ -238,41 +233,3 @@ class PerturbedDataset(Dataset):
                 df[field] = [np.array(list(map(float, filter(None, _.split(seq_separator))))) for _ in df[field].values]
             self.field2seqlen[field] = max(map(len, df[field].values))
         return df
-
-    def split_by_loaded_splits(self):
-        next_df = []
-        for split in ['train', 'validation', 'test']:
-            filename = os.path.join(self.dataset_path, f'{self.dataset_name}.{split}')
-            if not os.path.isfile(filename):
-                if split in ['train', 'test']:
-                    raise NotImplementedError(f'The splitting method "LRS" needs at least train and test.')
-            else:
-                split_data = self.perturb_split(split)
-
-                split_keys = list(split_data.keys())
-                if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
-                    raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
-                                     f'`{self.uid_field}` and `{self.iid_field}`.')
-
-                for field in [self.uid_field, self.iid_field]:
-                    data = split_data[field]
-                    data = data.numpy() if isinstance(data, torch.Tensor) else data
-                    try:
-                        split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
-                    except KeyError:
-                        import smtplib, ssl
-                        from email.mime.text import MIMEText
-                        msg = MIMEText(f'Check server UNICA for error in gnnuers run {self.explanations_path}')
-                        msg['Subject'] = 'IL CODICE È CRASHATO SIRA'
-                        msg['From'] = "giacomo.medda@unica.it"
-                        msg['To'] = "giacomo.medda@unica.it"
-                        with smtplib.SMTP_SSL("out.unica.it", 465, context=ssl.create_default_context()) as mailServer:
-                            mailServer.login(msg['From'], os.environ['UNICA_MAIL_PASSWORD'])
-                            mailServer.sendmail(msg['From'], msg['To'], msg.as_string())
-                        exit()
-
-                next_df.append(Interaction(split_data))
-
-        self._drop_unused_col()
-        next_ds = [self.copy(_) for _ in next_df]
-        return next_ds

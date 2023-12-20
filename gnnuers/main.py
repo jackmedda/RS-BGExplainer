@@ -13,6 +13,7 @@ from recbole.trainer import HyperTuning
 from recbole.data import create_dataset, data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color, get_local_time
 
+from gnnuers.models.ngcf import NGCF
 from gnnuers.data import PerturbedDataset
 from gnnuers.explain import execute_explanation
 import gnnuers.utils as utils
@@ -34,7 +35,10 @@ def training(_config, saved=True, model_file=None, hyper=False, perturbed_datase
         train_data, valid_data, test_data = data_preparation(_config, _dataset)
 
         # model loading and initialization
-        _model = get_model(_config['model'])(_config, train_data.dataset).to(_config['device'])
+        if _config['model'].upper() == 'ngcf':
+            _model = NGCF()(_config, train_data.dataset).to(_config['device'])
+        else:
+            _model = get_model(_config['model'])(_config, train_data.dataset).to(_config['device'])
 
         if not hyper:
             logger.info(_config)

@@ -16,7 +16,9 @@ from recbole.config import Config
 from sklearn.decomposition import PCA
 from recbole.data.interaction import Interaction
 from recbole.utils import init_logger, get_model, FeatureSource, FeatureType
-from recbole.data import create_dataset, data_preparation, create_samplers, get_dataloader
+from recbole.data import data_preparation, create_samplers, get_dataloader
+
+from gnnuers.data import Dataset
 
 try:
     from torch_geometric.utils import k_hop_subgraph, subgraph
@@ -180,7 +182,28 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
     logger = getLogger()
     logger.info(config)
 
-    dataset = perturbed_dataset if perturbed_dataset is not None else create_dataset(config)
+    if perturbed_dataset is not None:
+        dataset = perturbed_dataset
+    else:
+        dataset = Dataset(config)
+        default_file = os.path.join(config['checkpoint_dir'], f'{config["dataset"]}-{dataset.__class__.__name__}.pth')
+        file = config['dataset_save_path'] or default_file
+        if os.path.exists(file):
+            with open(file, 'rb') as f:
+                dataset = pickle.load(f)
+            dataset_args_unchanged = True
+            for arg in dataset_arguments + ['seed', 'repeatable']:
+                if config[arg] != dataset.config[arg]:
+                    dataset_args_unchanged = False
+                    break
+            if dataset_args_unchanged:
+                logger = getLogger()
+                logger.info(set_color('Load filtered dataset from', 'pink') + f': [{file}]')
+
+        dataset = dataset_class(config)
+        if config['save_dataset']:
+            dataset.save()
+
     logger.info(dataset)
 
     train_data, valid_data, test_data = data_preparation(config, dataset)

@@ -29,21 +29,15 @@ where `${CUDA}` should be replaced by either `cpu`, `cu***`, where `***` represe
 CUDA version, e.g. 116, 117.
 
 __NOTE!__ \
-The Recbole version (1.0.1) does not support the usage of custom dataset splits like ours,
+The Recbole Dataset class does not support the usage of custom dataset splits like ours,
 and we cannot guarantee that, even if provided in new versions, it will match our
-modification. To run our experiments the file _recbole/data/dataset/dataset.py_ should
-be replaced by the [modified_recbole_dataset.py](modified_recbole_dataset.py) file. In Linux:
-```bash
-cp modified_recbole_dataset.py /usr/local/lib/python3.9/dist-packages/recbole/data/dataset/dataset.py
-```
+modification. Hence, we implemented a modified [Dataset](gnnuers/data/dataset.py) on top of the Recbole one,
+which support the usage of custom data splits, and it is used to perform our experiments
 
-The same version contains a bug related to the NGCF model. A Dropout layer is instantiated inside
+The current versions of Recbole also contain a bug related to the NGCF model. A Dropout layer is instantiated inside
 the `forward` method, which makes the generation of new embeddings (after the perturbation) not reproducible
-even if `eval` is called on the model. To run our experiments the file _recbole/model/general_recommender/ngcf.py_ should
-be replaced by the [modified_recbole_ngcf.py](modified_recbole_ngcf.py) file. In Linux:
-```bash
-cp modified_recbole_ngcf.py /usr/local/lib/python3.9/dist-packages/recbole/model/general_recommender/ngcf.py
-```
+even if `eval` is called on the model. To run our experiments, we fixed this issue by creating an extended
+[NGCF](gnnuers/models/ngcf.py) version on top of the respective Recbole model.
 
 # Datasets
 

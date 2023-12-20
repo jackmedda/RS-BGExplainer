@@ -5,10 +5,10 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from recbole.model.general_recommender import NGCF
 
 sys.path.append('..')
 
+from gnnuers.models import NGCF
 from gnnuers.models import PerturbedModel
 
 
@@ -16,8 +16,6 @@ class NGCFPerturbed(PerturbedModel, NGCF):
     def __init__(self, config, dataset, **kwargs):
         NGCF.__init__(self, config, dataset)
         PerturbedModel.__init__(self, config, **kwargs)
-
-        self.emb_dropout = nn.Dropout(self.message_dropout)
 
     def forward(self, pred=False):
         A_hat = self.perturbate_adj_matrix(self.Graph, pred=pred)
