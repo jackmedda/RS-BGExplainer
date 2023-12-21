@@ -4,30 +4,9 @@ import numba
 import numpy as np
 import pandas as pd
 import igraph as ig
-import networkx as nx
 import scipy.sparse as sp
 
 import gnnuers.utils as utils
-
-
-def get_nx_adj_matrix(dataset):
-    uid_field = dataset.uid_field
-    iid_field = dataset.iid_field
-    n_users = dataset.num(uid_field)
-    n_items = dataset.num(iid_field)
-    inter_matrix = dataset.inter_matrix(form='coo').astype(np.float32)
-    num_all = n_users + n_items
-    A = get_adj_from_inter_matrix(inter_matrix, num_all, n_users)
-
-    return nx.Graph(A)
-
-
-def get_nx_biadj_matrix(dataset, remove_first_row_col=False):
-    inter_matrix = dataset.inter_matrix(form='csr').astype(np.float32)
-    if remove_first_row_col:
-        inter_matrix = inter_matrix[1:, 1:]
-
-    return nx.bipartite.from_biadjacency_matrix(inter_matrix)
 
 
 def get_bipartite_igraph(dataset, remove_first_row_col=False):
@@ -293,33 +272,6 @@ def _compute_sp_length(data_i, most_sim, common_data, hist_len):
         else:
             sp_length += sim / hist_len[data_i] * (1 - sim / hist_len[most_sim[i]])
     return sp_length / most_sim.shape[0]
-
-
-def get_centrality_graph_df(graph_nx, top, original=True, sens_attr_map=None):
-    label = "Original" if original else "Perturbed"
-
-    bottom = set(graph_nx) - top
-
-    node_type_map = dict(zip(top, ["users"] * len(top)))
-    node_type_map.update(dict(zip(bottom, ["items"] * len(bottom))))
-
-    centr = nx.bipartite.degree_centrality(graph_nx, top)
-
-    top, bottom = list(top), list(bottom)
-    df_data = zip(top + bottom, [centr[n] for n in (top + bottom)])
-
-    df = pd.DataFrame(df_data, columns=["node_id_minus_1", "Centrality"])
-
-    df["Node Type"] = df["node_id_minus_1"].map(node_type_map)
-
-    user_df, item_df = df[df["Node Type"] == "users"], df[df["Node Type"] == "items"]
-
-    if sens_attr_map is not None:
-        user_df["Group"] = user_df["node_id_minus_1"].map(sens_attr_map)
-
-    user_df["Graph Type"], item_df["Graph Type"] = label, label
-
-    return user_df, item_df
 
 
 def get_user_user_data_sens_df(dataset, user_df, sens_attr, attr_map=None):

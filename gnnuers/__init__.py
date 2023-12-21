@@ -5,3 +5,5 @@ from .explainers import (
     DPBG,
     BaB
 )
+
+__version__ = "0.0.1"
