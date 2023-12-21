@@ -195,7 +195,7 @@ class PerturbedModel(object):
             P_symm_nhood_mask = self.mask_neighborhood[filtered_idxs_asymm]
             return torch.where(P_symm_nhood_mask.to(dev), P_symm, torch.ones_like(P_symm, device=dev))
 
-    def perturbate_adj_matrix(self, Graph, pred=False):
+    def perturb_adj_matrix(self, Graph, pred=False):
         P_symm = self.P_symm
         dev = P_symm.device
         if not self.edge_additions:

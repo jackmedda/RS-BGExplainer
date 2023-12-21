@@ -17,7 +17,7 @@ class GCMCPerturbed(PerturbedModel, GCMC):
 
         self.support[0] = self.Graph
 
-        self.GcEncoder = GcEncoderPerturbated(
+        self.GcEncoder = GcEncoderPerturbed(
             accum=self.accum,
             num_user=self.n_users,
             num_item=self.n_items,
@@ -31,7 +31,7 @@ class GCMCPerturbed(PerturbedModel, GCMC):
             mask_sub_adj=self.mask_sub_adj,
             only_subgraph=self.only_subgraph,
             force_removed_edges=self.force_removed_edges,
-            perturbate_adj_matrix_func=self.perturbate_adj_matrix,
+            perturb_adj_matrix_func=self.perturb_adj_matrix,
             sparse_feature=self.sparse_feature
         ).to(self.device)
 
@@ -61,7 +61,7 @@ class GCMCPerturbed(PerturbedModel, GCMC):
         return score
 
 
-class GcEncoderPerturbated(GcEncoder):
+class GcEncoderPerturbed(GcEncoder):
 
     def __init__(
         self,
@@ -78,13 +78,13 @@ class GcEncoderPerturbated(GcEncoder):
         mask_sub_adj,
         only_subgraph,
         force_removed_edges,
-        perturbate_adj_matrix_func,
+        perturb_adj_matrix_func,
         sparse_feature=True,
         act_dense=lambda x: x,
         share_user_item_weights=True,
         bias=False
     ):
-        super(GcEncoderPerturbated, self).__init__(
+        super(GcEncoderPerturbed, self).__init__(
             accum=accum,
             num_user=num_user,
             num_item=num_item,
@@ -111,7 +111,7 @@ class GcEncoderPerturbated(GcEncoder):
 
         self.force_removed_edges = force_removed_edges
 
-        self.perturbate_adj_matrix = perturbate_adj_matrix_func
+        self.perturb_adj_matrix = perturb_adj_matrix_func
 
     def forward(self, user_X, item_X, pred=False):
         # ----------------------------------------GCN layer----------------------------------------
@@ -137,7 +137,7 @@ class GcEncoderPerturbated(GcEncoder):
                     temp_v = torch.mm(item_X, wv)
                 all_embedding = torch.cat([temp_u, temp_v])
 
-                norm_adj = self.perturbate_adj_matrix(self.support[i], pred=pred)
+                norm_adj = self.perturb_adj_matrix(self.support[i], pred=pred)
                 all_emb = torch.sparse.mm(norm_adj, all_embedding)
                 embeddings.append(all_emb)
 
@@ -155,7 +155,7 @@ class GcEncoderPerturbated(GcEncoder):
                 all_embedding = torch.cat([temp_u, temp_v])
 
                 # then multiply with adj matrices
-                norm_adj = self.perturbate_adj_matrix(self.support[i], pred=pred)
+                norm_adj = self.perturb_adj_matrix(self.support[i], pred=pred)
                 all_emb = torch.sparse.mm(norm_adj, all_embedding)
                 embeddings.append(all_emb)
 

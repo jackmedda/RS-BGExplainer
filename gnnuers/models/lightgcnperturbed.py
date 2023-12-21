@@ -19,7 +19,7 @@ class LightGCNPerturbed(PerturbedModel, LightGCN):
         all_embeddings = self.get_ego_embeddings()
         embeddings_list = [all_embeddings]
 
-        adj_matrix = self.perturbate_adj_matrix(self.Graph, pred=pred)
+        adj_matrix = self.perturb_adj_matrix(self.Graph, pred=pred)
         for layer_idx in range(self.n_layers):
             all_embeddings = torch.sparse.mm(adj_matrix, all_embeddings)
             embeddings_list.append(all_embeddings)

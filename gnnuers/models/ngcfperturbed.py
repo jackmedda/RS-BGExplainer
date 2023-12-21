@@ -18,7 +18,7 @@ class NGCFPerturbed(PerturbedModel, NGCF):
         PerturbedModel.__init__(self, config, **kwargs)
 
     def forward(self, pred=False):
-        A_hat = self.perturbate_adj_matrix(self.Graph, pred=pred)
+        A_hat = self.perturb_adj_matrix(self.Graph, pred=pred)
         if self.node_dropout != 0:
             A_hat = self.sparse_dropout(A_hat)
 
