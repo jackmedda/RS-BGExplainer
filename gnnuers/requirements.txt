@@ -1,7 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
 recbole>=1.2.0
 seaborn>=0.11.2
 torch>=2.0.0
 
+-f https://data.pyg.org/whl/torch-2.1.0+cu121.html
 torch-geometric
 torch-scatter
 torch-sparse

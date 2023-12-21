@@ -12,21 +12,30 @@ library, from which GNNUERS depend on for the data handling, the training and ev
 Instead, the provided models are independent of the Recbole library.
 
 # Requirements
-Our framework was tested on Python 3.9 with the libraries listed in the
-[requirements.txt](gnnuers/requirements.txt) that can be installed with:
+Our framework was tested on Python 3.9.
+GNNUERS can be installed using the commands in [install-env.sh](install-env.sh) by passing as argument
+the backend for pytorch, e.g., `cpu`, `cu***`, where `***` represents the
+CUDA version, such as 116, 117. For instance, for CUDA 12.1:
+```bash
+./install-env.sh cu121
+```
+The file is configured to install pytorch (and the corresponding torch_geometric, torch_sparse, torch_scatter)
+based on the version 2.1.2. For other version the file [install-env.sh](install-env.sh) must be modified accordingly.
+GNNUERS can also be directly installed through the file [requirements.txt](gnnuers/requirements.txt) as follows:
 ```bash
 pip install -r gnnuers/requirements.txt
 ```
-Some dependencies related to PyTorch, e.g. torch-scatter, could be hard to retrieve
+requirements.txt contains the same command line arguments for pip that are included in the install-env.sh file.
+Some dependencies related to PyTorch, e.g., torch-scatter, could be hard to retrieve
 directly from pip depending on the PyTorch and CUDA version you are using, so you should
 specify the PyTorch FTP link storing the right libraries versions.
-For instance to install the right version of torch-scatter for PyTorch 1.12.0
+For instance, to install the right version of torch-scatter for PyTorch 1.12.0
 you should use the following command:
 ```bash
 pip install torch-scatter -f https://data.pyg.org/whl/torch-1.12.0+${CUDA}.html
 ```
 where `${CUDA}` should be replaced by either `cpu`, `cu***`, where `***` represents the
-CUDA version, e.g. 116, 117.
+CUDA version, e.g., 116, 117.
 
 __NOTE!__ \
 The Recbole Dataset class does not support the usage of custom dataset splits like ours,
@@ -54,7 +63,7 @@ so next to the _config_ and _gnnuers_ folders, e.g.:
 
 # Usage
 
-The file [main.py](gnnuers/main.py) is the entry point for every step to execute in our pipeline.
+The file [main.py](gnnuers/main.py) is the entry point for every step to execute our pipeline.
 
 ## 1. Configuration
 
