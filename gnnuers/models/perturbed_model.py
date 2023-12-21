@@ -155,7 +155,6 @@ class PerturbedModel(object):
         :return:
         """
         # compute fairness loss
-        import pdb; pdb.set_trace()
         fair_loss = fair_loss_f(output, fair_loss_target)
 
         # non-differentiable adj matrix is taken to compute the graph dist loss

@@ -828,7 +828,6 @@ else:
         exp_epochs.append(epochs)
 
         edge_additions = config['edge_additions']
-        import pdb; pdb.set_trace()
         if method_name == 'GENIUS-RS':
             policy = policy + ("$^+$" if edge_additions else "$^-$")
         exp_rec_data = config['exp_rec_data']

@@ -210,7 +210,6 @@ if __name__ == "__main__":
     fig.savefig(os.path.join(plots_path, 'DP_barplot.png'), bbox_inches="tight", pad_inches=0, dpi=200)
     plt.close()
 
-    import pdb; pdb.set_trace()
     exit()
 
     dp_samples, dgs_order = eval_utils.compute_DP_across_random_samples(

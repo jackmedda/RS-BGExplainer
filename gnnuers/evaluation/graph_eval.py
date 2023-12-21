@@ -219,7 +219,6 @@ def get_reachability_per_node(graph, first=None, last=None, nodes=None):
 
 def get_reachability_source_target(graph, source, target):
     dist = np.array(graph.distances(source=source, target=target))
-    import pdb; pdb.set_trace()
 
     reach = _get_reachability_per_node(dist)
 
