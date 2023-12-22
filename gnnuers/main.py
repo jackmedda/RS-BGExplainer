@@ -10,11 +10,11 @@ import numpy as np
 import pandas as pd
 from recbole.config import Config
 from recbole.trainer import HyperTuning
-from recbole.data import create_dataset, data_preparation
+from recbole.data import data_preparation
 from recbole.utils import init_logger, get_model, get_trainer, init_seed, set_color, get_local_time
 
 from gnnuers.models.ngcf import NGCF
-from gnnuers.data import PerturbedDataset
+from gnnuers.data import Dataset, PerturbedDataset
 from gnnuers.explain import execute_explanation
 import gnnuers.utils as utils
 
@@ -29,7 +29,7 @@ def training(_config, saved=True, model_file=None, hyper=False, perturbed_datase
         )
     else:
         # dataset filtering
-        _dataset = perturbed_dataset if perturbed_dataset is not None else create_dataset(_config)
+        _dataset = perturbed_dataset if perturbed_dataset is not None else Dataset(_config)
 
         # dataset splitting
         train_data, valid_data, test_data = data_preparation(_config, _dataset)
