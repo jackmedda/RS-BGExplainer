@@ -165,6 +165,10 @@ class Explainer:
             if name != "P_symm":
                 param.requires_grad = False
 
+    def initialize_optimizer(self):
+        if self.cf_model is None:
+            raise AttributeError("The counterfactual model `cf_model` should be initialized before the optimizer.")
+
         lr = self.config['cf_learning_rate']
         momentum = self.config["momentum"] or 0.0
         sgd_kwargs = {'momentum': momentum, 'nesterov': True if momentum > 0 else False}
@@ -881,6 +885,7 @@ class Explainer:
 
         detached_batched_data = batched_data.detach().numpy()
         self.initialize_cf_model(filtered_users=filtered_users, filtered_items=filtered_items)
+        self.initialize_optimizer()
 
         if self.ckpt_loading_path is not None and os.path.exists(self.ckpt_loading_path):
             exp_losses, starting_epoch, best_cf_example = self._resume_checkpoint()
@@ -1084,23 +1089,6 @@ class Explainer:
             self.cf_model.update_neighborhood(torch.Tensor(pert_edges))
 
         return cf_stats
-
-    @staticmethod
-    def _spilt_predict(model, interaction, batch_size, test_batch_size):
-        spilt_interaction = dict()
-        for key, tensor in interaction.interaction.items():
-            spilt_interaction[key] = tensor.split(test_batch_size, dim=0)
-        num_block = (batch_size + test_batch_size - 1) // test_batch_size
-        result_list = []
-        for i in range(num_block):
-            current_interaction = dict()
-            for key, spilt_tensor in spilt_interaction.items():
-                current_interaction[key] = spilt_tensor[i]
-            result = model.predict(Interaction(current_interaction).to(model.device))
-            if len(result.shape) == 0:
-                result = result.unsqueeze(0)
-            result_list.append(result)
-        return torch.cat(result_list, dim=0)
 
     @staticmethod
     def get_scores(_model, batched_data, tot_item_num, test_batch_size, item_tensor, pred=False):

@@ -18,27 +18,38 @@ class Dataset(RecboleDataset):
 
         super(Dataset, self).__init__(config)
 
+    def _discretization(self):
+        if self.config['numerical_features'] is None:
+            self.config['numerical_features'] = []
+        super(Dataset, self)._discretization()
+
+    def _load_data_split(self, split):
+        filename = os.path.join(self.dataset_path, f'{self.dataset_name}.{split}')
+        if not os.path.isfile(filename):
+            if split in ['train', 'test']:
+                raise NotImplementedError(f'The splitting method "LRS" needs at least train and test.')
+
+        with open(filename, 'rb') as split_file:
+            split_data: dict = pickle.load(split_file)
+
+        return split_data
+
     def split_by_loaded_splits(self):
         next_df = []
         for split in self.SPLITS:
-            filename = os.path.join(self.dataset_path, f'{self.dataset_name}.{split}')
-            if not os.path.isfile(filename):
-                if split in ['train', 'test']:
-                    raise NotImplementedError(f'The splitting method "LRS" needs at least train and test.')
-            else:
-                split_data = self.perturb_split(split)
+            split_data = self._load_data_split(split)
 
-                split_keys = list(split_data.keys())
-                if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
-                    raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
-                                     f'`{self.uid_field}` and `{self.iid_field}`.')
+            split_keys = list(split_data.keys())
+            if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
+                raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
+                                 f'`{self.uid_field}` and `{self.iid_field}`.')
 
-                for field in [self.uid_field, self.iid_field]:
-                    data = split_data[field]
-                    data = data.numpy() if isinstance(data, torch.Tensor) else data
-                    split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
+            for field in [self.uid_field, self.iid_field]:
+                data = split_data[field]
+                data = data.numpy() if isinstance(data, torch.Tensor) else data
+                split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
 
-                next_df.append(Interaction(split_data))
+            next_df.append(Interaction(split_data))
 
         self._drop_unused_col()
         next_ds = [self.copy(_) for _ in next_df]

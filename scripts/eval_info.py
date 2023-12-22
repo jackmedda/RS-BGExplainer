@@ -11,7 +11,6 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from recbole.evaluator import Evaluator
-from recbole.data import create_dataset
 
 sys.path.append(os.path.dirname(sys.path[0]))
 import gnnuers.utils as utils

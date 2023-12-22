@@ -160,6 +160,16 @@ class PerturbedDataset(Dataset):
                 split_point = np.cumsum(feat[field].agg(len))[:-1]
                 feat[field] = np.split(new_ids, split_point)
 
+    def _load_data_split(self, split):
+        filename = os.path.join(self.dataset_path, f'{self.dataset_name}.{split}')
+        if not os.path.isfile(filename):
+            if split in ['train', 'test']:
+                raise NotImplementedError(f'The splitting method "LRS" needs at least train and test.')
+
+        split_data = self.perturb_split(split)
+
+        return split_data
+
     def _load_feat(self, filepath, source):
         """Load features according to source into :class:`pandas.DataFrame`.
 

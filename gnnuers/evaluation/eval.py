@@ -12,9 +12,10 @@ import pandas as pd
 import recbole.evaluator.collector as recb_collector
 from recbole.utils import get_model
 from recbole.evaluator import Evaluator
-from recbole.data import create_dataset, data_preparation
+from recbole.data import data_preparation
 
 import gnnuers.utils as utils
+from gnnuers.data import Dataset
 
 
 def old_extract_best_metrics(_exp_paths, best_exp_col, evaluator, data, config=None, additional_cols=None):
@@ -500,7 +501,7 @@ def extract_metrics_from_perturbed_edges(exp_info: dict,
 
             config['data_path'] = config['data_path'].replace('\\', os.sep)
 
-            dataset = create_dataset(config)
+            dataset = Dataset(config)
             uid_field = dataset.uid_field
             iid_field = dataset.iid_field
 

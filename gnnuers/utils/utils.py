@@ -200,7 +200,6 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
                 logger = getLogger()
                 logger.info(set_color('Load filtered dataset from', 'pink') + f': [{file}]')
 
-        dataset = dataset_class(config)
         if config['save_dataset']:
             dataset.save()
 
@@ -372,6 +371,23 @@ def prepare_batched_data(input_data, data, item_data=None):
     return data_df, history_index, None, None
 
 
+def _spilt_predict(model, interaction, batch_size, test_batch_size):
+    spilt_interaction = dict()
+    for key, tensor in interaction.interaction.items():
+        spilt_interaction[key] = tensor.split(test_batch_size, dim=0)
+    num_block = (batch_size + test_batch_size - 1) // test_batch_size
+    result_list = []
+    for i in range(num_block):
+        current_interaction = dict()
+        for key, spilt_tensor in spilt_interaction.items():
+            current_interaction[key] = spilt_tensor[i]
+        result = model.predict(Interaction(current_interaction).to(model.device))
+        if len(result.shape) == 0:
+            result = result.unsqueeze(0)
+        result_list.append(result)
+    return torch.cat(result_list, dim=0)
+
+
 def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, **kwargs):
     interaction, history_index, _, _ = batched_data
     inter_data = interaction.to(model.device)
@@ -386,7 +402,7 @@ def get_scores(model, batched_data, tot_item_num, test_batch_size, item_tensor, 
         if batch_size <= test_batch_size:
             scores = model.predict(new_inter)
         else:
-            scores = Explainer._spilt_predict(new_inter, batch_size, test_batch_size, test_batch_size)
+            scores = _spilt_predict(model, new_inter, batch_size, test_batch_size)
 
     scores = scores.view(-1, tot_item_num)
     scores[:, 0] = -np.inf
