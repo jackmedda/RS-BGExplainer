@@ -206,8 +206,8 @@ def main(model=None, dataset=None, config_file_list=None, config_dict=None, save
             #         *args.best_exp
             #     )
     else:
-        dataset = create_dataset(config)
-        logger.info(dataset)
+        # dataset = create_dataset(config)
+        # logger.info(dataset)
 
         if args.run == 'train':
             training(config, saved=saved, model_file=args.model_file)

@@ -27,7 +27,7 @@ install_requires = [
     "wandb",
     "igraph",
     "optuna",
-    "seaborn>=0.11.2",
+    "seaborn>=0.11.2"
 ]
 
 setup_requires = []

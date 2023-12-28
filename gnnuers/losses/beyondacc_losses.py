@@ -1,6 +1,6 @@
+import math
 from typing import Tuple, Dict, Type
 
-import gmpy2
 import torch
 import numpy as np
 
@@ -137,7 +137,7 @@ class ConsumerDPLoss(FairLoss):
 
         self.update_data_feat(None)
 
-        return fair_loss / max(int(gmpy2.comb(len(groups), 2)), 1)
+        return fair_loss / max(int(math.comb(len(groups), 2)), 1)
 
 
 class ProviderDPLoss(FairLoss):
