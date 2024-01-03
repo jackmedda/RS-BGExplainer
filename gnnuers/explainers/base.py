@@ -14,7 +14,6 @@ import scipy.signal as sp_signal
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from recbole.evaluator import Evaluator
-from recbole.data.interaction import Interaction
 from recbole.utils import set_color
 import torch.distributed as torch_dist
 import torch.multiprocessing as torch_mp
@@ -23,6 +22,7 @@ import torch.nn.parallel as torch_parallel  # import DistributedDataParallel as 
 import gnnuers.utils as utils
 import gnnuers.models as exp_models
 import gnnuers.evaluation as eval_utils
+from gnnuers.data import Interaction
 from gnnuers.utils.early_stopping import EarlyStopping
 from gnnuers.losses import get_ranking_loss, get_loss_from_exp_metric
 

@@ -9,6 +9,7 @@ from recbole.utils import FeatureType, FeatureSource, set_color
 
 import gnnuers.utils as utils
 from gnnuers.data import Dataset
+from gnnuers.data.interaction import np_unique_cat_recbole_interaction
 
 
 class PerturbedDataset(Dataset):
@@ -79,7 +80,7 @@ class PerturbedDataset(Dataset):
                 field2id_token=False
             )
 
-            new_split_data, unique, counts = utils.np_unique_cat_recbole_interaction(
+            new_split_data, unique, counts = np_unique_cat_recbole_interaction(
                 mapped_split_data, self.perturbed_edges,
                 uid_field=self.uid_field, iid_field=self.iid_field, return_unique_counts=True
             )
@@ -88,7 +89,7 @@ class PerturbedDataset(Dataset):
                 # validation and test set should not be affected by any deleted edge in the training set
                 # but if an edge is added to the training set, it must be removed from the validation or test set
                 common_interactions = unique[:, counts > 1]
-                new_split_data = utils.np_unique_cat_recbole_interaction(
+                new_split_data = np_unique_cat_recbole_interaction(
                     mapped_split_data, common_interactions, uid_field=self.uid_field, iid_field=self.iid_field
                 )
 

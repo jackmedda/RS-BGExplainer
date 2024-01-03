@@ -5,8 +5,11 @@ import logging
 import torch
 import numpy as np
 import pandas as pd
-from recbole.data.interaction import Interaction
 from recbole.data.dataset import Dataset as RecboleDataset
+
+from gnnuers.data.interaction import Interaction
+import recbole.data.dataset.dataset as recbole_dataset_module
+recbole_dataset_module.Interaction = Interaction  # overwrites the Interaction class used by Recbole with ours
 
 
 class Dataset(RecboleDataset):
@@ -41,7 +44,7 @@ class Dataset(RecboleDataset):
             split_data = self._load_data_split(split)
 
             if split_data is None:
-                next_df.append(Interaction(dict(zip([self.uid_field, self.iid_field], [[], []]))))
+                next_df.append(self.inter_feat[[]])
             else:
                 split_keys = list(split_data.keys())
                 if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
@@ -53,10 +56,17 @@ class Dataset(RecboleDataset):
                     data = data.numpy() if isinstance(data, torch.Tensor) else data
                     split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
 
-                next_df.append(Interaction(split_data))
+                split_df = self.inter_feat.setdiff_by_user_item_ids(
+                    Interaction(split_data),
+                    uid_field=self.uid_field,
+                    iid_field=self.iid_field,
+                    return_unique_counts=False
+                )
+
+                next_df.append(split_df)
 
         self._drop_unused_col()
-        next_ds = [self.copy(_) if _ is not None else None for _ in next_df]
+        next_ds = [self.copy(_) for _ in next_df]
         return next_ds
 
     def build(self):

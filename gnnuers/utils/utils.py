@@ -14,11 +14,11 @@ import numpy as np
 import pandas as pd
 from recbole.config import Config
 from sklearn.decomposition import PCA
-from recbole.data.interaction import Interaction
 from recbole.utils import init_logger, get_model, FeatureSource, FeatureType
 from recbole.data import data_preparation, create_samplers, get_dataloader
 
 from gnnuers.data import Dataset
+from gnnuers.data import Interaction
 
 try:
     from torch_geometric.utils import k_hop_subgraph, subgraph
@@ -586,44 +586,6 @@ def get_sparse_eye_mat(num):
     i = torch.LongTensor([range(0, num), range(0, num)])
     val = torch.FloatTensor([1] * num)
     return torch.sparse.FloatTensor(i, val)
-
-
-def unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None, return_unique_counts=False):
-    uid_field = uid_field or 'user_id'
-    iid_field = iid_field or 'item_id'
-
-    if isinstance(inter, dict):
-        _inter = torch.stack((torch.as_tensor(inter[uid_field]), torch.as_tensor(inter[iid_field])))
-    else:
-        _inter = torch.as_tensor(inter)
-
-    if isinstance(other, dict):
-        _other = torch.stack((torch.as_tensor(other[uid_field]), torch.as_tensor(other[iid_field])))
-    else:
-        _other = torch.as_tensor(other)
-    unique, counts = torch.cat((_inter, _other), dim=1).unique(dim=1, return_counts=True)
-    new_inter = unique[:, counts == 1]
-
-    if not return_unique_counts:
-        return dict(zip([uid_field, iid_field], new_inter))
-    else:
-        return dict(zip([uid_field, iid_field], new_inter)), unique, counts
-
-
-def np_unique_cat_recbole_interaction(inter, other, uid_field=None, iid_field=None, return_unique_counts=False):
-    uid_field = uid_field or 'user_id'
-    iid_field = iid_field or 'item_id'
-
-    _inter = np.stack((inter[uid_field], inter[iid_field])) if isinstance(inter, dict) else inter
-    _other = np.stack((other[uid_field], other[iid_field])) if isinstance(other, dict) else other
-
-    unique, counts = np.unique(np.concatenate((_inter, _other), axis=1), axis=1, return_counts=True)
-    new_inter = unique[:, counts == 1]
-
-    if not return_unique_counts:
-        return dict(zip([uid_field, iid_field], new_inter))
-    else:
-        return dict(zip([uid_field, iid_field], new_inter)), unique, counts
 
 
 def remap_edges_recbole_ids(dataset, edges, field2id_token=True):
