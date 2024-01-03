@@ -56,7 +56,7 @@ class Dataset(RecboleDataset):
                     data = data.numpy() if isinstance(data, torch.Tensor) else data
                     split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
 
-                split_df = self.inter_feat.setdiff_by_user_item_ids(
+                split_df = self.inter_feat.setintersection_by_user_item_ids(
                     Interaction(split_data),
                     uid_field=self.uid_field,
                     iid_field=self.iid_field,
