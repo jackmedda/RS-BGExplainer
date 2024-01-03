@@ -41,7 +41,7 @@ class Dataset(RecboleDataset):
             split_data = self._load_data_split(split)
 
             if split_data is None:
-                next_df.append(None)
+                next_df.append(Interaction(dict(zip([self.uid_field, self.iid_field], [[], []]))))
             else:
                 split_keys = list(split_data.keys())
                 if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
