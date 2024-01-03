@@ -28,6 +28,7 @@ class Dataset(RecboleDataset):
         if not os.path.isfile(filename):
             if split in ['train', 'test']:
                 raise NotImplementedError(f'The splitting method "LRS" needs at least train and test.')
+            return None
 
         with open(filename, 'rb') as split_file:
             split_data: dict = pickle.load(split_file)
@@ -39,20 +40,23 @@ class Dataset(RecboleDataset):
         for split in self.SPLITS:
             split_data = self._load_data_split(split)
 
-            split_keys = list(split_data.keys())
-            if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
-                raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
-                                 f'`{self.uid_field}` and `{self.iid_field}`.')
+            if split_data is None:
+                next_df.append(None)
+            else:
+                split_keys = list(split_data.keys())
+                if self.uid_field not in split_keys or self.iid_field not in split_keys or len(split_keys) != 2:
+                    raise ValueError(f'The splitting grouping method "LRS" should contain only the fields '
+                                     f'`{self.uid_field}` and `{self.iid_field}`.')
 
-            for field in [self.uid_field, self.iid_field]:
-                data = split_data[field]
-                data = data.numpy() if isinstance(data, torch.Tensor) else data
-                split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
+                for field in [self.uid_field, self.iid_field]:
+                    data = split_data[field]
+                    data = data.numpy() if isinstance(data, torch.Tensor) else data
+                    split_data[field] = torch.LongTensor([self.field2token_id[field][val] for val in data.astype(str)])
 
-            next_df.append(Interaction(split_data))
+                next_df.append(Interaction(split_data))
 
         self._drop_unused_col()
-        next_ds = [self.copy(_) for _ in next_df]
+        next_ds = [self.copy(_) if _ is not None else None for _ in next_df]
         return next_ds
 
     def build(self):
