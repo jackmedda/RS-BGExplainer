@@ -11,6 +11,34 @@ GCMC, LightGCN and NGCF, all provided in the [Recbole](https://github.com/RUCAIB
 library, from which GNNUERS depend on for the data handling, the training and evaluation.
 Instead, the provided models are independent of the Recbole library.
 
+# Cite
+
+This repository contains the source code of the paper [Robustness in Fairness against Edge-level Perturbations in GNN-based Recommendation]().
+
+If you find this repostiory useful for your research or development cite our paper as
+
+```bibtex
+@article{DBLP:journals/corr/abs-2304-06182,
+  author       = {Giacomo Medda and
+                  Francesco Fabbri and
+                  Mirko Marras and
+                  Ludovico Boratto and
+                  Gianni Fenu},
+  title        = {{GNNUERS:} Fairness Explanation in GNNs for Recommendation via Counterfactual
+                  Reasoning},
+  journal      = {CoRR},
+  volume       = {abs/2304.06182},
+  year         = {2023},
+  url          = {https://doi.org/10.48550/arXiv.2304.06182},
+  doi          = {10.48550/ARXIV.2304.06182},
+  eprinttype    = {arXiv},
+  eprint       = {2304.06182},
+  timestamp    = {Wed, 19 Apr 2023 12:42:23 +0200},
+  biburl       = {https://dblp.org/rec/journals/corr/abs-2304-06182.bib},
+  bibsource    = {dblp computer science bibliography, https://dblp.org}
+}
+```
+
 # Requirements
 Our framework was tested on Python 3.9.
 GNNUERS can be installed using the commands in [install-env.sh](install-env.sh) by passing as argument
