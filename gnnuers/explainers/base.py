@@ -1026,6 +1026,7 @@ class Explainer:
 
         torch.cuda.empty_cache()
         loss_total.backward()
+        import pdb; pdb.set_trace()
 
         # for name, param in self.cf_model.named_parameters():
         #     if name == "P_symm":
