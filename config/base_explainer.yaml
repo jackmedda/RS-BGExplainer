@@ -3,7 +3,7 @@ explainer: DPBG
 # optimizer for explainer ['SGD', 'AdamW', 'Adadelta']
 cf_optimizer: SGD
 # learning rate of optimizer for explainer
-cf_learning_rate: 10000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SoftmaxLoss
+cf_learning_rate: 10000 # 3000 (deletion) / 65000 (addition) for NDCGApprox, 300 (deletion) for SigmoidBCELoss
 # set to update weights after each mini-batch, otherwise after a full batch
 mini_batch_descent: True
 
@@ -13,14 +13,14 @@ cf_epochs: 800
 # how many users should be considered to explain?
 user_batch_exp: 48
 # loss weight for the graph dist loss
-cf_beta: 0.5  # 0.01 for NDCGApproxLoss, 4.0 for SoftmaxLoss
+cf_beta: 0.5  # 0.01 for NDCGApproxLoss, 4.0 for SigmoidBCELoss
 # the function used to check if the top-k list was perturbed
 cf_dist: damerau_levenshtein
 # how many top items to consider for model outcome list and explanation loss
 cf_topk: 10
 
-# metric used for demographic parity loss and debugging. choices ["ndcg", "softmax"]
-metric_loss: softmax
+# metric used for demographic parity loss and debugging. choices ["ndcg", "sigmoid_bce"]
+metric_loss: sigmoid_bce
 
 # metric to evaluate the performance of the model. choices ["ndcg", "hit", "recall", "mrr", "precision"]
 eval_metric: precision
