@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from recbole.data.dataset import Dataset as RecboleDataset
 
+from gnnuers.data.interaction import Interaction
+
 
 class Dataset(RecboleDataset):
     SPLITS = ['train', 'validation', 'test']
