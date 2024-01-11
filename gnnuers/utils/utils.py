@@ -205,6 +205,19 @@ def load_data_and_model(model_file, explainer_config=None, cmd_config_args=None,
 
     logger.info(dataset)
 
+    # Fix issue with old saved models used in recbole 1.2.0
+    if "alpha" not in config["train_neg_sample_args"]:
+        config["train_neg_sample_args"]['alpha'] = 1.0
+    if "sample_num" not in config["train_neg_sample_args"]:
+        config["train_neg_sample_args"]['sample_num'] = 1
+    config["valid_neg_sample_args"] = config["valid_neg_sample_args"] or {'distribution': 'uniform'}
+    config["test_neg_sample_args"] = config["test_neg_sample_args"] or {'distribution': 'uniform'}
+    config["single_spec"] = True
+    config["local_rank"] = 0
+    config["worker"] = 0
+    if isinstance(config["eval_args"]["mode"], str):
+        config["eval_args"]["mode"] = {"valid": config["eval_args"]["mode"], "test": config["eval_args"]["mode"]}
+
     train_data, valid_data, test_data = data_preparation(config, dataset)
 
     model = get_model(config['model'])(config, train_data.dataset).to(config['device'])
