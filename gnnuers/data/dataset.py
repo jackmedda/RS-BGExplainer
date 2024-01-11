@@ -7,10 +7,6 @@ import numpy as np
 import pandas as pd
 from recbole.data.dataset import Dataset as RecboleDataset
 
-from gnnuers.data.interaction import Interaction
-import recbole.data.dataset.dataset as recbole_dataset_module
-recbole_dataset_module.Interaction = Interaction  # overwrites the Interaction class used by Recbole with ours
-
 
 class Dataset(RecboleDataset):
     SPLITS = ['train', 'validation', 'test']
@@ -65,8 +61,9 @@ class Dataset(RecboleDataset):
 
                 next_df.append(split_df)
 
-        self._drop_unused_col()
         next_ds = [self.copy(_) for _ in next_df]
+        for ds in next_ds:
+            ds._drop_unused_col()
         return next_ds
 
     def build(self):
