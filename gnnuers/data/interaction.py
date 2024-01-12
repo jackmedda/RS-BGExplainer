@@ -3,6 +3,14 @@ import numpy as np
 from recbole.data import Interaction as RecboleInteraction
 
 
+def return_gnnuers_interaction(method):
+    def wrapper(self, *args, **kwargs):
+        output = method(self, *args, **kwargs)
+        if isinstance(output, RecboleInteraction):
+            return Interaction(output.interaction)
+    return wrapper
+
+
 class Interaction(RecboleInteraction):
 
     def _setop_by_user_item_ids(self,
@@ -31,6 +39,7 @@ class Interaction(RecboleInteraction):
         else:
             return ret
 
+    @return_gnnuers_interaction
     def setdiff_by_user_item_ids(self,
                                  other,
                                  uid_field="user_id",
@@ -44,6 +53,7 @@ class Interaction(RecboleInteraction):
             return_unique_counts=return_unique_counts
         )
 
+    @return_gnnuers_interaction
     def setintersection_by_user_item_ids(self,
                                          other,
                                          uid_field="user_id",
