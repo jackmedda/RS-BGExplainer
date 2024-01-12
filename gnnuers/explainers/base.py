@@ -915,6 +915,11 @@ class Explainer:
         self.logger.info("*********** Test Data ***********")
         self.logger.info(f"Original Test Explanation Metric Value: {orig_rec_exp_metric_test}")
 
+        full_users_list = full_dataset.user_feat[full_dataset.uid_field][1:].numpy()
+        _, test_model_topk = self._get_model_score_data(full_users_list, test_data, topk)
+        pref_data = self._pref_data_sens_and_metric(full_users_list, test_model_topk, eval_data=test_data.dataset)
+        self.logger.info(f"Original Test Overall {self.eval_metric.upper()}: {pref_data[self.eval_metric].mean()}")
+
         iter_epochs = tqdm(
             range(starting_epoch, epochs),
             total=epochs,
