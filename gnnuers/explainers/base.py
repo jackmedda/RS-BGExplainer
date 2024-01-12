@@ -904,14 +904,14 @@ class Explainer:
         #     *self.compute_f_m_result(detached_batched_data, test_model_topk, eval_data=test_data.dataset)
         # )
 
-        orig_rec_exp_metric_val = self.compute_exp_metric(detached_batched_data, rec_model_topk, self.dataset)
+        orig_rec_exp_metric_rec = self.compute_exp_metric(detached_batched_data, rec_model_topk, self.rec_data.dataset)
         orig_rec_exp_metric_test = self.compute_exp_metric(detached_batched_data, test_model_topk, test_data.dataset)
 
         self.logger.info("*********** Rec Data ***********")
         if self._exp_loss.loss_type() == 'Consumer':
             self.logger.info(self.results)
             self.logger.info(f"M idx: {self.m_idx}")
-        self.logger.info(f"Original Rec Explanation Metric Value: {orig_rec_exp_metric_val}")
+        self.logger.info(f"Original Rec Explanation Metric Value: {orig_rec_exp_metric_rec}")
         self.logger.info("*********** Test Data ***********")
         self.logger.info(f"Original Test Explanation Metric Value: {orig_rec_exp_metric_test}")
 
