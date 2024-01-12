@@ -368,9 +368,9 @@ def prepare_batched_data(input_data, data, item_data=None):
 
     if hasattr(data, "uid2history_item"):
         history_item = data.uid2history_item[data_df[data.dataset.uid_field]]
-        history_item = [x if x is not None else torch.Tensor([]) for x in history_item]
 
         if len(input_data) > 1:
+            history_item = [x if x is not None else torch.Tensor([]) for x in history_item]
             history_u = torch.cat([torch.full_like(hist_iid, i, dtype=int) for i, hist_iid in enumerate(history_item)])
             history_i = torch.cat(list(history_item)).long()
         else:
