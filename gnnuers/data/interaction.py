@@ -30,7 +30,7 @@ class Interaction(RecboleInteraction):
         # this code assumes that other contains a subset of elements of inter
         inverse_counts = torch.bincount(inverse)
         unsorted_counts = inverse_counts[inverse]
-        only_self_inter_counts = unsorted_counts[:self.interaction[uid_field].shape[1]]
+        only_self_inter_counts = unsorted_counts[:self.interaction[uid_field].shape[0]]
 
         if op == "diff":
             ret = self[only_self_inter_counts == 1]
