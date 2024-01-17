@@ -19,18 +19,23 @@ class Interaction(RecboleInteraction):
                                 uid_field="user_id",
                                 iid_field="item_id",
                                 return_unique_counts=False):
-        _, unique, counts = unique_cat_recbole_interaction(
+        _, unique, inverse, counts = unique_cat_recbole_interaction(
             self.interaction,
             other.interaction if isinstance(other, Interaction) else other,
             uid_field=uid_field,
             iid_field=iid_field,
-            return_unique_counts=True
+            return_unique_inverse_counts=True
         )
 
+        # this code assumes that other contains a subset of elements of inter
+        inverse_counts = torch.bincount(inverse)
+        unsorted_counts = inverse_counts[inverse]
+        only_self_inter_counts = unsorted_counts[:self.interaction[uid_field].shape[1]]
+
         if op == "diff":
-            ret = Interaction(dict(zip([uid_field, iid_field], unique[:, counts == 1])))
+            ret = self[only_self_inter_counts == 1]
         elif op == "intersection":
-            ret = Interaction(dict(zip([uid_field, iid_field], unique[:, counts > 1])))
+            ret = self[only_self_inter_counts > 1]
         else:
             raise ValueError(f"Interaction operation [set{op}] is not supported.")
 
@@ -68,7 +73,11 @@ class Interaction(RecboleInteraction):
         )
 
 
-def unique_cat_recbole_interaction(inter, other, uid_field='user_id', iid_field='item_id', return_unique_counts=False):
+def unique_cat_recbole_interaction(inter,
+                                   other,
+                                   uid_field='user_id',
+                                   iid_field='item_id',
+                                   return_unique_inverse_counts=False):
     if isinstance(inter, dict):
         _inter = torch.stack((torch.as_tensor(inter[uid_field]), torch.as_tensor(inter[iid_field])))
     else:
@@ -78,13 +87,15 @@ def unique_cat_recbole_interaction(inter, other, uid_field='user_id', iid_field=
         _other = torch.stack((torch.as_tensor(other[uid_field]), torch.as_tensor(other[iid_field])))
     else:
         _other = torch.as_tensor(other)
-    unique, counts = torch.cat((_inter, _other), dim=1).unique(dim=1, return_counts=True)
+    unique, inverse, counts = torch.cat((_inter, _other), dim=1).unique(
+        dim=1, return_inverse=True, return_counts=True
+    )
     new_inter = unique[:, counts == 1]
 
-    if not return_unique_counts:
+    if not return_unique_inverse_counts:
         return dict(zip([uid_field, iid_field], new_inter))
     else:
-        return dict(zip([uid_field, iid_field], new_inter)), unique, counts
+        return dict(zip([uid_field, iid_field], new_inter)), unique, inverse, counts
 
 
 def np_unique_cat_recbole_interaction(inter, other, uid_field='user_id', iid_field='item_id', return_unique_counts=False):

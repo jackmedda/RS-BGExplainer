@@ -6,4 +6,4 @@ from .explainers import (
     BaB
 )
 
-__version__ = "0.0.5.2"
+__version__ = "0.0.5.3"
