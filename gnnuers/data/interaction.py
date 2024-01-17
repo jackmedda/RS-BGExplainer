@@ -28,9 +28,9 @@ class Interaction(RecboleInteraction):
         )
 
         if op == "diff":
-            ret = self[counts == 1]
+            ret = Interaction(dict(zip([uid_field, iid_field], unique[:, counts == 1])))
         elif op == "intersection":
-            ret = self[counts > 1]
+            ret = Interaction(dict(zip([uid_field, iid_field], unique[:, counts > 1])))
         else:
             raise ValueError(f"Interaction operation [set{op}] is not supported.")
 
