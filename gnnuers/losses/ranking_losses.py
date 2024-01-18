@@ -46,13 +46,13 @@ class NDCGApproxLoss(TopKLoss):
         )
 
     def forward(self, _input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if _input.shape[1] > self.__MAX_TOPK_ITEMS__:
-            topk = self.topk or target.shape[1]
-            _, _input_topk = torch.topk(_input, dim=1, k=topk)
-            _input = _input[torch.arange(_input.shape[0])[:, None], _input_topk]
-            target = target[torch.arange(target.shape[0])[:, None], _input_topk]
-
         _input_temp = torch.nn.ReLU()(_input) / self.temperature
+
+        if _input_temp.shape[1] > self.__MAX_TOPK_ITEMS__:
+            topk = self.__MAX_TOPK_ITEMS__ or target.shape[1]
+            _, _input_topk = torch.topk(_input_temp, dim=1, k=topk)
+            _input_temp = _input_temp[torch.arange(_input_temp.shape[0])[:, None], _input_topk]
+            target = target[torch.arange(target.shape[0])[:, None], _input_topk]
 
         def approx_ranks(inp):
             shape = inp.shape[1]
