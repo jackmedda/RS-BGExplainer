@@ -22,6 +22,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--in_filepath', required=True)
     parser.add_argument('--user_filepath', required=True)
+    parser.add_argument('--item_filepath', default=None)
     parser.add_argument('--out_folderpath', required=True)
     parser.add_argument('--dataset_name', required=True)
     parser.add_argument('--split_type', choices=['random', 'per_user'], default='per_user')
@@ -35,6 +36,7 @@ if __name__ == "__main__":
     parser.add_argument('--time_field', default='timestamp')
     parser.add_argument('--random_state', type=int, default=120)
     parser.add_argument('--min_interactions', type=int, default=0)
+    parser.add_argument('--min_interactions_filtering_type', choices=["user", "item", "both"], type=str, default="user")
     parser.add_argument('--add_token', action='store_true', help='add `token` or `float` to header')
 
     args = parser.parse_args()
@@ -43,14 +45,23 @@ if __name__ == "__main__":
 
     df = pd.read_csv(args.in_filepath, sep='\t')
     user_df = pd.read_csv(args.user_filepath, sep='\t')
+    item_df = pd.read_csv(args.item_filepath, sep='\t') if args.item_filepath is not None else None
 
     pprint.pprint(vars(args))
 
     os.makedirs(args.out_folderpath, exist_ok=True)
 
     if args.min_interactions > 0:
-        df = data_utils.filter_min_interactions(df, by=args.user_field, min_interactions=args.min_interactions)
+        filtering_fields = {
+            "user": [args.user_field],
+            "item": [args.item_field],
+            "both": [args.item_field, args.user_field]
+        }[args.min_interactions_filtering_type]
+        for filt_field in filtering_fields:
+            df = data_utils.filter_min_interactions(df, by=filt_field, min_interactions=args.min_interactions)
         user_df = user_df[user_df[args.user_field].isin(df[args.user_field])]
+        if item_df is not None:
+            item_df = item_df[item_df[args.item_field].isin(df[args.item_field])]
         print(df.describe())
         print(df.apply(pd.unique, axis=0).apply(len))
 
@@ -62,6 +73,8 @@ if __name__ == "__main__":
 
     df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.inter"), index=None, sep='\t')
     user_df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.user"), index=None, sep='\t')
+    if item_df is not None:
+        item_df.to_csv(os.path.join(args.out_folderpath, f"{args.dataset_name}.item"), index=None, sep='\t')
 
     if args.split_type == "per_user":
         print("> Splitting per user")
