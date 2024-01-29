@@ -64,7 +64,7 @@ class Explainer:
             self.dist = utils.damerau_levenshtein_distance
 
         self.topk_args = None
-        self.model_scores, self.model_scores_topk, self.model_topk_idx = None, None, None
+        self.model_topk_idx = None
 
         self.verbose = kwargs.get("verbose", False)
         self.logger = getLogger()
@@ -220,10 +220,10 @@ class Explainer:
         """
         self.topk_args = {'topk': topk}
 
-        self.model_scores = self.get_scores(self.model, *scores_args, pred=None)
+        model_scores = self.get_scores(self.model, *scores_args, pred=None)
 
         # topk_idx contains the ids of the topk items
-        self.model_scores_topk, self.model_topk_idx = self.get_top_k(self.model_scores, **self.topk_args)
+        _, self.model_topk_idx = self.get_top_k(model_scores, **self.topk_args)
 
     def _get_scores_args(self, batched_data, dataset):
         dset_batch_data = Explainer.prepare_batched_data(batched_data, dataset)
@@ -280,7 +280,7 @@ class Explainer:
                          'graph loss: {:.4f}, '.format(loss_graph_dist.item()) +
                          'perturbed edges: {:.4f}, '.format(int(orig_loss_graph_dist.item())))
         if self.verbose:
-            self.logger.info('Orig output: {}\n'.format(self.model_scores) +
+            self.logger.info(# 'Orig output: {}\n'.format(self.model_scores) +
                              # 'Output: {}\n'.format(verbose_kws.get('cf_scores', None)) +
                              # 'Output nondiff: {}\n'.format(verbose_kws.get('cf_scores_pred', None)) +
                              '{:20}: {},\n {:20}: {},\n {:20}: {}\n'.format(
