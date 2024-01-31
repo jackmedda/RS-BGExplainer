@@ -128,7 +128,9 @@ class PerturbedDataset(Dataset):
                 feat_df = self.__base_dataset.item_feat
                 pert_df = pert_df[[self.iid_field]]
             else:
-                raise ValueError(f"feat {source} not supported for modification when re-training with perturbed data")
+                raise NotImplementedError(
+                    f"feat {source} not supported for modification when re-training with perturbed data"
+                )
 
             for field, token_map in self.__base_dataset.field2id_token.items():
                 if field in feat_df.columns:
@@ -138,7 +140,7 @@ class PerturbedDataset(Dataset):
 
             return new_feat_df
         else:
-            raise ValueError(f"feat {source} not supported for modification when re-training with perturbed data")
+            return None
 
     def _remap(self, remap_list):
         tokens, split_point = self._concat_remaped_tokens(remap_list)
@@ -230,7 +232,6 @@ class PerturbedDataset(Dataset):
                 filepath, delimiter=field_separator, usecols=usecols, dtype=dtype, encoding=encoding, engine='python'
             )
             df.columns = columns
-            df = df.astype(dtype)
 
         seq_separator = self.config['seq_separator']
         for field in columns:
