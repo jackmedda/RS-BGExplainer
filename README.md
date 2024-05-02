@@ -13,29 +13,25 @@ Instead, the provided models are independent of the Recbole library.
 
 # Cite
 
-This repository contains the source code of the paper [Robustness in Fairness against Edge-level Perturbations in GNN-based Recommendation]().
+This repository contains the source code of the paper [GNNUERS: Fairness Explanation in GNNs for Recommendation via Counterfactual Reasoning](https://dl.acm.org/doi/10.1145/3655631).
 
 If you find this repostiory useful for your research or development cite our paper as
 
 ```bibtex
-@article{DBLP:journals/corr/abs-2304-06182,
-  author       = {Giacomo Medda and
-                  Francesco Fabbri and
-                  Mirko Marras and
-                  Ludovico Boratto and
-                  Gianni Fenu},
-  title        = {{GNNUERS:} Fairness Explanation in GNNs for Recommendation via Counterfactual
-                  Reasoning},
-  journal      = {CoRR},
-  volume       = {abs/2304.06182},
-  year         = {2023},
-  url          = {https://doi.org/10.48550/arXiv.2304.06182},
-  doi          = {10.48550/ARXIV.2304.06182},
-  eprinttype    = {arXiv},
-  eprint       = {2304.06182},
-  timestamp    = {Wed, 19 Apr 2023 12:42:23 +0200},
-  biburl       = {https://dblp.org/rec/journals/corr/abs-2304-06182.bib},
-  bibsource    = {dblp computer science bibliography, https://dblp.org}
+@article{10.1145/3655631,
+author = {Medda, Giacomo and Fabbri, Francesco and Marras, Mirko and Boratto, Ludovico and Fenu, Gianni},
+title = {GNNUERS: Fairness Explanation in GNNs for Recommendation via Counterfactual Reasoning},
+year = {2024},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+issn = {2157-6904},
+url = {https://doi.org/10.1145/3655631},
+doi = {10.1145/3655631},
+abstract = {Nowadays, research into personalization has been focusing on explainability and fairness. Several approaches proposed in recent works are able to explain individual recommendations in a post-hoc manner or by explanation paths. However, explainability techniques applied to unfairness in recommendation have been limited to finding user/item features mostly related to biased recommendations. In this paper, we devised a novel algorithm that leverages counterfactuality methods to discover user unfairness explanations in the form of user-item interactions. In our counterfactual framework, interactions are represented as edges in a bipartite graph, with users and items as nodes. Our bipartite graph explainer perturbs the topological structure to find an altered version that minimizes the disparity in utility between the protected and unprotected demographic groups. Experiments on four real-world graphs coming from various domains showed that our method can systematically explain user unfairness on three state-of-the-art GNN-based recommendation models. Moreover, an empirical evaluation of the perturbed network uncovered relevant patterns that justify the nature of the unfairness discovered by the generated explanations. The source code and the preprocessed data sets are available at https://github.com/jackmedda/RS-BGExplainer.},
+note = {Just Accepted},
+journal = {ACM Trans. Intell. Syst. Technol.},
+month = {apr},
+keywords = {Recommender Systems, User Fairness, Explanation, Graph Neural Networks, Counterfactual Reasoning}
 }
 ```
 
